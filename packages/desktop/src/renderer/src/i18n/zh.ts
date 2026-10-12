@@ -218,6 +218,8 @@ export const zh = {
 		subagent: {
 			running: "工作中",
 			done: "已完成",
+			/** 子代理检视页左上角返回父会话入口（spec D4） */
+			backToParent: "返回父会话",
 			failed: "失败",
 			mutex: "检测到 subagent 扩展 {path}，其工具已由内置 subagent 接管：{tools}",
 		},
@@ -332,7 +334,7 @@ export const zh = {
 			skills: "Skills",
 			mcp: "MCP",
 			extensions: "扩展",
-			lan: "局域网观察",
+			lan: "跨设备互联",
 			about: "关于",
 		},
 		language: "语言",
@@ -384,7 +386,7 @@ export const zh = {
 		centerOrbHint:
 			"任务运行时在对话区域中央显示放大的状态动画（盖在文字之上，半透明遮罩压暗身后文字——工作时专心看动画即可）。只控制中央动画，Working/Thinking 状态行前的小动画始终显示。",
 		lan: {
-			title: "局域网观察页",
+			title: "跨设备互联",
 			hint: "在可信局域网内，用手机实时查看 agent 的运行进度。默认关闭；每次开启会轮换访问令牌。",
 			port: "监听端口：{port}",
 			clients: "已连接 {count} 台设备",
@@ -722,6 +724,10 @@ export const zh = {
 		forkFailed: "分叉会话失败",
 		recallFailed: "撤回消息失败",
 		modelsLoadFailed: "加载模型列表失败",
+		subagentReturnUnavailable: "无法返回父会话：找不到父会话文件",
+		modelPrefsLoadFailed: "模型偏好读取失败",
+		subagentsLoadFailed: "子代理列表读取失败",
+		loadedResourcesFailed: "已加载资源读取失败",
 		modelSwitchFailed: "切换模型失败",
 		thinkingSwitchFailed: "切换思考深度失败",
 		mcpLoadFailed: "MCP 配置读取失败",

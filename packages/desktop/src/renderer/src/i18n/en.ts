@@ -222,6 +222,8 @@ export const en: Messages = {
 		subagent: {
 			running: "Working",
 			done: "Done",
+			/** Back-to-parent entry on the subagent inspection page (spec D4) */
+			backToParent: "Back to parent session",
 			failed: "Failed",
 			mutex: "Detected subagent extension {path}; built-in subagent took over: {tools}",
 		},
@@ -337,7 +339,7 @@ export const en: Messages = {
 			skills: "Skills",
 			mcp: "MCP",
 			extensions: "Extensions",
-			lan: "LAN Observer",
+			lan: "Cross-device",
 			about: "About",
 		},
 		language: "Language",
@@ -389,7 +391,7 @@ export const en: Messages = {
 		centerOrbHint:
 			"While a task is running, shows an enlarged status animation at the center of the conversation area (above the text, with a translucent scrim dimming whatever is behind it). Only controls the centered animation — the small orb before the Working/Thinking row always stays.",
 		lan: {
-			title: "LAN Observer",
+			title: "Cross-device",
 			hint: "View live agent progress from your phone on a trusted local network. Off by default; the access token rotates every time it is enabled.",
 			port: "Listening port: {port}",
 			clients: "{count} connected device(s)",
@@ -745,6 +747,10 @@ export const en: Messages = {
 		forkFailed: "Failed to fork session",
 		recallFailed: "Failed to recall message",
 		modelsLoadFailed: "Failed to load models",
+		subagentReturnUnavailable: "Cannot return: parent session file is missing",
+		modelPrefsLoadFailed: "Failed to read model preferences",
+		subagentsLoadFailed: "Failed to read subagents",
+		loadedResourcesFailed: "Failed to read loaded resources",
 		modelSwitchFailed: "Failed to switch model",
 		thinkingSwitchFailed: "Failed to switch thinking level",
 		mcpLoadFailed: "Failed to read MCP config",

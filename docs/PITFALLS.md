@@ -16,6 +16,10 @@
 | 侧栏拖宽后把手抓不住 / 行末按钮点不到，**截图看却完全正常** | 四 · 比列宽更宽的内容溢出吃 pointer 事件（2026-10-07） |
 | `verify-layout-freedom` 的 V2 拖拽断言一片红 / 把手只有列表中段点不到 | 四 · 左栏把手被 edge-fade 列表遮挡（2026-10-10 #100 更正；V6 真实列表矩阵，Windows 待验） |
 | 改了代码字号档位，monaco 代码块字号纹丝不动 | 四 · monaco 只在创建编辑器时应用 options（字号必须在 props 变化时重建代码块） |
+| 把「相对聊天区」的定位写在角容器里，算出来完全不是想要的位置 | 四 · 想要「相对聊天区」的位置，别写在 shrink-to-fit 的角容器里（2026-10-12） |
+| 页面滑动过渡时右边那条滚动条跟着一起横着走 | 四 · 会话页推/出过渡：View Transitions 的五个坑（第 6 条：隐藏滚动条只能改颜色不能改宽度，2026-10-12） |
+| 页面滑动过渡时，相邻容器（左栏）里出现了聊天页内容 | 四 · 会话页推/出过渡：View Transitions 的五个坑（快照不裁剪会横穿，2026-10-12） |
+| 切页动画「演的是上一页内容」/ 第一帧还是旧页面 | 四 · 同上（新快照必须等内容提交，认 DOM 标记） |
 | 注入页面的探针函数报 `SyntaxError: missing ) after argument list` | 四 · 把含反引号/`${}` 的函数塞进模板串注入（要 JSON 后再 eval） |
 | 侧栏拖一次后**整窗光标卡在 col-resize**、之后再也拖不动（刷新才恢复） | 四 · 拖拽只挂 pointerup 会在「窗口外松手」后永久卡死（2026-10-07） |
 | 脚本判定「没生效」但代码明明改了 / 文件里是新值而界面是旧值 | 四 · dev 里 HMR 会让 store 订阅冻结，验收前要硬重启（2026-10-07） |
@@ -159,7 +163,9 @@ glm-5.3 流式输出病态空白 thinking（纯 `\n    ` 洪流永不终止）�
 
 ### `runtime.refresh()` 不传参时 `allowNetwork` 缺省为 true（除非 `PI_OFFLINE`）
 
-会向 pi.dev 拉全部 provider 的远程模型目录，且 `fetchWithRetry` 无内置超时，网络不可达时一直挂（设置页曾因此永久 Loading）。`SettingsService.listProviders` 默认显式 `allowNetwork:false` 走本地，仅用户点刷新才 `forceNetwork`（`force:true` + 15s 超时兜底）。
+会向 pi.dev 拉全部 provider 的远程模型目录，且 `fetchWithRetry` 无内置超时，网络不可达时一直挂（设置页曾因此永久 Loading）。`SettingsService.listProviders` 默认显式 `allowNetwork:false` 走本地，只有显式 `forceNetwork` 才联网（`force:true` + 15s 超时兜底）。
+
+联网触发点（2026-10-12 起，spec D3 「模型分类自动刷新」）：① 用户点手动刷新；② **进入设置「模型」分类时自动刷新一次**（`ProvidersPanel` 挂载副作用；分类切换/关闭重开各一次，面板内 `providers ↔ subagents` 子 tab 切换不重刷）。renderer 侧 `stores/settings.ts` 的目录请求协调器把两个入口收敛成 single-flight（在途复用，手动按钮在刷新中禁用），并要求「联网**有效发布**后才刷新 Composer 模型选择器」。
 
 ### `createAgentSession({ tools: [...] })` 传数组 = 允许清单
 
@@ -1090,7 +1096,135 @@ pgrep -f "electron-vite" | xargs -r kill -9
 
 - **失败路径**改用「受控失败路径」：例如把新会话 draft 的 `cwd` 置成 null（= 用户还没选项目）走 `createSession()` 的 null 返回分支，或直接在单测里 mock。**别指望在页面里拦 IPC**。
 - **成功路径的 IPC 计数**：数主进程日志（本仓 backend 每次建会话会打 `session created`，脚本按行数取差），或用应用的 store 状态断言（页面内 `await import("/src/stores/*.ts")` 拿到的就是应用在用的同一份实例）。
+  - 2026-10-12 补充（qol3 阶段 1 实测）：计数「某请求触发了几次」时，**订阅 store 的上升沿**（`useSettingsStore.subscribe((s, prev) => …)` 数 `loading`/`refreshing` false→true）比数 IPC 更实用 —— 只要发起方在**发起请求时同步置位**，上升沿就与真实请求一一对应，且不受对端快慢影响（在途去重也能被这条口径验证）。同理「副作用是否只发生一次」可以把 store 上的 action 换成一个计数包装（`useXStore.setState({ action: async () => { count++; return orig() }) }`，store 内部走 `getState().action()` 时会用到包装后的版本）。
 - 需要「点真实子代理卡」这类依赖模型行为的场景，优先找**历史回放**入口：历史里已有子代理运行的父会话，打开它 → transcript 重放出卡片 → 点它，同样落到只读检视页，且完全确定性（子会话文件在 `<agentDir>/sessions-subagents/`，后端按路径判定 `readOnly`）。现场真跑一次 subagent 依赖凭证可用，dev 里常 401 拿不到可点卡片。
+  - 2026-10-12 补充（qol3 阶段 2 实测）：dev agentDir 里**可能一个可点子代理卡都没有** —— 唯一一次真实 subagent 运行是 401 失败、没有 `sessionFile`（这类行渲染成不可点）。确定性做法：挑一个含 `"toolName":"subagent"` 的父会话打开，往 `useTranscriptStore` 的 `bySession[id].streaming.subagentRuns` **注入一条** `{key,agent,status:"done",sessionFile:<真实存在的 sessions-subagents 文件>}`（注入要重试：bundle 可能晚于注入落地并把 `streaming` 覆盖回磁盘态），卡片就会渲染出来，点它走的是**真实**组件 + 真实 store + 真实子会话文件；唯一合成物是那一行运行记录，写明即可。
+
+### `TMPDIR` 指向仓库内部会让两个既有后端测试失败（2026-10-12，qol3 阶段 4 复核发现）
+
+现象：`cd packages/backend && TMPDIR=<repo>/.local/tmp npx vitest run` ⇒ **2 个既有用例失败**（默认 TMPDIR 下 754 条全绿）：
+
+- `test/channel-watch-init.test.ts > 非 git 目录：建三子目录、gitignore=not-git`：它在临时目录里造「非 git 目录」，
+  但临时目录落在**本仓库**里 ⇒ git 判定为 ignored（拿到 `ignored` 而不是 `not-git`）。
+- `test/trust.test.ts > 无信任需求资源的项目直接可信`：项目落在仓库内部 ⇒ 扫到仓库的资源目录，判定需要信任。
+
+这不是回归，而是「临时目录必须干净、且不在 git 仓库内」这个隐含前提被破坏。做法上：
+- **我们自己的**中间产物一律写 `.local/tmp/<专用前缀>`（项目规则），新测试也按此隔离
+  （`packages/backend/test/channel-subscriptions.test.ts` 用 `.local/tmp/qol3-channel-subs-test`，两种 TMPDIR 下都绿）；
+- 但**不要**拿 `TMPDIR=<repo>/.local/tmp` 跑整个后端套件当「合规」证据 —— 那两条例外要先说明，
+  或把它们的 fixture 改成不依赖 TMPDIR 位置。
+
+### 组件测试（`renderToStaticMarkup`）在 vitest 里读不到 store 的运行时状态（2026-10-12，qol3 阶段 2）
+
+症状：把 zustand store `setState` 成想要的状态后 SSR 渲染组件，断言却按**初始状态**输出（`masterOn:false`、`contributions:{}`、`providerOf(...)=undefined`），看起来像「store 没生效」。
+
+两个原因叠在一起，都不是业务 bug：
+
+1. **zustand v5 的 `useStore` 把 `getInitialState()` 当 SSR 快照**（`zustand/esm/react.mjs`：`useSyncExternalStore(subscribe, getState, () => selector(api.getInitialState()))`）。`renderToStaticMarkup` 属服务端渲染路径 ⇒ hook 一律拿初始态，`setState` 之后也不变。绕法与本仓既有做法一致（见 `components/settings/providers/ProviderRow.test.tsx`）：**用 `vi.mock` 把 store 换成一个普通 selector 函数**，直接喂测试态对象，不走 zustand。
+2. 本仓 vitest **没有 vite 配置**（只有 `electron.vite.config.ts`，vitest 不读），所以产品 `.tsx` 走的是 classic JSX：`React` 必须是运行时可见的全局。测试文件里 `vi.stubGlobal("React", React)` + `afterEach(() => vi.unstubAllGlobals())`，否则报 `React is not defined`（报错行落在**产品文件**的 JSX 上，很容易误判成产品 bug）。
+
+真机几何类断言（重叠/拉伸/Tooltip 溢出）不要靠 SSR —— 那些拿 CDP 在真实挂载上量（qol3 阶段 2 探针：`self-start` 不被更宽贡献拉伸、`Tooltip align="start"` 左缘不溢出且 `scrollWidth == clientWidth`）。
+
+## 会话页推/出过渡：View Transitions 的六个坑（2026-10-12，D4 收尾）
+
+开子代理页从右向左推入、返回父会话从左向右推回，用同文档 View Transitions 实现（快照交给浏览器拍，
+不用双挂上一页、也不用克隆 DOM —— monaco/canvas 克隆会丢像素）。五个坑都是实测踩到的，其中第一个
+**只有做像素级对照才发现**（动画参数、几何断言全是绿的，左栏却被聊天页横穿）。
+
+1. **快照画在顶层，位移不受容器 `overflow` 约束**：`::view-transition-*` 的图不是容器子元素，
+   `translateX(-100%)` 会让出门那张滑到**相邻容器（左栏）上面**。症状：过渡期间截左栏，看到的是聊天页内容。
+   修法：给 `::view-transition-group(<name>) { overflow: clip }`（实测 group 或 image-pair 加都行）——
+   加完就变成「画框内左右滚动」：出门那张滑到画框左缘即被裁掉、进门那张从画框右缘进来。截图见
+   `.local/tmp/exp-*-mid.png`（同一实验里无裁剪 = 左栏被盖、group-clip = 干净）。
+2. **新快照必须在「新内容已提交」之后才拍**。打开子会话是 async（要读文件），`await action()` 返回时
+   React 往往还没提交 ⇒ 直接拍就会把**旧内容当成新页面**（动画演的是上一页）。
+   做法：动作返回后等页面容器上的 `data-session-id` 真的变了再返回（认 DOM 事实，不赌 React 时序），
+   超时（我们取 1200ms）就 `transition.skipTransition()` —— 宁可不播，也不放演旧内容的假动画。
+3. **根快照要中性化**：默认 `::view-transition-old/new(root)` 是整页交叉淡化，会把顶栏/左栏一起闪一遍。
+   关掉它们的动画与 `mix-blend-mode`（`mix-blend-mode: normal`），让只有命名的那张快照动。
+4. **两页等距、同时长、同缓动**：两者的边缘必须全程严丝合缝（各占 100% 宽、位移同速），
+   差了哪怕几十毫秒，中间就会裂开一条缝露出底图。所以要「调手感」，只能换**成对**的缓动曲线与总时长
+   （时长放一个变量 `--session-slide-time`）。本仓现有曲线里面 `cubic-bezier(0.16, 1, 0.3, 1)`（≈easeOutExpo）
+   与 `pop-in`/`selection-pop` 同一族，用它就有了「滑过去被阻尼吸住」的手感（实测：1/3 时长已走 90% 行程，
+   最后 28% 时长只再走 0.3%）。**但要注意这条曲线的代价**：运动窗口 ≈ 时长/3，所以 300ms 档实际只有约 0.1 秒
+   可见位移，会被反馈成「没有动画／看不出变化」（2026-10-12 原话）。本仓定档 **800ms**（窗口 0.27s + 收尾 0.53s）；
+   调手感先调时长，再换曲线。
+   **坑（2026-10-12 实测）**：改缓动/关键帧时，文件里若留着**同名 `@keyframes` 的后一份**（同名的后定义胜出），
+   改前面那份等于没改 —— 屏幕上看不出、但采样出来的位移会露馅（我这次量到出门页走了 -100% 而不是 -32%）。
+   收尾检查：`grep -c "@keyframes session-page-out-left"` 必须是 1。
+   验收也别只看 CSS 文本：读 `document.getAnimations()` 里伪元素动画的 `duration`，以及
+   **`effect.getKeyframes()[i].easing`**（CSS 动画的 `animation-timing-function` 落在关键帧上，
+   `getTiming().easing` 恒为 `linear`，读它会以为「曲线没生效」）。
+5. **同一时刻只认最后一次过渡**：过渡进行中再开一个，浏览器会跳过新的。收尾清理（擦方向标记、
+   清 `view-transition-name`）必须带**代次守卫**，否则前一次的 `finished` 回来会把新一次的标记擦掉
+   （单测 `lib/session-page-slide.test.ts` 里有这条反例）。
+
+6. **滚动条会跟着滑动**（用户一眼就看出来的脏）：滚动条画在聊天页快照里，`translateX(-100%)` 会把它
+   一起横着拖走，而且两张快照各带一条。修法：过渡期间把滑块的**颜色**改透明（`--scrollbar-thumb: transparent`，
+   颜色走 CSS 变量 ⇒ 深/浅色和各处细滚动条一起覆盖），**宽度一个像素都别动** —— 一旦用
+   `::-webkit-scrollbar { display: none }` 之类把轨道去掉，布局会重排（4px 槽塌掉 ⇒ 内容跳一下，
+   两张快照的布局还不一致）。验收：① 手动挂/摘方向标记，量内容列 rect 与滚动条槽宽，必须逐字段一致
+   （证「只改颜色不改布局」）；② 探针在 `startViewTransition` 前与 `ready` 时各采样一次
+   `getComputedStyle(el, "::-webkit-scrollbar-thumb").backgroundColor`，两次都得是透明
+   （证旧/新两张快照都不带滚动条）；③ 过渡结束后颜色要还原。
+   注意：**CDP 截图根本不绘制滚动条**（PITFALLS 另有条目），所以这类问题只能靠实算样式 + 人眼在真窗口确认。
+
+**验收怎么做才算数**（几何断言看不出来的东西）：
+- 真动画参数从 `document.getAnimations()` 里读**伪元素**上的 `animationName / pseudoElement / duration`，
+  断言方向对应的成对关键帧真的挂上了（而不是「看起来动了」）；
+- 「顶栏/左栏没动」要**分两层**证：① 几何 rect 过渡前后一致；② 与状态无关的区域做**逐字节**比对
+  （同区域 PNG 同字节 = 一个像素没变）。注意别拿「当前会话高亮」那条带当参照；对照实验（不经过渡直接切会话）
+  可以确认某些像素变化是内容更新，不是过渡推的；
+- 还要证「只有该动的那组在动」：`getAnimations()` 里除 `(session-page)` 与 `(root)` 外不该有别的伪元素。
+
+## 探针与验收脚本的硬规矩（2026-10-12，qol3 阶段 4 实测）
+
+按踩到的顺序记，每条都有具体现象与对策：
+
+1. **定位「槽位渲染根」不要按文本找**。Slot 的内容常常就是我们的测试数据（todo 文本、「验证任务 01」…），
+   而**探针自己的 transcript 里也写着这些字样**（我写进脚本的字符串会进历史）。`main.children.find(el => el.textContent.includes(...))`
+   会命中 MessageList，于是「Todo 底边」量成了整个聊天区的底边，断言偏差上百像素。
+   对策：认结构不认文本 —— 槽位宿主是 `display: contents` 的包裹层（`main > div[style*="contents"]`），
+   它的渲染根就是 `> *`；探针自己注入的假组件一律带 `data-*` 标记。
+2. **长页面脚本用 `fn.toString()` 注入，别拼字符串**。`Runtime.evaluate` 传 `(${pageFn.toString()})()`：
+   函数源码里的反引号/`${}` 原样保留，不需要任何转义，也不会触发注入转义坑（对比下面「探针函数塞进模板串」那条）。
+   注意注入的是**函数体**，所以页面侧只能引用页面全局（`window.*`）与它自己 `import()` 到的东西。
+3. **`useLayoutEffect(..., [])` 量不到「后挂载」的内容**。胶囊组件在没有订阅时也挂载（返回 null），
+   首帧 ref 还是 null ⇒ 之后内容出现了，空 deps 的 effect 永不重跑 ⇒ **宽度永远量不到，胶囊卡在 0 宽不展开**。
+   对策：用 **ref 回调**（React 在节点挂载/卸载时自己调用）里测宽 + `ResizeObserver` 跟内容变化；顺带避开
+   `useExhaustiveDependencies` 的「依赖多余」告警。
+4. **`Page.captureScreenshot` 偶发整帧空白，纯 rAF「叫醒」无效**：合成器没有 damage 时不给新帧，
+   连等 4 次都是同一张白图（纯色 PNG 只有 ~14KB）。**要制造一次重绘**：插一颗**屏幕外**的 1×1 元素
+   （`position:fixed;left:-10px`）再移除，然后按「PNG 体积 < 60KB 就当空白」重试（重试间隔递增）。
+   实测这一招立刻出图（208KB / 256KB）。
+5. **`ResizeObserver` 的「观察集合」≠「测量占位集合」**（review R11 两轮反例，都是静默失效）：按 `height > 0`
+   筛完再 observe，就永远观察不到**当前 0 高**的节点 —— 插件先渲染空壳、随后长内容时布局不再跟
+   （胶囊停在上一个位置）。而且**递归也要做全**：只补「根 + 高度>0 的盒」仍会漏掉
+   **`display: contents` 包层里当前 0 高的子节点**（本轮反例就是这个）。
+   正确做法：观察集合 = 根 + **递归穿过 contents 包层后的全部元素**（**不筛高度**），测量集合才筛「高度 > 0」。
+   另外这类 hook 的单测常用最小 stub（没有 `getComputedStyle`）⇒ DOM adapter 里对它的缺位要防御，别让样式读取
+   把「观察注册」这一步整个打断。
+6. **右锚浮层按「可用宽」夹取，别拿 shrink-to-fit 的父容器算**（review R12 两轮）：固定 `max-w-[300px]` 的文字 +
+   装饰（glyph/内边距）在 ~320px 聊天区会顶出边界；而用「最近的定位祖先」算可用宽时，若它本身就是
+   `position:absolute` + shrink-to-fit（我们的堆叠容器），宽度会随浮层变 ⇒ 自激，浮层被夹到几十像素。
+   可用宽要取**堆叠容器之外**的容器（`stack.closest("[data-corner-stack]").offsetParent`），
+   文字上限 = `min(设计上限, 可用宽 − 装饰宽)`，装饰宽用「内容宽 − 名字可见宽」反推（截断与否同一算式）。
+   第二轮补充：**只 observe 内容元素不够** —— 内容常是 `w-max`，容器变宽/变窄时它自己尺寸不变 ⇒ 不会重算，
+   存活浮层会溢出/不肯放开。要把**决定可用宽的那个容器也 observe**（我们 observe 了 `main`），
+   验收也要按「同一颗存活浮层、不重新挂载」来测（先注入一次，改视口，断言元素身份不变 + 已重算）。
+7. **Tooltip 的验收别只看左边不溢出**：气泡默认 `whitespace-nowrap`，超长/多段文本会撑出一条比视口还宽的气泡
+   （右边溢出、且长文本读不全）。触发元素自身的提示可以**局部**覆盖（`[&>[role=tooltip]]:max-w-[320px]
+   [&>[role=tooltip]]:whitespace-normal`，不动全局组件），验收要同时断言：`opacity === "1"`（真的可见）、
+   `text` 等于完整原文（不是截断后的）、`left ≥ 0`、`right ≤ innerWidth`、且**换行生效**（`height > lineHeight`）。
+8. **想要「相对聊天区」的位置，别写在 shrink-to-fit 的角容器里**（2026-10-12，返回入口居中）：四角定位容器是
+   `absolute left-4` + `flex flex-col`（宽度 = 内容宽，一枚图标），写在里面的 `%` 是相对它自己，不是相对聊天区；
+   容器本身也不能改（同角还堆着插件贡献，动它会连带挪走别人）。做法：**偏移在运行时算**，纯算式抽成模块 +
+   单测（`components/chat/subagent-back-offset.ts`），DOM 读取留在组件里，只写**自身** `transform`。两个细节：
+   取「未偏移左缘」用 `offsetParent` + `offsetLeft`（`getBoundingClientRect()` 会把上次写的 `transform` 算进去，
+   重复调用自己漂移）；「对话区左缘」给列元素挂稳定锚点（`[data-chat-column]`）而不是猜 class 选择器。
+   退化（聊天区窄到列已占满）必须**归 0 退回基线**，不能算出负偏移把元素推出边缘 —— 代价是命中区放大后
+   窄窗压入量等比变大（42px 按钮 + 16px 基线 − 24px 空带 = 压 34px，放大前 20px）。
+   验收要按「同一颗元素不重挂」跑多态（左栏开合 / 窗口缩放）：断言已重算 + 元素身份不变 + 回到原态数值可复现。
 
 ### 绝不打印/提交 API key
 

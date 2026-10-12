@@ -1,8 +1,10 @@
 import type { TrustRequest } from "@percho/shared";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getPi } from "./api";
+import { CornerStack } from "./components/chat/CornerStack";
 import { EmptyState } from "./components/chat/EmptyState";
 import { MessageList } from "./components/chat/MessageList";
+import { SubagentBackButton } from "./components/chat/SubagentBackButton";
 import { TodoPanel } from "./components/chat/TodoPanel";
 import { DiffSidebar } from "./components/diff/DiffSidebar";
 import { DockSlot } from "./components/session/DockSlot";
@@ -21,8 +23,14 @@ import { Slot } from "./plugins/Slot";
 import { UI_REGIONS, UI_SLOTS } from "./plugins/slots";
 import { finishSplash } from "./splash";
 import { initAppQuit } from "./stores/app-quit";
+import {
+	initChannelSubscriptions,
+	invalidateChannelSubscriptionQueries,
+	syncActiveSession,
+} from "./stores/channel-subscriptions";
 import { restoreSessionWorkspace } from "./stores/session-workspace-restore";
 import { useSessionsStore } from "./stores/sessions";
+import { useHasParentRelation } from "./stores/subagent-return";
 import { backgroundImageUrl, useThemeStore } from "./stores/theme";
 import { useTranscriptStore } from "./stores/transcript";
 import { useUiPreferencesStore } from "./stores/ui-preferences";
@@ -37,6 +45,18 @@ import { initUpdateStore } from "./stores/update";
 
 export default function App() {
 	const activeSessionId = useSessionsStore((s) => s.activeSessionId);
+	// 子代理检视页才挂返回入口：无关系时连左上定位容器都不出现（不留占位）
+	const hasParentRelation = useHasParentRelation(activeSessionId);
+	/** Todo 槽位的 `display: contents` 宿主：CornerStack 靠它测量渲染根底边（插件原绝对定位不受影响） */
+	const todoSlotHostRef = useRef<HTMLDivElement | null>(null);
+	// 频道订阅快照（spec D1）：**先建立事件订阅**（声明在前 ⇒ 同一提交内先执行），再按活动会话取一次快照；
+	// reload/启动恢复靠这条查询自恢复，不依赖曾收到事件
+	useEffect(() => initChannelSubscriptions(), []);
+	useEffect(() => {
+		void syncActiveSession(activeSessionId);
+		// cleanup（卸载 / 依赖变化 / StrictMode 重跑）让这一次的在途查询作废
+		return invalidateChannelSubscriptionQueries;
+	}, [activeSessionId]);
 	// 订阅收敛为原始值（selector 返回 boolean → 仅在值翻转时重渲染）：App 子树（TabBar/MessageList/
 	// TodoPanel/DiffSidebar/…）无 memo，若订阅 transcript 对象会随每条流式 delta 全量级联重渲染
 	const showEmpty = useTranscriptStore((s) => {
@@ -102,17 +122,31 @@ export default function App() {
 				<SessionTabBar />
 				<div className="relative flex min-h-0 flex-1">
 					<Sidebar />
-					<div className="relative flex min-w-0 flex-1 flex-col">
+					{/* 聊天页容器：会话推/出过渡的动画主体（lib/session-page-slide.ts 认 data-session-page 找它，
+					   用 data-session-id 判定「新内容已上屏」）。顶栏与左栏不在此容器内 ⇒ 导航时保持静态 */}
+					<div
+						className="relative flex min-w-0 flex-1 flex-col"
+						data-session-page=""
+						data-session-id={activeSessionId ?? ""}
+					>
 						{/* 左侧会话轨道（临时工作区）：挂在 main + DockSlot 的父容器上，定位基准是 tab bar 以下的整列内容区——
 						    输入框高度变化不压缩它的居中参考系；收起态是纯覆盖层，不占宽、不挤压聊天布局（设置里默认关） */}
 						<SessionRail />
 						{/* 右侧 DiffSidebar 是独立浮层，不参与中间聊天列宽度与布局动画。 */}
 						<main className="relative min-h-0 flex-1">
 							{showEmpty ? <EmptyState /> : <MessageList />}
-							<Slot name={UI_SLOTS.TodoPanel} props={{}} fallback={TodoPanel} />
-							{/* 聊天区四角贡献层（top-right 与 TodoPanel 同角，容器已预留 pt-12） */}
-							<RegionHost region={UI_REGIONS.CornerTopLeft} />
-							<RegionHost region={UI_REGIONS.CornerTopRight} />
+							{/* Todo 槽位宿主：display:contents 不产生盒子（插件/默认 Todo 的原绝对定位不受影响），
+							    只给 CornerStack 一个可 observe 的挂载点（它去测量渲染根的实际底边） */}
+							<div ref={todoSlotHostRef} style={{ display: "contents" }}>
+								<Slot name={UI_SLOTS.TodoPanel} props={{}} fallback={TodoPanel} />
+							</div>
+							{/* 右上角：频道胶囊 + top-right 贡献共用一个堆叠（CornerStack），一起避开 Todo 实际底边；
+							    top-left 用 leading 插返回父会话入口，与左上区域贡献共用同一定位容器 */}
+							<CornerStack slotHostRef={todoSlotHostRef} />
+							<RegionHost
+								region={UI_REGIONS.CornerTopLeft}
+								leading={hasParentRelation ? <SubagentBackButton /> : undefined}
+							/>
 							<RegionHost region={UI_REGIONS.CornerBottomLeft} />
 							<RegionHost region={UI_REGIONS.CornerBottomRight} />
 						</main>

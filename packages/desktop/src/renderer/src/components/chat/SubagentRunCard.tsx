@@ -1,4 +1,5 @@
 import { type MessageKey, useT } from "../../i18n";
+import { withSessionSlide } from "../../lib/session-page-slide";
 import { useSessionsStore } from "../../stores/sessions";
 import type { SubagentRunUi } from "../../stores/transcript";
 
@@ -10,7 +11,8 @@ function displayName(name: string): string {
 /** 单个子代理行：状态点（工作中呼吸动画 / 完成勾 / 失败红点）+ 加粗名称 + 状态；有会话文件时可点击打开 */
 function SubagentRunRow({ run }: { run: SubagentRunUi }) {
 	const t = useT();
-	const openFromHistory = useSessionsStore((s) => s.openFromHistory);
+	// 走统一入口：它同步捕获父目标并只在「仍是最新导航意图」时记下返回关系（spec D4）
+	const openSubagentSession = useSessionsStore((s) => s.openSubagentSession);
 
 	// runner 创建会话文件后即回填 sessionFile；运行中同样允许打开只读检视页。
 	const clickable = run.sessionFile != null;
@@ -25,7 +27,11 @@ function SubagentRunRow({ run }: { run: SubagentRunUi }) {
 		<button
 			type="button"
 			disabled={!clickable}
-			onClick={() => clickable && run.sessionFile && void openFromHistory(run.sessionFile)}
+			// 推入过渡：子代理页从右向左滑入（父页同时向左滑出，见 lib/session-page-slide.ts）
+			onClick={() => {
+				if (!clickable || !run.sessionFile) return;
+				void withSessionSlide("push", () => openSubagentSession(run.sessionFile as string));
+			}}
 			className={`flex w-full items-center gap-2 py-1 text-left ${
 				clickable ? "cursor-pointer rounded-md hover:bg-hover" : "cursor-default"
 			} px-1.5 transition-colors`}
