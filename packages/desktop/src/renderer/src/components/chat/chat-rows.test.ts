@@ -50,6 +50,33 @@ function kinds(rows: ChatRow[]): string[] {
 }
 
 describe("buildChatRows", () => {
+	it("suppresses working during compaction and resumes after compaction ends", () => {
+		const base = { ...emptyTranscript(), agentActive: true };
+		const compacting = { ...base, compacting: true };
+		expect(isAgentWorking(compacting)).toBe(false);
+		expect(buildChatRows(compacting, "s1")).toEqual([]);
+		expect(buildChatRows({ ...compacting, compacting: false }, "s1")).toEqual([
+			expect.objectContaining({ kind: "metaGroup", working: true }),
+		]);
+	});
+
+	it("ends existing working groups immediately during compaction, preserving their contents", () => {
+		const t = {
+			...emptyTranscript(),
+			agentActive: true,
+			compacting: true,
+			streaming: streaming({ thinking: "已有思考", tools: [tool("read", "running")] }),
+		};
+		expect(isAgentWorking(t)).toBe(false);
+		expect(buildChatRows(t, "s1")).toEqual([
+			expect.objectContaining({
+				kind: "metaGroup",
+				working: false,
+				endImmediately: true,
+				items: [expect.objectContaining({ thinking: "已有思考", tools: t.streaming.tools })],
+			}),
+		]);
+	});
 	it("thinking/tools merge into a meta group; text is a boundary row", () => {
 		const t = {
 			...emptyTranscript(),

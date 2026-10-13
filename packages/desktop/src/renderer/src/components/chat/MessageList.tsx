@@ -59,7 +59,7 @@ export function MessageList() {
 	const centerOrbEnabled = useUiPreferencesStore((s) => s.centerOrbEnabled);
 	const shownWorking = useShownWorking(
 		agentWorking,
-		Boolean(streaming?.text) || !transcript.agentActive,
+		transcript.compacting || Boolean(streaming?.text) || !transcript.agentActive,
 		activeSessionId,
 	);
 
@@ -157,7 +157,7 @@ export function MessageList() {
 	// 行序列由 shared buildChatRows 产出（与 lan-web 同一分组大脑）；此处只做行模型 → JSX 映射。
 	// useMemo：滚动/跟随等本组件局部 state 翻转不重跑（历史长会话单次 ~60µs+）；transcript 每
 	// 次变更（合流后 ≤ 1 次/帧）重跑一次是预期成本；turnChanges/turnTimings/enteringTurn 是轮末行输入
-	// 订阅收窄（ChatRowsInput）：rows 只随 messages/streaming/agentActive/runEndedAt 重算——
+	// 订阅收窄（ChatRowsInput）：rows 只随 messages/streaming/agentActive/compacting/runEndedAt 重算——
 	// todos/pendingPermissions 等同会话其它字段更新（新 entry 引用）不再触发全量 buildChatRows
 	const rows = useMemo(
 		() =>
@@ -166,6 +166,7 @@ export function MessageList() {
 					messages: transcript.messages,
 					streaming,
 					agentActive: transcript.agentActive,
+					compacting: transcript.compacting,
 					runEndedAt: transcript.runEndedAt,
 				},
 				String(activeSessionId),
@@ -180,6 +181,7 @@ export function MessageList() {
 			transcript.messages,
 			streaming,
 			transcript.agentActive,
+			transcript.compacting,
 			transcript.runEndedAt,
 			activeSessionId,
 			turnChanges,

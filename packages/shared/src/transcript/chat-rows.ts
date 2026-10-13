@@ -57,18 +57,23 @@ export type ChatRow =
 	  };
 
 /**
- * agentWorking：agent 运行中且正文未出现 → 折叠组标题 working；
+ * agentWorking：agent 运行中、未压缩且正文未出现 → 折叠组标题 working；
  * 正文已出但工具/子代理还在跑时不熄灯（执行发生在 message_end 之后、turn_end 之前）。
  */
-/** buildChatRows/isAgentWorking 的最小输入（订阅收窄：调用方只订阅这四个字段，其余 transcript 字段变化不触发重算） */
+/** buildChatRows/isAgentWorking 的最小输入（订阅收窄：调用方只订阅这些字段，其余 transcript 字段变化不触发重算） */
 export interface ChatRowsInput {
 	messages: UIMessage[];
 	streaming: StreamingState | null;
 	agentActive: boolean;
+	compacting: boolean;
 	runEndedAt?: number;
 }
 
-export function isAgentWorking(input: Pick<ChatRowsInput, "agentActive" | "streaming">): boolean {
+export function isAgentWorking(
+	input: Pick<ChatRowsInput, "agentActive" | "streaming" | "compacting">,
+): boolean {
+	// 压缩可能发生在 run 内；agentActive 不代表此刻正在生成回复。
+	if (input.compacting) return false;
 	const { streaming } = input;
 	const hasRunningWork = Boolean(
 		streaming?.tools.some((t) => t.state === "running") ||
@@ -135,7 +140,7 @@ export function buildChatRows(
 	let groupIndex = 0;
 	const flushMeta = (isLatest = false, forceEmpty = false, subagentCount = 0): void => {
 		if (metaItems.length === 0 && !forceEmpty && subagentCount === 0) return;
-		const endImmediately = Boolean(streaming?.text) || !transcript.agentActive;
+		const endImmediately = transcript.compacting || Boolean(streaming?.text) || !transcript.agentActive;
 		rows.push({
 			kind: "metaGroup",
 			key: `meta-${sessionId}-g${groupIndex++}`,
@@ -161,8 +166,8 @@ export function buildChatRows(
 	 *
 	 * 计时行是这一轮的收尾，而 system 行（压缩分割线 / 互斥提示）说的是轮结束后发生的事，
 	 * 应该落在计时行**下面**（用户反馈：压缩分割线不该插在计时行上面）。
-	 * 块内还允许夹带「无内容的 working 指示行」—— agent 运行中压缩时，flushMeta 会追一条空组，
-	 * 它属于正在发生的事，跟 system 行一起留在计时行下面。
+	 * 块内还允许夹带「无内容的 working 指示行」—— 压缩结束后 run 继续时可能追一条空组，
+	 * 它属于正在发生的事，跟 system 行一起留在计时行下面（压缩进行中不显示 working）。
 	 * 尾部**没有 system 行**时不挪（否则会把普通的 thinking 指示行翻到计时行下面）。
 	 */
 	const footerInsertAt = (): number => {
