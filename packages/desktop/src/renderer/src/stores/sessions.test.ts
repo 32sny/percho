@@ -25,6 +25,7 @@ const piMock = vi.hoisted(() => ({
 }));
 vi.mock("../api", () => ({ getPi: () => piMock }));
 
+import { selectActiveCwd } from "../lib/active-cwd";
 import { NEW_SESSION_DRAFT_KEY, useDraftStore } from "./drafts";
 import { clearSessionHistory, isHistoryReady, retrySessionHistory } from "./session-history";
 import { useSessionWorkspaceStore } from "./session-workspace";
@@ -70,6 +71,77 @@ beforeEach(() => {
 	piMock.getSessionMessages.mockReset().mockResolvedValue([]);
 	resetStore();
 	useTranscriptStore.setState({ bySession: {} });
+});
+
+describe("V04 current directory projection (ticket 10 target)", () => {
+	const projectedCwd = () => selectActiveCwd(useSessionsStore.getState());
+	it("unknown ID activation preserves cwd fallback; a known activation repairs inconsistent seeds", () => {
+		useSessionsStore.setState({
+			sessions: [realMeta("known", "/known")],
+			activeSessionId: "known",
+			cwd: "/old",
+		});
+		useSessionsStore.getState().switchSession("missing");
+		expect(useSessionsStore.getState().activeSessionId).toBe("missing");
+		expect(useSessionsStore.getState().cwd).toBe("/old");
+		expect(projectedCwd()).toBe("/old");
+		useSessionsStore.getState().switchSession("known");
+		expect(useSessionsStore.getState().cwd).toBe(projectedCwd());
+	});
+	it("external seeds stay native, and host commit notifies once with the final active mirror", () => {
+		useSessionsStore.setState({
+			sessions: [realMeta("old", "/old"), realMeta("new", "/new")],
+			activeSessionId: "old",
+			cwd: "/seed",
+		});
+		expect(useSessionsStore.getState().cwd).toBe("/seed");
+		expect(projectedCwd()).toBe("/old");
+		const commits: Array<{ active: string | null; cwd: string | null }> = [];
+		const off = useSessionsStore.subscribe((state) => {
+			expect(state.cwd).toBe(selectActiveCwd(state));
+			commits.push({ active: state.activeSessionId, cwd: state.cwd });
+		});
+		try {
+			useSessionsStore.getState().switchSession("new");
+			expect(commits).toEqual([{ active: "new", cwd: "/new" }]);
+		} finally {
+			off();
+		}
+	});
+	it("draft null cwd is authoritative when the last real session closes", async () => {
+		useSessionsStore.getState().activateNewSessionDraft();
+		useSessionsStore.setState({
+			sessions: [realMeta("last", "/last")],
+			activeSessionId: "last",
+			cwd: "/last",
+		});
+		await useSessionsStore.getState().closeSession("last");
+		expect(projectedCwd()).toBeNull();
+		expect(useSessionsStore.getState().cwd).toBeNull();
+	});
+	it("directory cancellation is inert; choosing a directory mirrors draft cwd", async () => {
+		useSessionsStore.getState().activateNewSessionDraft();
+		const before = useSessionsStore.getState().cwd;
+		piMock.pickDirectory.mockResolvedValueOnce(null);
+		await useSessionsStore.getState().pickDirectory();
+		expect(useSessionsStore.getState().cwd).toBe(before);
+		piMock.pickDirectory.mockResolvedValueOnce("/chosen");
+		await useSessionsStore.getState().pickDirectory();
+		expect(useSessionsStore.getState().cwd).toBe("/chosen");
+		expect(useSessionsStore.getState().cwd).toBe(projectedCwd());
+	});
+	it("fork repairs a manually seeded stale mirror from the final active meta", async () => {
+		useSessionsStore.setState({
+			sessions: [realMeta("parent", "/parent")],
+			activeSessionId: "parent",
+			cwd: "/stale",
+		});
+		piMock.forkSession.mockResolvedValueOnce(realMeta("fork-cwd", "/parent"));
+		await useSessionsStore.getState().forkSession({});
+		expect(useSessionsStore.getState().activeSessionId).toBe("fork-cwd");
+		expect(projectedCwd()).toBe("/parent");
+		expect(useSessionsStore.getState().cwd).toBe(projectedCwd());
+	});
 });
 
 describe("partitionSessionsByPin", () => {
@@ -722,6 +794,12 @@ describe("GC close 在途的选择竞态（spec D5）", () => {
 
 		const unloading = useSessionsStore.getState().unloadSession("b");
 		useSessionsStore.getState().switchSession("b");
+		// R01-C: explicit inconsistent seed probes whether backend reopening repairs the cwd mirror.
+		useSessionsStore.setState({ cwd: "/stale/gc-reopen" });
+		expect(useSessionsStore.getState().cwd).toBe("/stale/gc-reopen");
+		expect(useSessionsStore.getState().cwd).not.toBe(
+			useSessionsStore.getState().sessions.find((s) => s.sessionId === "b")?.cwd,
+		);
 		closing.resolve({ closed: true });
 		const result = await unloading;
 
@@ -732,6 +810,11 @@ describe("GC close 在途的选择竞态（spec D5）", () => {
 		expect(state.activeSessionId).toBe("b");
 		expect(state.sessions.map((s) => s.sessionId)).toEqual(["a", "b"]);
 		expect(useTranscriptStore.getState().bySession.b?.followUpQueue).toEqual(["kept"]);
+		// Characteristic: this path reloads backend/meta only, and currently does not repair
+		// a manually inconsistent cwd mirror. Ticket 10 must decide the projection/commit behavior.
+		expect(state.sessions.find((s) => s.sessionId === state.activeSessionId)?.cwd).toBe("/p");
+		expect(state.cwd).toBe("/p");
+		expect(state.cwd).toBe(selectActiveCwd(state));
 	});
 
 	it("close 在途期间用户切到别处：正常卸载（closed:true、条目移除，不 reopen）", async () => {
@@ -838,10 +921,15 @@ describe("GC close 在途的选择竞态（spec D5）", () => {
 		closing.resolve({ closed: true });
 		await vi.waitFor(() => expect(piMock.openSession).toHaveBeenCalledTimes(1));
 		useSessionsStore.getState().switchSession("c");
-		reopening.resolve(realMeta("b", "/p"));
+		useSessionsStore.setState({ cwd: "/stale/current-c" });
+		const members = useSessionWorkspaceStore.getState().members;
+		reopening.resolve(realMeta("b", "/new-b"));
 
 		expect(await unloading).toEqual({ closed: false });
 		expect(useSessionsStore.getState().activeSessionId).toBe("c");
+		expect(useSessionsStore.getState().cwd).toBe("/p");
+		expect(useSessionsStore.getState().cwd).toBe(selectActiveCwd(useSessionsStore.getState()));
+		expect(useSessionWorkspaceStore.getState().members).toBe(members);
 	});
 });
 

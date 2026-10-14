@@ -4,10 +4,21 @@
 > 配套阅读：`docs/INDEX.md`（项目索引，「想改 X 改哪里」）；AGENTS.md「UI 截图调试」「常用命令·本地内测打包」两节还有各自的实操坑。
 > 新踩的坑记到这边（注明日期与修复点），别只在会话里说。
 
+## 三 · trace测试等待真实drain，不放宽轮转断言（2026-10-14）
+
+`record()`触发的void flush包含异步append/rotate/sweep。固定sleep10ms不是完成屏障：并发测试负载下仍可能在flushing时继续塞入多批，最终产生超出原测试大小预算的批次。`backend/test/trace.test.ts`现在仅在测试侧有界观测`flushing=false && buffer.length=0`（vi.waitFor，1ms轮询、1000ms局部等待），finally关闭recorder。原测试总timeout、1024字节轮转阈值、5归档、末条/大小/行数断言不改，也不加生产测试API。完整测试trace9/9通过；这不等于已修复另两个历史watcher/updater波动。
+
 ## 症状快速索引
 
 | 症状 / 场景 | 条目（章节） |
 |---|---|
+| trace轮转全套偶发超大小；用固定sleep误当异步flush完成 | 三 · trace测试等待真实drain，不放宽轮转断言（2026-10-14） |
+| 退出遗漏频道/流状态清理；冲突清理误碰holder；资源异常截断后续释放 | 三 · 注册实例清理必须区分normal/quit/冲突（2026-10-14） |
+| 插件runtime/shim有名字而发布声明缺项；standalone声明报ambient内declare错误 | 三 · 插件守护须双向核对别名与实际声明/构建（2026-10-14） |
+| 订阅表按on前缀猜别名；payload检查只剩动态Map断言；退出callback收到多余arg | 三 · 订阅单源表与真实类型/沙箱验证（2026-10-14） |
+| IPC域handler反向依赖组合index成环；preload单文件被“每域有边”误判 | 三 · 三域无环守护不可由计数反向驱动抽象（2026-10-14） |
+| 包装卸时压缩被打断，或逐会话reload期间下一会话变忙仍被重载 | 三 · 包管理与MCP须共用现读空闲守卫（2026-10-14） |
+| 快速启用多个 UI 插件/指派多个槽位，选择丢失或界面与磁盘不一致 | 三 · 插件配置的队列外旧快照与扫描晚发布（2026-10-14） |
 | 全 app 卡死、日志/磁盘分钟级 GB 暴涨、renderer unresponsive | 一 · 0.4.6 冻结事故 |
 | 流式期间白屏、`error #185`、无限重渲染整树卸载 | 一 · 0.5.0 白屏事故；四 · Zustand selector（#185 另一成因） |
 | 点击对话里的相对文件链接后白屏 | 四 · Markdown 相对链接会导航 app 主窗口（2026-09-23） |
@@ -996,7 +1007,7 @@ RenamePopover / ImagePreview 都是这么做的，`LoginDialog` 漏了）。z-in
 连带两个教训：
 
 - **推导链条里任何一环「旧」，整条结论都不可信**：spec 里曾写着「左栏列的是磁盘历史，所以卸载不会让任何列表缺项」——这句话在快照新鲜时成立，而快照并不保证新鲜（`session-memory-policy.md` §1 已标注修正）。审查这类断言时要问「这份数据的**新鲜度**由谁保证」。
-- **renderer 模块图不许有环**：写穿用一个模块级订阅，立刻在「`sessions` 先进」的入口（三个 store 单测）报 `Cannot read properties of undefined (reading 'subscribe')`——环 `projects → sessions → ui-preferences → sidebar-groups → projects` 让 `projects` 的模块体在 `sessions` 未求值完时执行。环的成因只是 3 行纯函数 `toggleInList` 挂在 `sidebar-groups` 上（已拆成叶模块 `lib/toggle-in-list.ts`）。防线：`src/renderer/src/import-cycles.test.ts` 扫全图断言 0 环（本仓当时为 0，含 `import type`）。
+- **renderer 模块图不许有环**：写穿用一个模块级订阅，立刻在「`sessions` 先进」的入口（三个 store 单测）报 `Cannot read properties of undefined (reading 'subscribe')`——环 `projects → sessions → ui-preferences → sidebar-groups → projects` 让 `projects` 的模块体在 `sessions` 未求值完时执行。环的成因只是 3 行纯函数 `toggleInList` 挂在 `sidebar-groups` 上（已拆成叶模块 `lib/toggle-in-list.ts`）。防线：`src/renderer/src/import-cycles.test.ts` 扫全图断言 0 环（本仓当时为 0，含 `import type`）；2026-10-14扩展为main/preload/renderer生产相对导入的同一AST守护，见下方三域条目。
 
 复现手法（可复用）：dev 实例 + CDP 直接驱 store 走真实入口（`.local/dev-logs/repro-session-catalog.mjs`）：`createSession()`（真实 promotion）→ `activateNewSessionDraft()` 切走 → `unloadSession(id)`（GC 真实入口）→ 断言 `inMemory=false` 但 `inCatalog=true` 且 `document.querySelector('[data-session-id=…]')` 仍在。**侧栏按组渲染，断言前要先展开该会话所在项目的组**（`setExpandedGroups([...groups, cwd])`），否则“行不在 DOM 里”是假阴性。
 
@@ -1100,6 +1111,72 @@ pgrep -f "electron-vite" | xargs -r kill -9
 - 需要「点真实子代理卡」这类依赖模型行为的场景，优先找**历史回放**入口：历史里已有子代理运行的父会话，打开它 → transcript 重放出卡片 → 点它，同样落到只读检视页，且完全确定性（子会话文件在 `<agentDir>/sessions-subagents/`，后端按路径判定 `readOnly`）。现场真跑一次 subagent 依赖凭证可用，dev 里常 401 拿不到可点卡片。
   - 2026-10-12 补充（qol3 阶段 2 实测）：dev agentDir 里**可能一个可点子代理卡都没有** —— 唯一一次真实 subagent 运行是 401 失败、没有 `sessionFile`（这类行渲染成不可点）。确定性做法：挑一个含 `"toolName":"subagent"` 的父会话打开，往 `useTranscriptStore` 的 `bySession[id].streaming.subagentRuns` **注入一条** `{key,agent,status:"done",sessionFile:<真实存在的 sessions-subagents 文件>}`（注入要重试：bundle 可能晚于注入落地并把 `streaming` 覆盖回磁盘态），卡片就会渲染出来，点它走的是**真实**组件 + 真实 store + 真实子会话文件；唯一合成物是那一行运行记录，写明即可。
 
+### 设置按域读取不能丢全局权限/世代或造第二个LAN初读（2026-10-14）
+
+setOpen关→开与openWith/setCategory按消费者域加载；关闭改分类和相同分类不刷新，其他字段不清。PermissionPicker稳定mount独立loadPermissionGate单飞；关→开/全量refresh再读，不是永久loaded/TTL。plugin:*保守全量且资源只读一次，权限入口共享在途避免重复。
+
+ProvidersPanel挂载联网不撤（私有local目录与network原仲裁不改）；LAN初读由store分类负责，组件只做enabled时5s轮询和cleanup。provider/登录成功/包装卸经统一refreshAfterMutation，以mutation目录路径推进写盘世代并刷新模型选择器；包还需当前会话loadedResources。不要把全量refresh从mutation搬到另一个effect。原modelPrefs串行队列/subagents序号/resources失败toast保留；全量兼容refresh的LAN失败仍静默，分类/poll公开refreshLanStatus仍自己显形error，不能借拆loader改错误归属。
+
+### 当前目录投影必须算最终patch，不监听补写（2026-10-14）
+
+selectActiveCwd：无active看draft.cwd（null是权威，不回退旧项目）；已知active看meta.cwd；未知ID只保留兼容cwd兜底。宿主动作用commitSessionState对原状态+最终patch一次派生兼容字段，不能在旧state上算、先导航再订阅补写，更不能包装插件/测试公开setState（外部播种保持原Zustand行为）。draft创建输入来源/close fallback用于生成draft的meta读取仍保留，不机械替换所有cwd。
+
+数据landMeta含LRU也要走提交，GC late reopen时重算当下active目录而非late meta的目录，焦点/成员不能动。旧fork/GC手工stale种子是反例不是正常必现bug；ticket10以真实selector翻红→修绿，另测切到别的项目再收late metadata。兼容字段不删，宿主八读侧用selector而不假设外部seed镜像总是正确；Mcp的null→undefined域适配保留。
+
+### Renderer装载拆分不能带走导航或缓存store快照（2026-10-14）
+
+session-navigation仅持两个独立令牌，store保留draft页＋只noteUserIntent的例外；session-loading只有四个固定data端口，isOpen/permissions在await后调用现读，landMeta含LRU但不焦点/成员/draft。不能把宽setState端口或反向store import包装成拆分。
+
+forget必须一起清历史epoch、file/session flight，旧finally只删自己的Promise；旧open landing也核对file flight身份，不能关闭重开后把旧meta盖新。取消身份门不只用于成功：open/bundle两个catch都先核isCurrent再toast，失效失败静默null；loadBundle:false也须在同步landMeta订阅后复核身份，不能绕过取消收口。记住权限的setPermissionMode成功/GC恢复失败也是await边界，需epoch/isOpen复核，否则旧权限续体写新代；bundle失败仍保持历史ready/retry/ACK原协议，不拿一条实时消息冒充完整历史。新模块的裸factory测试与真实store/父子/恢复/无环测试一起验证；文件行数不是指标。
+
+### 注册实例清理必须区分normal/quit/冲突（2026-10-14）
+
+normal关闭需要await shutdown，SDK dispose后history.cancel，再registry entry释放/移除、频道/流/rates、await trace.stop；不能为统一把history取消挪早。尽力清尾不等于吞错成功：helper尾抛首错、registry.delete finally移出已拆entry，normal收尾后仍传播首个清理错误，delete不得因此继续unlink；shutdown旧日志例外保持。仅串行重复关闭不足：entry身份WeakMap共享完成/失败Promise，不能WeakSet让第二调用早返回；await shutdown前后核对registry身份，quit/新代抢先后旧续体不可再SDK/频道/history/trace收尾。同步quit独立，不造异步退出屏障。deferred trace Promise需预先建立，失败finally释放shutdown/trace且afterEach独立结算保留的资源timer，避免失败挂住掩盖问题。quit必须同步返回，先entry释放再fire-and-forget shutdown/SDK dispose/移除；afterhook先cancel history再辅助组，全局traces.disposeAll仍唯一退出trace归属。
+
+实例helper只清unsubscribe/gate/dialogs，不按id查registry、不碰SDK/频道/trace；冲突只拆新modeRef资源，不发shutdown、不清holder的marker/history/频道/stream/rates。注册实例两辅助组和registry同步hooks用明确步骤，每步异常继续，避免先一个unsubscribe/watcher失败使后面gate/dialog或下一会话跳过。不造通用Scope/新disposed平台，不收runner进registry。
+
+行为验证不能只断言spy调用：真实PermissionGate/Dialog待处理Promise应落取消值、history.wait应false、watcher映射撤、marker/rates/流熔断清、频道not-live空且代次保留；重开旧modeRef reporter不得覆盖新代。内部channelSubs.report允许构造前早报，不可把它直接当旧watcher投递：测试捕获真实producer的isSessionAlive/代次身份回调，晚shutdown空集与重开后的旧非空报告分别验证。装饰spy时先保存native binding，不能先spy再bind（会递归自调用）；未编译backend测试不能让错误资源API假设掩盖行为证据。
+
+### 插件守护须双向核对别名与实际声明/构建（2026-10-14）
+
+基线发现发布声明缺11个非store具名便捷导出、UIToolCall.diff/endedAt与SubagentRunUi.thinkingLevel；runtime已支持，补声明而不是删旧能力。顶层便捷类型复用分组typeof，不锁内部store（原unknown保留），版本仍1。槽位/区域标识移shared为唯一来源，renderer旧导入路径重导出，KNOWN由值派生。
+
+静态姓名集合比较无法发现“导出Button但取Dropdown”、错分组或声明typeof指向别的组件。用TS AST解析实际shim的导出名→host路径（含destructuring/具名别名），完整双向比较host/env/声明，解析不了的形态直接失败；原生React系必须同名转发。props/DTO对齐成员名、类型token与optional，不能只比一侧子集。反证先保证替换真的发生，不能让无效replace“测试没抛错”掩盖夹具错误。
+
+独立消费者用真实TS compiler、skipLibCheck=false验证发布声明/具名别名/缺字段/资产string，并读取实际模块值符号，不把纯语法扫描当类型证明；因此发现旧ambient模块内3处重复declare触发TS1038，去掉冗余修饰即可，类型/导出不变。真实buildPlugin构建四specifier与全部资产，执行并比较每个导出身份；不用导入host-api引爆renderer模块级订阅，也不用虚假的React名字sentinel证明真实React存在。
+
+### 订阅单源表与真实类型/沙箱验证（2026-10-14）
+
+onProviderLoginEvent的旧IpcChannels别名是SettingsLoginEvent，不能按剥on推断。SUBSCRIPTION_TABLE显式定义方法key/alias/channel/payload（类型占位）、void运行时标志；PiApi/preload/旧别名从表派生，invoke表独立，backend来源与会话信封转换仍明确接线。
+
+动态Object.fromEntries无法证明每个方法的函数类型，其边界cast不是main载荷约束。send/forward使用channel→payload类型推导和NoInfer；实际TS compiler正例必须零诊断、负例逐行有诊断（错误send/source/callback/零参退出/退订返回类型/未知channel），不把未受tsconfig检查的@ts-expect-error注释当证据。兼容快照仅验证旧值，不作为新增订阅第二张权威名单。
+
+退出API声明零参回调，旧泛型包装cb(payload)即便payload=undefined也会在JS传一个参数；显式void标志确保cb()，用mock.calls/arguments长度测试真实零arg。普通事件仍透传原payload，退订用同一listener且独立订阅不互删。
+
+CJS验证不能只看esbuild测试指定format：另跑实际electron-vite build，执行out/preload/index.cjs产物的沙箱依赖白名单VM，require只允许electron，验证全订阅与退订；不宣称这替代真实Electron窗口冒烟。shared类型依赖SDK用import type，运行时不拉SDK/Electron进shared。
+
+### 三域无环守护不可由计数反向驱动抽象（2026-10-14）
+
+IPC组合index导入ui-plugins域，域又从index取sendToRenderer形成环；把原发送函数搬到只依赖electron的ipc/send.ts，两端导入叶模块，不重导回index，不新增消息总线。首个窗口选择、原payload身份、销毁/no-window行为用send.test.ts保真。
+
+守护按生产相对静态字面量导入图扫描main/preload/renderer，含声明/类型、barrel、side-effect、动态字面量import，排除测试。不能只用regex误读注释/字符串，也不能靠空glob“无环”。同一解析器验证自环/多节点环/无环/语法解析；手动临时复入已知UI域反向依赖时实际main测试稳定失败，再文件编辑恢复修复。
+
+preload当时仅index.ts一文件、零内部相对边，这是合法结构，不为测试凑边数拆订阅helper或加入伪边。每域源码非空且确实解析、总体有真边，输出统计供复核而不锁死文件/边数量；preload仍进扫描与环检测，preload样式成环fixture必须检出。不添加真实环白名单。
+
+### 包管理与MCP须共用现读空闲守卫（2026-10-14）
+
+SDK reload会shutdown旧扩展/MCP连接，不是无害的配置重读。原PackageAdmin只跳过streaming，MCP门面同时跳过streaming/compacting，形成守卫分歧。删除包模块的遍历实现，改注入窄reloadIdleSessions函数，门面保留唯一规则。
+
+关键是**每个reload调用前**现读状态，不能先把全表预筛为idle列表再串行await：第一个reload等待期间，后一个会话可开始生成或压缩。`packages-admin.test.ts`与`mcp-reload-guard.test.ts`用deferred前一reload和getter化后一状态，验证streaming/compacting均跳过；前者只mock外部SDK安装，后者真实隔离MCP配置/项目信任，不真实spawn npm或连接server。忙碌者不排队自动重试，单会话失败记录后继续；void/报告/ENOENT语义保持。
+
+### 插件配置的队列外旧快照与扫描晚发布（2026-10-14）
+
+底层 JsonStore 已串行，并不意味着上层逻辑原子：handler 在队列外读取 plugins/assignments 全对象，再以嵌套快照回写，不同目标仍会互相覆盖。另一个独立竞态是 scanAll 读旧配置后暂停，新命令提交并刷新后，旧 scan 晚发布可使 manager/list 回退，renderer 的 config 与 plugins 两份数据互相矛盾。
+
+修复点：`main/ui-plugins/config.ts` 改内部意图命令，旧 trusted/取消key等计算全部在 JsonStore.update 回调中；`manager.ts` 让扫描与命令提交+刷新共用私有串行链。还必须核对其他缓存写者：ensureBuilt 原先 await 后展开旧 info，即使扫描串行，晚构建仍可覆盖 enabled/trusted 或复活已删条目。构建完成只向仍在册、目录仍对应的最新 info 合并 built/buildError，不把耗时build塞入配置锁。写入/损坏失败向调用者传播，链的内部尾部仅消化失败以允许后续重试；IPC仍成功落盘并刷新后才推事件。不要仅检查最终磁盘文件。
+
+回归在 `renderer/src/stores/ui-plugin-config-baseline.test.ts`：不经过manager串行的真实配置并发仍保留全部目标；真实IPC同目标顺序、信任与取消规则；暂停扫描读取返回，明确检查新命令未进入提交，再放行旧扫描并验证disk/manager/真实renderer store一致。等候有界且报captures/writes，避免重构接缝后旧barrier永久等不到。故障只注入真实rename IO边界，不mock配置实现。构建结果接缝另有deferred：成功/失败 × 启用/停用四例及删除后晚结果两例；手动恢复旧发布逻辑时新六例稳定红、原七例仍绿，修复后全绿，确保不遗漏第三个写者。
+
 ### `TMPDIR` 指向仓库内部会让两个既有后端测试失败（2026-10-12，qol3 阶段 4 复核发现）
 
 现象：`cd packages/backend && TMPDIR=<repo>/.local/tmp npx vitest run` ⇒ **2 个既有用例失败**（默认 TMPDIR 下 754 条全绿）：
@@ -1108,11 +1185,11 @@ pgrep -f "electron-vite" | xargs -r kill -9
   但临时目录落在**本仓库**里 ⇒ git 判定为 ignored（拿到 `ignored` 而不是 `not-git`）。
 - `test/trust.test.ts > 无信任需求资源的项目直接可信`：项目落在仓库内部 ⇒ 扫到仓库的资源目录，判定需要信任。
 
-这不是回归，而是「临时目录必须干净、且不在 git 仓库内」这个隐含前提被破坏。做法上：
-- **我们自己的**中间产物一律写 `.local/tmp/<专用前缀>`（项目规则），新测试也按此隔离
-  （`packages/backend/test/channel-subscriptions.test.ts` 用 `.local/tmp/qol3-channel-subs-test`，两种 TMPDIR 下都绿）；
-- 但**不要**拿 `TMPDIR=<repo>/.local/tmp` 跑整个后端套件当「合规」证据 —— 那两条例外要先说明，
-  或把它们的 fixture 改成不依赖 TMPDIR 位置。
+这不是产品回归，而是测试对祖先环境的隐含依赖。**2026-10-14已修复测试，不再将这两项列为固定例外：**
+- Git的非仓库用例临时设置`GIT_CEILING_DIRECTORIES=realpath(testRoot)`，阻止发现祖先仓库；仍执行真实Git、保留原断言，`afterEach`恢复环境。其余嵌套真实仓库用例不设上界。
+- trust的无资源用例仅把SDK资源探测结果控制为false，验证宿主直接信任、不询问且不写信任记录；真实ProjectTrustStore保留，其余用例默认调用真实SDK探测，每例后重置mock。SDK当前检查cwd的`.pi`及祖先`.agents/skills`，不能因为测试在仓库内就修改产品信任规则。
+- 中间产物继续写`.local/tmp/<专用前缀>`，不必迁到系统临时目录。完整套件应在显式隔离agent/TMPDIR下照跑，其他失败不得套用旧两项豁免。
+- 反向依赖同样要防：`ipc-subscriptions.test.ts`的临时TS夹具曾靠仓内祖先`node_modules`解析`@percho/shared`，CI默认临时目录在仓外就报找不到模块。夹具现以绝对路径导入真实shared公共barrel，仍执行完整正反编译/逐行诊断，不靠改CI TMPDIR或放宽断言掩盖。
 
 ### 组件测试（`renderToStaticMarkup`）在 vitest 里读不到 store 的运行时状态（2026-10-12，qol3 阶段 2）
 

@@ -96,7 +96,12 @@ import {
 } from "./session/messages";
 import { autoNameSession } from "./session/naming";
 import { EventRateTracker } from "./session/rates";
-import { type EventForwarder, type RegisteredSession, SessionRegistry } from "./session/registry";
+import {
+	type EventForwarder,
+	type RegisteredSession,
+	releaseEntryResources,
+	SessionRegistry,
+} from "./session/registry";
 import { renameSessionFile } from "./session/rename";
 import { emitSessionShutdown } from "./session/shutdown";
 import { KeyedSingleFlight } from "./session/single-flight";
@@ -197,6 +202,7 @@ export interface PiBackendOptions {
  */
 export class PiBackend {
 	private readonly registry = new SessionRegistry();
+	private readonly sessionDisposals = new WeakMap<RegisteredSession, Promise<void>>();
 	/** open 的 single-flight（key = 规范化绝对路径）：同文件并发 open 共享一次构造（spec D4） */
 	private readonly openFlights = new KeyedSingleFlight<SessionMeta>();
 	/**
@@ -263,7 +269,10 @@ export class PiBackend {
 	private readonly projectLoader: ProjectResourceLoader;
 
 	constructor(private readonly options: PiBackendOptions = {}) {
-		this.packages = new PackageAdmin({ registry: this.registry, defaultCwd: options.defaultCwd });
+		this.packages = new PackageAdmin({
+			reloadIdleSessions: () => this.reloadIdleSessions(undefined),
+			defaultCwd: options.defaultCwd,
+		});
 		this.projectLoader = new ProjectResourceLoader({
 			trustStore: this.trustStore,
 			ask: (dir, opts) => this.trustGate.ask(dir, opts),
@@ -615,14 +624,24 @@ export class PiBackend {
 			// 这一代开始了：领取新代次（早报过的会话也在这里拿到最终代次；dispose 后重开会是新的一代）
 			this.channelSubs.noteSessionOpened(session.sessionId);
 		} catch (error) {
-			this.channelWatchCleanups.get(modeRef)?.();
-			this.channelWatchCleanups.delete(modeRef);
-			// registry 的最后防线（同 sessionId 已被别的 entry 占住，如并发/别名路径）：
-			// 刚构造的这份必须当场拆干净（订阅/gate/dialogs/session），不能只抛错把资源泄漏出去
-			unsubscribe();
-			gate.dispose();
-			dialogs.dispose();
-			session.dispose();
+			try {
+				this.channelWatchCleanups.get(modeRef)?.();
+			} catch (cleanupError) {
+				log.warn("conflicting watcher cleanup failed", session.sessionId, cleanupError);
+			} finally {
+				this.channelWatchCleanups.delete(modeRef);
+			}
+			// Release only the new instance: no holder-id cleanup or shutdown emission.
+			try {
+				releaseEntryResources({ unsubscribe, gate, dialogs });
+			} catch (cleanupError) {
+				log.warn("conflicting entry cleanup failed", session.sessionId, cleanupError);
+			}
+			try {
+				session.dispose();
+			} catch (cleanupError) {
+				log.warn("conflicting SDK dispose failed", session.sessionId, cleanupError);
+			}
 			log.error("session register conflicted; constructed instance disposed", {
 				sessionId: session.sessionId,
 			});
@@ -715,14 +734,65 @@ export class PiBackend {
 		return { closed: true };
 	}
 
+	/** Registered-session-only auxiliary groups; conflict cleanup must not touch holder ids. */
+	private beforeSessionShutdown(entry: RegisteredSession): void {
+		const id = entry.session.sessionId;
+		const failures: unknown[] = [];
+		try {
+			this.guardTriggerMarkers.clear(id);
+		} catch (error) {
+			failures.push(error);
+		}
+		try {
+			this.channelWatchCleanups.get(entry.modeRef)?.();
+		} catch (error) {
+			failures.push(error);
+		} finally {
+			this.channelWatchCleanups.delete(entry.modeRef);
+		}
+		if (failures.length) throw failures[0];
+	}
+
+	private afterSessionDispose(entry: RegisteredSession): void {
+		const id = entry.session.sessionId;
+		const failures: unknown[] = [];
+		try {
+			this.channelSubs.dispose(id);
+		} catch (error) {
+			failures.push(error);
+		}
+		try {
+			this.streamGuard.cleanup(id);
+		} catch (error) {
+			failures.push(error);
+		}
+		try {
+			this.eventRates.delete(id);
+		} catch (error) {
+			failures.push(error);
+		}
+		if (failures.length) throw failures[0];
+	}
+
 	/** 真正的处置：dispose + registry/全局键控子系统清理（closeSession 与 deleteSession 共用） */
-	private async disposeSession(entry: RegisteredSession): Promise<void> {
+	private disposeSession(entry: RegisteredSession): Promise<void> {
+		const pending = this.sessionDisposals.get(entry);
+		if (pending) return pending;
+		// Publish the identity-keyed Promise before running cleanup, including reentrant callers.
+		const disposal = Promise.resolve().then(() => this.disposeRegisteredSession(entry));
+		this.sessionDisposals.set(entry, disposal);
+		return disposal;
+	}
+
+	private async disposeRegisteredSession(entry: RegisteredSession): Promise<void> {
 		const sessionId = entry.session.sessionId;
-		// D8 标记是内存态、按会话键控：会话处置时顺手清掉（正常路径已由 compaction_end 配对消费，
-		// 这里兜住「触发了但压缩永远没开始/没结束就关会话」的残留）。
-		this.guardTriggerMarkers.clear(sessionId);
-		this.channelWatchCleanups.get(entry.modeRef)?.();
-		this.channelWatchCleanups.delete(entry.modeRef);
+		if (this.registry.get(sessionId) !== entry) return;
+		const failures: unknown[] = [];
+		try {
+			this.beforeSessionShutdown(entry);
+		} catch (error) {
+			failures.push(error);
+		}
 		// 先把 session_shutdown 送给扩展，再 dispose（详见 emitSessionShutdown 注释）：
 		// SDK 的 dispose() 不发这个事件，而官方 mcp 扩展只在它里面关 MCP stdio 子进程 ——
 		// 顺序反了就漏子进程，也会让扩展拿到的 ctx 已失效。
@@ -733,18 +803,40 @@ export class PiBackend {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		});
-		entry.session.dispose();
-		this.historyGate.cancel(sessionId);
+		// Synchronous quit may have disposed this entry (or a new incarnation now owns the id).
+		if (this.registry.get(sessionId) !== entry) {
+			if (failures.length) throw failures[0];
+			return;
+		}
+		try {
+			entry.session.dispose();
+		} catch (error) {
+			failures.push(error);
+		}
+		// Normal close keeps history cancellation after SDK dispose and before entry release.
+		try {
+			this.historyGate.cancel(sessionId);
+		} catch (error) {
+			failures.push(error);
+		}
 		// entry 级清理：unsubscribe + gate/dialogs dispose（pending 对话框按 sessionClosed 结算，
 		// 广播 resolved 让 renderer 撤卡；扩展 Promise 落取消值）
-		this.registry.delete(sessionId);
-		// 订阅快照兜底：**无条件发布空集**（这一代结束的生命周期信号）+ 标 not-live；
-		// 正常路径扩展的 shutdown 已上报过空集（内容变化发布一次），这里是接住 session_start 前/异常路径
-		this.channelSubs.dispose(sessionId);
-		// 全局键控子系统（本就独立于 registry）
-		this.streamGuard.cleanup(sessionId);
-		this.eventRates.delete(sessionId);
-		await this.traces.stop(sessionId);
+		try {
+			this.registry.delete(sessionId);
+		} catch (error) {
+			failures.push(error);
+		}
+		try {
+			this.afterSessionDispose(entry);
+		} catch (error) {
+			failures.push(error);
+		}
+		try {
+			await this.traces.stop(sessionId);
+		} catch (error) {
+			failures.push(error);
+		}
+		if (failures.length) throw failures[0];
 		log.info("session closed", sessionId);
 	}
 
@@ -1330,7 +1422,7 @@ export class PiBackend {
 		});
 	}
 
-	/** 新增/编辑一个 MCP server；写盘后 reload 空闲会话（运行中的跳过并回报，见 reloadSessionsForCwd） */
+	/** 新增/编辑一个 MCP server；写盘后 reload 空闲会话（运行中的跳过并回报，见 reloadIdleSessions） */
 	async upsertMcpServer(input: McpUpsertInput): Promise<McpMutationResult> {
 		const cwd = input.cwd ?? this.options.defaultCwd;
 		const projectTrusted = this.isProjectTrusted(cwd);
@@ -1343,7 +1435,7 @@ export class PiBackend {
 				globalNotice: this.mcpGlobalNotice,
 			},
 		);
-		const reload = await this.reloadSessionsForCwd(input.scope === "project" ? cwd : undefined);
+		const reload = await this.reloadIdleSessions(input.scope === "project" ? cwd : undefined);
 		return { config, reload };
 	}
 
@@ -1353,7 +1445,7 @@ export class PiBackend {
 	 */
 	async reloadMcpServers(input: { cwd?: string } = {}): Promise<McpMutationResult> {
 		const cwd = input.cwd ?? this.options.defaultCwd;
-		const reload = await this.reloadSessionsForCwd(undefined); // 全局配置影响所有会话
+		const reload = await this.reloadIdleSessions(undefined); // 全局配置影响所有会话
 		return { config: await this.getMcpConfig({ cwd }), reload };
 	}
 
@@ -1365,7 +1457,7 @@ export class PiBackend {
 	}): Promise<McpMutationResult> {
 		const cwd = input.cwd ?? this.options.defaultCwd;
 		await removeMcpServer({ ...input, cwd });
-		const reload = await this.reloadSessionsForCwd(input.scope === "project" ? cwd : undefined);
+		const reload = await this.reloadIdleSessions(input.scope === "project" ? cwd : undefined);
 		return { config: await this.getMcpConfig({ cwd }), reload };
 	}
 
@@ -1384,7 +1476,7 @@ export class PiBackend {
 	}
 
 	/**
-	 * mcp.json 变更后重载会话：官方 mcp 扩展在 `session_start`/reload 时读配置，不 reload 看不到新 server。
+	 * 包安装/卸载与 MCP 变更的唯一空闲重载实现。官方 mcp 扩展在 session_start/reload 时读配置。
 	 * `cwd` 给定 = 只重载该项目下的会话（项目级配置只影响它们）；缺省 = 全局配置，重载全部。
 	 *
 	 * ❗**必须跳过运行中的会话**：`AgentSession.reload()` 内部既没有 `isStreaming` 守卫也不 abort
@@ -1393,7 +1485,7 @@ export class PiBackend {
 	 * （失败还被 catch 吞掉 → 用户视角"点了没反应"）。跳过并把名单回给 UI（空闲后生效）。
 	 * 与 `forkSession` 用的同一把守卫。
 	 */
-	private async reloadSessionsForCwd(cwd: string | undefined): Promise<McpReloadReport> {
+	private async reloadIdleSessions(cwd: string | undefined): Promise<McpReloadReport> {
 		const skipped: McpReloadReport["skipped"] = [];
 		let reloaded = 0;
 		for (const entry of this.registry.list()) {
@@ -1539,8 +1631,20 @@ export class PiBackend {
 	}
 
 	dispose(): void {
-		for (const entry of this.registry.list()) this.channelWatchCleanups.get(entry.modeRef)?.();
-		this.registry.disposeAll();
+		this.registry.disposeAll({
+			beforeShutdown: (entry) => {
+				this.beforeSessionShutdown(entry);
+			},
+			afterDispose: (entry) => {
+				const id = entry.session.sessionId;
+				try {
+					this.historyGate.cancel(id);
+				} catch (error) {
+					log.warn("history cancel failed", id, error);
+				}
+				this.afterSessionDispose(entry);
+			},
+		});
 		this.historyGate.dispose();
 		this.eventEmitter.clear();
 		this.permissionEmitter.clear();

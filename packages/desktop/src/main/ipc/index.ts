@@ -1,6 +1,5 @@
 import type { PiBackend } from "@percho/backend";
 import { IpcChannels } from "@percho/shared";
-import { BrowserWindow } from "electron";
 import type { LanObserverHandle } from "../lan";
 import type { UiPluginManager } from "../ui-plugins/manager";
 import { onUpdateState } from "../updater";
@@ -8,22 +7,10 @@ import { registerAppIpc } from "./app";
 import { registerExtensionDialogIpc } from "./extension-dialogs";
 import { registerLanIpc } from "./lan";
 import { registerPackagesIpc } from "./packages";
+import { forward, sendToRenderer } from "./send";
 import { registerSessionsIpc } from "./sessions";
 import { registerSettingsIpc } from "./settings";
 import { registerUiPluginsIpc } from "./ui-plugins";
-
-/** 向 renderer 推事件（backend 事件转发 + 更新状态共用） */
-export function sendToRenderer(channel: string, payload: unknown): void {
-	const window = BrowserWindow.getAllWindows()[0];
-	if (window && !window.isDestroyed()) {
-		window.webContents.send(channel, payload);
-	}
-}
-
-/** 订阅 backend/updater 事件并透传转发 renderer（payload 不变形的转发统一走这里） */
-function forward<T>(subscribe: (handler: (payload: T) => void) => void, channel: string): void {
-	subscribe((payload) => sendToRenderer(channel, payload));
-}
 
 /**
  * IPC 注册组合入口：按域拆在 ./sessions ./settings ./packages ./app ./ui-plugins 五个文件，
