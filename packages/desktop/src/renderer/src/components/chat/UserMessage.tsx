@@ -6,6 +6,7 @@ import { HistoryImage } from "./history-image/HistoryImage";
 import { ATTACHMENT_IMAGE_MODE } from "./history-image-layout";
 import { ImagePreviewOverlay } from "./ImagePreview";
 import { CopyButton, RecallButton } from "./message-actions";
+import { UserMessageText } from "./UserMessageText";
 
 /** 用户消息气泡：缩略图 + skill 调用气泡 + 文本气泡 + 操作行（复制/撤回）+ 全屏预览 */
 export function UserMessage({ message }: { message: Extract<UIMessage, { kind: "user" }> }) {
@@ -32,7 +33,7 @@ export function UserMessage({ message }: { message: Extract<UIMessage, { kind: "
 					</div>
 				)}
 				{message.skill ? (
-					<div className="rounded-2xl rounded-br-md bg-bubble px-4 py-2.5 text-ui-15 leading-[1.7] text-ink select-text">
+					<div className="rounded-2xl rounded-br-md bg-user-bubble px-4 py-2.5 text-ui-15 leading-[1.7] text-ink shadow-soft select-text">
 						<div
 							className={
 								message.text ? "mb-1 font-mono text-ui-12 text-ink-dim" : "font-mono text-ui-12 text-ink-dim"
@@ -40,12 +41,12 @@ export function UserMessage({ message }: { message: Extract<UIMessage, { kind: "
 						>
 							{t("message.skillInvocation", { name: message.skill.name })}
 						</div>
-						{message.text && <div className="whitespace-pre-wrap break-words">{message.text}</div>}
+						{message.text && <UserMessageText key={message.id} text={message.text} />}
 					</div>
 				) : (
 					message.text && (
-						<div className="rounded-2xl rounded-br-md bg-bubble px-4 py-2.5 text-ui-15 leading-[1.7] whitespace-pre-wrap break-words text-ink select-text">
-							{message.text}
+						<div className="rounded-2xl rounded-br-md bg-user-bubble px-4 py-2.5 text-ui-15 leading-[1.7] text-ink shadow-soft select-text">
+							<UserMessageText key={message.id} text={message.text} />
 						</div>
 					)
 				)}

@@ -199,6 +199,8 @@ export const zh = {
 		recall: "撤回并放回输入框",
 		fork: "从此处分叉",
 		skillInvocation: "Skill · {name}",
+		showMore: "显示更多",
+		showLess: "收起",
 		scrollToBottom: "回到底部",
 		thinking: "思考过程",
 		thinkingPreview: "思考中",

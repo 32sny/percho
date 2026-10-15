@@ -13,6 +13,7 @@
 	--color-border: var(--color-border);
 	--color-border-strong: var(--color-border-strong);
 	--color-bubble: var(--color-bubble);
+	--color-user-bubble: var(--color-user-bubble);
 	--color-ink: var(--color-ink);
 	--color-ink-2: var(--color-ink-2);
 	--color-ink-dim: var(--color-ink-dim);
@@ -43,6 +44,7 @@
 	--color-border-strong: #cbd5e1;
 	/* 用户气泡底色：原 border（zinc-200 #e4e4e7）的变浅版，中性灰不带冷调 */
 	--color-bubble: #f0f0f2;
+	--color-user-bubble: var(--color-bubble);
 	--color-ink: #18181b;
 	--color-ink-2: #3f3f46;
 	--color-ink-dim: #71717a;
@@ -104,6 +106,7 @@
 	--color-border: #38383f;
 	--color-border-strong: #4b4b53;
 	--color-bubble: #38383f;
+	--color-user-bubble: var(--color-bubble);
 	--color-ink: #e6e6ea;
 	--color-ink-2: #c6c6cd;
 	--color-ink-dim: #9a9aa3;
@@ -838,6 +841,25 @@ code {
    lib/use-edge-fade.ts 按滚动位置写；不溢出的容器不挂属性，边缘保持干净。
    用 alpha 逆罩而不是盖一层颜色：不引入任何色值（#000 在这里只是遮罩的「不透明」取值），
    深浅主题共用一套，行自身的 hover 底色也跟着自然淡出。淡出高度旋钮 = --edge-fade-size。 */
+/* 用户长消息默认六行；自然高度由正文测量，过渡可在快速点击时原地反向。 */
+.user-message-text {
+	max-height: var(--user-message-full-height, none);
+	overflow: hidden;
+	transition: max-height 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 仅最后一行向下渐隐；按钮在 mask 外。lh 跟随界面字号。 */
+.user-message-text[data-collapsed="true"] {
+	max-height: 6lh;
+	mask-image: linear-gradient(to bottom, #000 calc(100% - 1lh), transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.user-message-text {
+		transition: none;
+	}
+}
+
 .edge-fade[data-fade-top="true"] {
 	mask-image: linear-gradient(to bottom, transparent 0, #000 var(--edge-fade-size, 20px));
 }
