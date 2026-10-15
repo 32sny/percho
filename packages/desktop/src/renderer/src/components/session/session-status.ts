@@ -1,5 +1,6 @@
 import type { SessionMeta } from "@percho/shared";
 import { isDailyCwd } from "../../lib/daily";
+import { pathLastSegment } from "../../lib/path-display";
 import { useTranscriptStore } from "../../stores/transcript";
 
 /** 会话状态（优先级递减）：等待审批/应答 > 工作中 > 完成未读 > 空闲。顶栏胶囊与左侧轨道共用 */
@@ -23,14 +24,14 @@ export function sessionTitle(session: SessionMeta, untitledLabel: string, dailyL
 	return (
 		session.name ??
 		(isDailyCwd(session.cwd) ? dailyLabel : undefined) ??
-		session.cwd.split("/").filter(Boolean).pop() ??
+		pathLastSegment(session.cwd) ??
 		untitledLabel
 	);
 }
 
 /** 项目目录末级名（空串 = 无，如 cwd 为根路径） */
 export function sessionProjectDir(session: SessionMeta): string {
-	return session.cwd.split("/").filter(Boolean).pop() ?? "";
+	return pathLastSegment(session.cwd) ?? "";
 }
 
 /** 头像字母 = 项目名（cwd 最后一段）首字母，与会话标题无关 */

@@ -6,6 +6,16 @@ function meta(overrides: Partial<SessionMeta>): SessionMeta {
 	return { sessionId: "s1", cwd: "/proj/demo", active: true, messageCount: 0, createdAt: 1, ...overrides };
 }
 
+it.each(["C:\\Users\\test\\percho", "D:\\代码\\percho\\", "C:/Users/test/percho/"])(
+	"Windows 路径的默认标题、项目名和头像均取目录末级：%s",
+	(cwd) => {
+		const session = meta({ cwd });
+		expect(sessionTitle(session, "Untitled")).toBe("percho");
+		expect(sessionProjectDir(session)).toBe("percho");
+		expect(sessionLetter(session)).toBe("p");
+	},
+);
+
 describe("sessionTitle", () => {
 	it("优先用户/自动命名", () => {
 		expect(sessionTitle(meta({ name: "重构权限模块" }), "未命名会话")).toBe("重构权限模块");

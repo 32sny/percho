@@ -41,6 +41,26 @@ function session(cwd: string, modifiedAt: number): SessionMeta {
 const DAILY = "/Users/test/.percho/daily";
 
 describe("deriveProjects", () => {
+	it.each([
+		["C:\\Users\\LINGCOOL\\percho", "percho"],
+		["D:\\TOOLS\\AI-Tools", "AI-Tools"],
+		["D:\\Lingcool-Dev\\漫画\\", "漫画"],
+		["C:/Users/LINGCOOL/percho/", "percho"],
+		["\\\\server\\share\\project", "project"],
+		["/Users/test/percho/", "percho"],
+		["/", "/"],
+		["C:\\", "C:"],
+	])("历史与手动添加项目均只显示目录末级：%s", (cwd, name) => {
+		for (const state of [
+			{ allSessions: [session(cwd, 100)], addedProjects: [] },
+			{ allSessions: [], addedProjects: [cwd] },
+		]) {
+			const projects = deriveProjects(state);
+			expect(projects).toHaveLength(1);
+			expect(projects[0]?.name).toBe(name);
+			expect(projects[0]?.cwd).toBe(cwd);
+		}
+	});
 	it("手动添加的按添加时间倒排（最新在前）", () => {
 		const addedProjects = ["/a", "/b", "/c"];
 		const out = deriveProjects({ allSessions: [], addedProjects });

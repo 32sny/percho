@@ -2,6 +2,7 @@ import type { SessionMeta } from "@percho/shared";
 import { create } from "zustand";
 import { getPi } from "../api";
 import { initDailyDir, isDailyCwd } from "../lib/daily";
+import { pathLastSegment } from "../lib/path-display";
 import { isPrimaryNavigationSession } from "../lib/session-visibility";
 import { useChannelSubscriptionsStore } from "./channel-subscriptions";
 import { useSessionWorkspaceStore } from "./session-workspace";
@@ -247,7 +248,7 @@ export function deriveProjects(state: Pick<ProjectsStore, "allSessions" | "added
 	const byCwd = new Map<string, ProjectEntry>();
 	for (const session of state.allSessions) {
 		if (!session.cwd || isDailyCwd(session.cwd)) continue;
-		const name = session.cwd.split("/").filter(Boolean).pop() ?? session.cwd;
+		const name = pathLastSegment(session.cwd) ?? session.cwd;
 		const modified = session.modifiedAt ?? session.createdAt;
 		const existing = byCwd.get(session.cwd);
 		if (existing) {
@@ -272,7 +273,7 @@ export function deriveProjects(state: Pick<ProjectsStore, "allSessions" | "added
 		} else {
 			byCwd.set(cwd, {
 				cwd,
-				name: cwd.split("/").filter(Boolean).pop() ?? cwd,
+				name: pathLastSegment(cwd) ?? cwd,
 				sessionCount: 0,
 				lastActive: 0,
 				addedIndex: idx,

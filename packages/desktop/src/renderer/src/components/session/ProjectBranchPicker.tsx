@@ -3,6 +3,7 @@ import { getPi } from "../../api";
 import { useT } from "../../i18n";
 import { selectActiveCwd } from "../../lib/active-cwd";
 import { getDailyDirCached, isDailyCwd } from "../../lib/daily";
+import { pathLastSegment } from "../../lib/path-display";
 import { deriveProjects, useProjectsStore } from "../../stores/projects";
 import { useSessionsStore } from "../../stores/sessions";
 import { CoffeeIcon } from "../icons";
@@ -41,7 +42,7 @@ function ProjectPicker() {
 		() => deriveProjects({ allSessions, addedProjects }),
 		[allSessions, addedProjects],
 	);
-	const name = cwd?.split("/").filter(Boolean).pop();
+	const name = cwd ? pathLastSegment(cwd) : undefined;
 	const daily = isDailyCwd(cwd);
 	// 模块缓存（load() 已 await 初始化；空态 EmptyState 挂载即触发 load）
 	const dailyDir = getDailyDirCached();
