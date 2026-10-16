@@ -1,8 +1,10 @@
 # Windows 更新诊断与恢复
 
-## 这次补齐什么
+仅在 Windows 更新失败、诊断或修改安装链路时阅读；常规打包见 [构建发布](build-release.md)。
 
-针对 #104（0.6.3 → 0.6.4 自动更新失败）补可观测性，不宣称已经修复该故障的唯一根因。
+## 诊断能力
+
+当前链路提供取证与恢复能力，不把诊断增强当作已定位所有更新失败根因。
 
 - Electron updater 的专用日志 `userData/update-diagnostics/updater.jsonl`：版本/OS/可执行文件与临时目录、检查/下载元数据、SDK 下载/校验/安装启动日志、交接请求、退出事件、异常。512KiB 轮转，保留上一份；同步写盘，不依赖 app 退出后的 async flush。
 - `install-attempt.json`：安装前记录来源/目标版本、触发方式与请求 ID；下次启动观察目标版本是否运行。**尚未观察到目标版本 ≠ 安装失败**，异常退出时 updater 也可能跳过自动安装。
@@ -35,12 +37,10 @@
 
 ## 工程验证与守门
 
-- `update-diagnostics.test.ts`：跨重启观察语义、同步交接、轮转/中文 trace、脱敏/不采会话凭证、真实不可写 IO 不阻断。
-- `updater.test.ts`：SDK logger、显式/退出时交接、native before-quit-for-update、退出/异常、旧 UI policy 保持；dev 不启动自动更新。
-- `UpdateHelp.test.tsx`：用户显式导出、取消/失败 toast、隐私说明、官方链接与未确认提示。
-- `node scripts/check-windows-update-diagnostics.mjs`：编译真实 include；Windows 上执行 success/HKCU/launch-error/nonzero/日志不可写 harness，比较 stock Errors/寄存器/exit 语义，真实 PowerShell 只读 JSON 快照。仅 harness 把 MessageBox 改为 DetailPrint 防阻塞，生产仍保留原失败退出。
-- CI Windows job 还编译真实生产 NSIS（含全套实际变量/flags/header），不只编译 mock hook。升级 electron-builder 必须重新核查 handleUninstallResult 的 hook 替换契约。
-- 当前 macOS NSIS 编译器在最小 IfErrors 脚本也出现 std::bad_alloc，不能作为 patch 编译证据；Windows CI 编译/执行为准。完整 Windows 原始故障复现仍是后续根因修复的门，不把诊断 harness 当成根因已解决。
+- 代码入口：desktop `main/updater.ts`、`update-diagnostics.ts`、`build/update-diagnostics.nsh`、`resources/update-diagnostics/collect.ps1`；相邻单测覆盖交接、脱敏与失败兜底。
+- 专项验证：`node scripts/check-windows-update-diagnostics.mjs`，具体模式见脚本头；Windows CI 同时编译真实生产 NSIS，不只验证 mock hook。
+- 升级 electron-builder 必须重核 `handleUninstallResult` hook 契约，保留 stock Errors/寄存器和原退出语义；日志失败不能改变安装决策。
+- macOS 上的 NSIS 编译不能替代 Windows 实际编译/执行；诊断 harness 通过不等于原始“旧包 → 新包”故障已解决。
 
 ## 不做什么
 
