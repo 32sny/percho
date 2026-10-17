@@ -71,6 +71,26 @@ export function PencilIcon({ size = 14, className }: IconProps) {
 	);
 }
 
+/** 图片附件 glyph */
+export function ImageIcon({ size = 14, className }: IconProps) {
+	return (
+		<svg
+			className={className}
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			{...strokeProps}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<rect x="3" y="4" width="18" height="16" rx="2" />
+			<circle cx="8.5" cy="9" r="1.5" />
+			<path d="m4 17 4.5-4.5 3.5 3 2.5-2.5L20 18" />
+		</svg>
+	);
+}
+
 /** 文档（扩展多行编辑卡 glyph，设计稿画板④） */
 export function FileTextIcon({ size = 14, className }: IconProps) {
 	return (

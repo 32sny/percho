@@ -155,7 +155,8 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		options.setQuotes([]);
 		setSending(true);
 		setError(null);
-		const sentImages = images;
+		// ImageInput.name 仅供输入栏展示，发送到 SDK 前还原为协议字段，避免 UI 元数据进入会话。
+		const sentImages = images.map(({ data, mimeType }) => ({ data, mimeType }));
 		const sentAttachments = attachments;
 		const sentQuotes = quotes;
 		options.setImages([]);

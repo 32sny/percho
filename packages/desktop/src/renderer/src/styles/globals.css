@@ -1882,21 +1882,10 @@ code {
 	padding: 2px 10px;
 	user-select: none;
 }
-/* 逐行 stagger 进入（--i 由渲染层写入，上限 24 防长 diff 拖沓） */
+/* Diff 是代码阅读区：取消逐行延迟和位移动画，避免打开时看起来像内容尚未加载完成。 */
 .diff-line,
 .diff-hunk {
-	animation: diff-line-in 0.3s both;
-	animation-delay: calc(min(var(--i, 0), 24) * 14ms);
-}
-@keyframes diff-line-in {
-	from {
-		opacity: 0;
-		transform: translateX(5px);
-	}
-	to {
-		opacity: 1;
-		transform: none;
-	}
+	animation: none;
 }
 .diff-more {
 	display: block;

@@ -11,9 +11,11 @@ export const NEW_SESSION_DRAFT_KEY = "__new__";
 export const COMPOSER_FOCUS_EVENT = "pi:composer-focus";
 
 /** 一份会话草稿：文本 + 图片附件 + slash 命令胶囊 + @ 文件引用胶囊 + 选中引用胶囊 */
+export type DraftImage = ImageInput & { name?: string };
+
 export interface DraftEntry {
 	text: string;
-	images: ImageInput[];
+	images: DraftImage[];
 	slashCommand: string | null;
 	/** @ 文件引用（项目相对路径）；发送时拼回 @path 列表置于正文前 */
 	attachments: string[];

@@ -1,54 +1,61 @@
 import type { ImageInput } from "@percho/shared";
 import { useT } from "../../i18n";
-import { imageSrc } from "../chat/ImagePreview";
-import { CloseIcon } from "../icons";
+import { CloseIcon, ImageIcon } from "../icons";
+import { Tooltip } from "../ui/Tooltip";
+
+type ComposerImage = ImageInput & { name?: string };
+
+function imageNameOf(image: ComposerImage, index: number): string {
+	return image.name || `image-${index + 1}`;
+}
 
 /**
- * 待发送图片缩略图条：点击放大预览，× 删除。
- * 悬浮层（absolute bottom-full 锚在 composer 内容列顶、浮于对话区之上），不占文档流——
- * 粘贴图片不再撑高输入框压缩 main 对话区（曾把用户正在读的消息齐边切掉，像被背景盖住）。
- * 无包裹卡片：容器透明只做排布，每张缩略图自带 shadow-pop 单独悬浮；多图向上生长（bottom 定位）。
+ * 待发送图片附件条：使用与文件胶囊一致的紧凑标签，点击缩略图打开预览。
+ * 预览仍保留在输入栏上方，标签显示文件名而不是 base64 或完整路径。
  */
 export function ImageTray({
 	images,
 	onPreview,
 	onRemove,
 }: {
-	images: ImageInput[];
+	images: ComposerImage[];
 	onPreview: (image: ImageInput) => void;
 	onRemove: (index: number) => void;
 }) {
 	const t = useT();
 	if (images.length === 0) return null;
 	return (
-		<div className="absolute bottom-full left-0 z-10 mb-2 flex max-w-full flex-wrap items-end gap-2">
-			{images.map((image, index) => (
-				<div
-					// biome-ignore lint/suspicious/noArrayIndexKey: 缩略图列表不可变（删除为整列表替换）
-					key={index}
-					className="group relative"
-				>
-					<button
-						type="button"
-						className="block h-16 w-16 overflow-hidden rounded-lg border border-border bg-surface shadow-pop"
-						onClick={() => onPreview(image)}
+		<div className="flex max-w-full flex-wrap items-center gap-1.5 px-3 pt-2">
+			{images.map((image, index) => {
+				const name = imageNameOf(image, index);
+				return (
+					<div
+						// biome-ignore lint/suspicious/noArrayIndexKey: 图片列表无稳定 ID，删除时整列表替换
+						key={index}
+						className="flex max-w-[190px] items-center gap-1.5 rounded-md bg-surface px-2 py-0.5 text-ui-12 leading-5 text-ink-2 shadow-pop"
 					>
-						<img
-							src={imageSrc(image)}
-							alt={`${t("composer.previewImage")} ${index + 1}`}
-							className="h-full w-full object-cover"
-						/>
-					</button>
-					<button
-						type="button"
-						className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-ink text-on-ink shadow transition-colors hover:bg-red-600"
-						aria-label={t("composer.removeImage")}
-						onClick={() => onRemove(index)}
-					>
-						<CloseIcon size={8} />
-					</button>
-				</div>
-			))}
+						<button
+							type="button"
+							className="flex min-w-0 items-center gap-1.5 truncate text-left"
+							title={name}
+							onClick={() => onPreview(image)}
+						>
+							<ImageIcon size={13} className="shrink-0 text-ink-dim" />
+							<span className="truncate">{name}</span>
+						</button>
+						<Tooltip label={t("composer.removeImage")}>
+							<button
+								type="button"
+								className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-dim transition-colors hover:bg-hover hover:text-ink"
+								aria-label={t("composer.removeImage")}
+								onClick={() => onRemove(index)}
+							>
+								<CloseIcon size={9} />
+							</button>
+						</Tooltip>
+					</div>
+				);
+			})}
 		</div>
 	);
 }

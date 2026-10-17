@@ -7,7 +7,13 @@ import { selectActiveCwd } from "../../lib/active-cwd";
 import { prepareImageAttachment } from "../../lib/image-attachment";
 import { RegionHost } from "../../plugins/RegionHost";
 import { UI_REGIONS } from "../../plugins/slots";
-import { COMPOSER_FOCUS_EVENT, EMPTY_DRAFT, NEW_SESSION_DRAFT_KEY, useDraftStore } from "../../stores/drafts";
+import {
+	COMPOSER_FOCUS_EVENT,
+	type DraftImage,
+	EMPTY_DRAFT,
+	NEW_SESSION_DRAFT_KEY,
+	useDraftStore,
+} from "../../stores/drafts";
 import { useSessionsStore } from "../../stores/sessions";
 import { pushToast } from "../../stores/toasts";
 import { selectTranscript, useTranscriptStore } from "../../stores/transcript";
@@ -64,7 +70,7 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 	const setText = (updater: string | ((prev: string) => string)) => {
 		updateDraft(draftKey, (d) => ({ ...d, text: typeof updater === "function" ? updater(d.text) : updater }));
 	};
-	const setImages = (updater: ImageInput[] | ((prev: ImageInput[]) => ImageInput[])) => {
+	const setImages = (updater: DraftImage[] | ((prev: DraftImage[]) => DraftImage[])) => {
 		updateDraft(draftKey, (d) => ({
 			...d,
 			images: typeof updater === "function" ? updater(d.images) : updater,
@@ -215,28 +221,6 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 		return () => window.removeEventListener(COMPOSER_FOCUS_EVENT, onFocusRequest);
 	}, []);
 
-	// Electron sandbox 中 File.path 已移除；preload 通过 webUtils 恢复原生路径并送入现有附件管线。
-	useEffect(() => {
-		if (readOnly) return;
-		const containsFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
-		const onDragOver = (event: DragEvent) => {
-			if (!containsFiles(event)) return;
-			event.preventDefault();
-			if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-		};
-		const onDrop = (event: DragEvent) => {
-			if (!containsFiles(event) || !event.dataTransfer) return;
-			event.preventDefault();
-			appendAttachments(resolveDroppedFilePaths(event.dataTransfer.files, getPi().getPathForFile));
-		};
-		window.addEventListener("dragover", onDragOver);
-		window.addEventListener("drop", onDrop);
-		return () => {
-			window.removeEventListener("dragover", onDragOver);
-			window.removeEventListener("drop", onDrop);
-		};
-	}, [appendAttachments, readOnly]);
-
 	// 点击输入框容器外部时收起命令/文件面板（文本保留；继续输入时恢复）
 	const { setSlashDismissed } = slash;
 	const { setAtDismissed } = at;
@@ -300,24 +284,55 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 		}
 	};
 
-	const handleFiles = (files: FileList | File[] | null) => {
-		if (!files || files.length === 0) return;
-		// 图片门控入口防御：+ 按钮/粘贴之外的路径不再存在，仍早退兜底
-		if (!imagesSupported) return;
-		for (const file of Array.from(files)) {
-			if (!file.type.startsWith("image/")) continue;
-			// 在粘贴/选择时就先把图缩到模型规格（见 lib/image-attachment.ts）：
-			// 发送路径上的 SDK 归一化于是只需解码量尺寸（~20-40ms）而不是真缩一遍（~0.8–1.1s）。
-			// 失败一律退回原图，不丢附件；在途 promise 交给 preparingRef，回车会等它。
-			const prepared = prepareImageAttachment(file).then((image) => {
-				setImages((prev) => [...prev, image]);
-			});
-			preparingRef.current.push(prepared);
-			void prepared.finally(() => {
-				preparingRef.current = preparingRef.current.filter((p) => p !== prepared);
-			});
-		}
-	};
+	const handleFiles = useCallback(
+		(files: FileList | File[] | null) => {
+			if (!files || files.length === 0 || !imagesSupported) return;
+			for (const file of Array.from(files)) {
+				if (!file.type.startsWith("image/")) continue;
+				// 在进入草稿时保留文件名，仅用于输入栏展示；发送仍只读取 ImageInput 的 data/mimeType。
+				const prepared = prepareImageAttachment(file).then((image) => {
+					updateDraft(draftKey, (draft) => ({
+						...draft,
+						images: [...draft.images, { ...image, name: file.name || undefined }],
+					}));
+				});
+				preparingRef.current.push(prepared);
+				void prepared.finally(() => {
+					preparingRef.current = preparingRef.current.filter((p) => p !== prepared);
+				});
+			}
+		},
+		[draftKey, imagesSupported, updateDraft],
+	);
+
+	// Electron sandbox 中 File.path 已移除；图片走真实预览/发送管线，Markdown 等文件走轻量文件名胶囊。
+	useEffect(() => {
+		if (readOnly) return;
+		const containsFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
+		const onDragOver = (event: DragEvent) => {
+			if (!containsFiles(event)) return;
+			event.preventDefault();
+			if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+		};
+		const onDrop = (event: DragEvent) => {
+			if (!containsFiles(event) || !event.dataTransfer) return;
+			event.preventDefault();
+			const files = Array.from(event.dataTransfer.files);
+			const images = files.filter((file) => file.type.startsWith("image/"));
+			const otherPaths = resolveDroppedFilePaths(
+				files.filter((file) => !file.type.startsWith("image/")),
+				getPi().getPathForFile,
+			);
+			if (images.length > 0) handleFiles(images);
+			appendAttachments(otherPaths);
+		};
+		window.addEventListener("dragover", onDragOver);
+		window.addEventListener("drop", onDrop);
+		return () => {
+			window.removeEventListener("dragover", onDragOver);
+			window.removeEventListener("drop", onDrop);
+		};
+	}, [appendAttachments, handleFiles, readOnly]);
 
 	/** 截图/复制图片后 Ctrl+V 粘贴到输入框 */
 	const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -384,17 +399,17 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 						{t("interaction.prefillNote", { source: extensionPrefillSource })}
 					</div>
 				)}
-				<ImageTray
-					images={images}
-					onPreview={setPreviewImage}
-					onRemove={(index) => setImages((prev) => prev.filter((_, i) => i !== index))}
-				/>
 				{/* biome-ignore lint/a11y/noStaticElementInteractions: 点留白 = 聚焦正文（与直接点 textarea 等价，纯便利）；
 				    不给盒子加 role/ tabIndex，那会让读屏多出一个空的可聚焦区域 */}
 				<div
 					onMouseDown={handleComposerMouseDown}
 					className="rounded-[20px] border-[0.5px] border-border bg-surface shadow-soft"
 				>
+					<ImageTray
+						images={images}
+						onPreview={setPreviewImage}
+						onRemove={(index) => setImages((prev) => prev.filter((_, i) => i !== index))}
+					/>
 					{/* 引用胶囊区：独占顶部一行贴边（专为选中引用留的位置，不占正文宽度） */}
 					{quotes.length > 0 && (
 						<div className="flex flex-wrap items-center gap-1.5 px-3 pt-2">

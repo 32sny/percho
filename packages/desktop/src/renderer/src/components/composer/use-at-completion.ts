@@ -94,20 +94,11 @@ export function useAtCompletion(options: UseAtCompletionOptions) {
 		});
 	};
 
-	/** 移除 @ 胶囊：恢复为全路径纯文本（追加到文本末尾，与 slash 胶囊删除恢复同逻辑） */
+	/** 移除文件胶囊：只移除附件，不把完整路径重新灌回输入框。 */
 	const handleAttachmentRemove = (index: number) => {
-		const path = attachments[index];
-		if (!path) return;
+		if (!attachments[index]) return;
 		options.setAttachments((prev) => prev.filter((_, i) => i !== index));
-		options.setText((prev) => (prev ? `${prev} @${path} ` : `@${path} `));
-		requestAnimationFrame(() => {
-			const el = options.textareaRef.current;
-			if (el) {
-				el.focus();
-				const len = el.value.length;
-				el.setSelectionRange(len, len);
-			}
-		});
+		requestAnimationFrame(() => options.textareaRef.current?.focus());
 	};
 
 	/** @ 菜单键盘导航：↑↓ 移动，Enter/Tab 选中，Esc 折叠（保留文本）；消费事件返回 true */

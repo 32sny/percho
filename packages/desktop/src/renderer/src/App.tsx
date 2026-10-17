@@ -109,7 +109,7 @@ export default function App() {
 	const bgDim = useThemeStore((s) => s.background.dim);
 
 	return (
-		<div className="relative h-full">
+		<div className="relative h-full overflow-hidden app-layout-root">
 			{bgImage && (
 				<>
 					<div className="app-bg" style={{ backgroundImage: `url("${backgroundImageUrl(bgImage)}")` }} />
@@ -118,11 +118,11 @@ export default function App() {
 			)}
 			{/* 背景贡献层：与自定义背景图同层同规则（z-0，界面默认不透明时不可见），内容列（z-10）之前 */}
 			<RegionHost region={UI_REGIONS.AppBackground} />
-			<div className="relative z-10 flex h-full flex-col">
+			<div className="relative z-10 flex h-full flex-col overflow-hidden">
 				{/* 顶栏常驻（v9）：它承担窗口拖动 / 左栏开合 / 变更侧栏入口，不再整条隐藏；
 				   设置里的开关只控制「是否显示置顶会话胶囊」（见 SessionTabBar） */}
 				<SessionTabBar />
-				<div className="relative flex min-h-0 flex-1">
+				<div className="relative flex min-h-0 flex-1 overflow-hidden">
 					<Sidebar />
 					{/* 聊天页容器：会话推/出过渡的动画主体（lib/session-page-slide.ts 认 data-session-page 找它，
 					   用 data-session-id 判定「新内容已上屏」）。顶栏与左栏不在此容器内 ⇒ 导航时保持静态 */}

@@ -11,6 +11,8 @@ if not exist "%REPO_ROOT%\packages\desktop" (
 )
 
 cd /d "%REPO_ROOT%\packages\desktop"
+rem Clear Percho's injected esbuild path so this process uses the project dependency.
+set "ESBUILD_BINARY_PATH="
 echo [INFO] Starting Percho dev server...
 echo [INFO] Close this window or press Ctrl+C to stop.
 echo.

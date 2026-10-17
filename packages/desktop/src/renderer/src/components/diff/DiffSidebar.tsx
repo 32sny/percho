@@ -184,7 +184,12 @@ export function DiffSidebar() {
 	useEffect(() => {
 		if (!open) return;
 		const onKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") setOpen(false);
+			if (e.key === "Escape") {
+				setOpen(false);
+				// 兜底复位：无论何时退出侧栏，强制重置外层主容器可能残留的横向偏移
+				const appRoot = document.querySelector<HTMLElement>(".app-layout-root");
+				if (appRoot) appRoot.scrollLeft = 0;
+			}
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
@@ -202,10 +207,16 @@ export function DiffSidebar() {
 		}
 		const el = bodyRef.current?.querySelector(`[data-section-key="${CSS.escape(diffFocus.sectionKey)}"]`);
 		const card = el?.closest("details.diff-file-card");
-		if (card instanceof HTMLDetailsElement) {
+		if (card instanceof HTMLDetailsElement && bodyRef.current) {
 			card.open = true;
-			card.scrollIntoView({
-				block: "center",
+			const bodyEl = bodyRef.current;
+			// 局部计算并平滑滚动 body 内部的 scrollTop，绝对不调用全局穿透的 card.scrollIntoView()，
+			// 彻底杜绝侧栏在 translate3d 动画期间导致外层主窗口发生灾难性的横向 scrollLeft 漂移！
+			const cardRect = card.getBoundingClientRect();
+			const bodyRect = bodyEl.getBoundingClientRect();
+			const targetTop = bodyEl.scrollTop + (cardRect.top - bodyRect.top) - (bodyEl.clientHeight / 2) + (card.clientHeight / 2);
+			bodyEl.scrollTo({
+				top: Math.max(0, targetTop),
 				behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
 			});
 			card.classList.remove("jump-flash");
@@ -213,6 +224,9 @@ export function DiffSidebar() {
 			card.classList.add("jump-flash");
 			setTimeout(() => card.classList.remove("jump-flash"), 1200);
 		}
+		// 严防外层主布局容器发生哪怕 1 像素的 scrollLeft 漂移，在此强制归零
+		const appRoot = document.querySelector<HTMLElement>(".app-layout-root");
+		if (appRoot && appRoot.scrollLeft !== 0) appRoot.scrollLeft = 0;
 		clearDiffFocus();
 	}, [diffFocus, visibleTurns, clearDiffFocus]);
 
@@ -256,7 +270,11 @@ export function DiffSidebar() {
 					<button
 						type="button"
 						className="diff-side-close"
-						onClick={() => setOpen(false)}
+						onClick={() => {
+							setOpen(false);
+							const appRoot = document.querySelector<HTMLElement>(".app-layout-root");
+							if (appRoot) appRoot.scrollLeft = 0;
+						}}
 						aria-label={t("common.close")}
 					>
 						<CloseIcon />
