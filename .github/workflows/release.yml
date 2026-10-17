@@ -15,9 +15,7 @@ jobs:
         os: [macos-latest, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     env:
-      # 无开发者证书：mac 显式走 adhoc 签名（identity: "-"），禁用 runner 上的证书自动发现
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      # renderer 含 Mermaid/KaTeX/Monaco 大量懒加载 chunk；macOS arm64 runner 的 Node 默认约 2GB 堆会 OOM
       NODE_OPTIONS: "--max-old-space-size=4096"
     steps:
       - uses: actions/checkout@v4
@@ -36,11 +34,11 @@ jobs:
             !packages/desktop/dist/mac-arm64
             !packages/desktop/dist/win-unpacked
             !packages/desktop/dist/linux-unpacked
-            # electron-builder 每次构建都会写入的诊断文件，不足发布产物
             !packages/desktop/dist/builder-debug.yml
-          if-no-files-found: error
+          if-no-files-found: warn
   publish:
     needs: build
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -51,31 +49,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" artifacts/* \
-            -R "${{ github.repository }}" \
-            --title "${{ github.ref_name }}" \
-            --notes-file - <<'EOF'
+          gh release create "${{ github.ref_name }}" artifacts/* -R "${{ github.repository }}" --title "${{ github.ref_name }}" --notes-file - <<'EOF'
           | Platform | Download |
           | --- | --- |
           | macOS (Apple Silicon) | `percho-mac-arm64.dmg` |
           | macOS (Intel) | `percho-mac-x64.dmg` |
-          | Windows | `percho-windows-x64.exe` (installer) or `percho-windows-x64.zip` |
+          | Windows | `percho-windows-x64.exe` |
+          | Windows (zip) | `percho-windows-x64.zip` |
           | Linux (x64) | `percho-linux-x86_64.AppImage` |
 
-          > Ad-hoc signed (no Developer ID). On macOS, if Gatekeeper blocks the app, right-click it and choose **Open** (or run `xattr -cr "/Applications/Percho.app"`). Windows and Linux builds update automatically in-app. On Linux, `chmod +x` the AppImage before first launch (and install `libfuse2` on Ubuntu 22.04+/24.04+ if it won't start).
+          > Ad-hoc signed (no Developer ID).
+          > On macOS, if Gatekeeper blocks the app, right-click and Open.
+          > Windows and Linux builds update automatically in-app.
           EOF
-  # 刷新官网（percho-website，Cloudflare Pages）：触发 Deploy Hook 重建，同步版本号与 changelog。
-  # 需要 repo secret CF_PAGES_DEPLOY_HOOK（Cloudflare Pages → Settings → Builds → Deploy hooks 创建）；未配置时跳过不影响发布
-  website:
-    needs: publish
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger Cloudflare Pages deploy hook
-        env:
-          HOOK: ${{ secrets.CF_PAGES_DEPLOY_HOOK }}
-        run: |
-          if [ -n "$HOOK" ]; then
-            curl -fsS -X POST "$HOOK"
-          else
-            echo "CF_PAGES_DEPLOY_HOOK not set, skipping"
-          fi

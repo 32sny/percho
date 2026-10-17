@@ -1,6 +1,6 @@
 {
 	"name": "@percho/desktop",
-	"version": "0.6.5",
+	"version": "0.7.0",
 	"private": true,
 	"description": "Desktop GUI for the Pi coding agent",
 	"author": "Jaxton07",
@@ -9,6 +9,7 @@
 	"main": "./out/main/index.js",
 	"scripts": {
 		"dev": "electron-vite dev",
+		"dev:only": "electron-vite dev",
 		"predev": "npm run build:lan-web",
 		"build:lan-web": "vite build --config src/lan-web/vite.config.ts",
 		"build": "npm run build:lan-web && electron-vite build",

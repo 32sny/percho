@@ -1,5 +1,5 @@
 import { deriveTurnChanges, type TurnChanges } from "@percho/shared";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { getPi } from "../../api";
 import { useT } from "../../i18n";
 import { selectActiveCwd } from "../../lib/active-cwd";
@@ -120,6 +120,66 @@ export function DiffSidebar() {
 	const totalRemoved = visibleTurns.reduce((s, tc) => s + tc.totalRemoved, 0);
 	const bodyRef = useRef<HTMLDivElement>(null);
 
+	// 宽度拖拽改变（支持本地记忆）
+	const [width, setWidth] = useState(() => {
+		const saved = localStorage.getItem("percho_diff_sidebar_width");
+		return saved ? Math.max(320, Math.min(1200, Number(saved))) : 420;
+	});
+	const [resizing, setResizing] = useState(false);
+	const draggingRef = useRef(false);
+	const startXRef = useRef(0);
+	const startWidthRef = useRef(0);
+	const handleRef = useRef<HTMLDivElement | null>(null);
+	const pointerIdRef = useRef<number | null>(null);
+
+	const finishResize = useCallback(() => {
+		if (!draggingRef.current) return;
+		draggingRef.current = false;
+		document.body.style.cursor = "";
+		setResizing(false);
+		const pointerId = pointerIdRef.current;
+		pointerIdRef.current = null;
+		if (handleRef.current && pointerId !== null && handleRef.current.hasPointerCapture(pointerId)) {
+			handleRef.current.releasePointerCapture(pointerId);
+		}
+	}, []);
+
+	useEffect(() => {
+		const onBlurOrHide = () => finishResize();
+		window.addEventListener("blur", onBlurOrHide);
+		document.addEventListener("visibilitychange", onBlurOrHide);
+		return () => {
+			window.removeEventListener("blur", onBlurOrHide);
+			document.removeEventListener("visibilitychange", onBlurOrHide);
+		};
+	}, [finishResize]);
+
+	const onPointerDownResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+		if (e.button !== 0) return;
+		draggingRef.current = true;
+		handleRef.current = e.currentTarget;
+		pointerIdRef.current = e.pointerId;
+		startXRef.current = e.clientX;
+		startWidthRef.current = width;
+		e.currentTarget.setPointerCapture(e.pointerId);
+		document.body.style.cursor = "col-resize";
+		setResizing(true);
+		e.preventDefault();
+	}, [width]);
+
+	const onPointerMoveResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+		if (!draggingRef.current) return;
+		if (e.buttons === 0) {
+			finishResize();
+			return;
+		}
+		const delta = startXRef.current - e.clientX;
+		const maxWidth = Math.round(window.innerWidth * 0.85);
+		const nextWidth = Math.max(320, Math.min(maxWidth, startWidthRef.current + delta));
+		setWidth(nextWidth);
+		localStorage.setItem("percho_diff_sidebar_width", String(nextWidth));
+	}, [finishResize]);
+
 	// 浮层保持常驻，点击聊天区不收起；Esc 是关闭按钮之外的键盘出口。
 	useEffect(() => {
 		if (!open) return;
@@ -157,7 +217,22 @@ export function DiffSidebar() {
 	}, [diffFocus, visibleTurns, clearDiffFocus]);
 
 	return (
-		<aside className={`diff-sidebar${open ? " open" : ""}`} aria-hidden={!open} inert={!open}>
+		<aside
+			className={`diff-sidebar${open ? " open" : ""}${resizing ? " is-resizing" : ""}`}
+			style={{ width: `${width}px`, maxWidth: "85vw" }}
+			aria-hidden={!open}
+			inert={!open}
+		>
+			{/* 拖拽改变侧栏宽度把手 */}
+			<div
+				className="diff-resize-handle"
+				onPointerDown={onPointerDownResize}
+				onPointerMove={onPointerMoveResize}
+				onPointerUp={finishResize}
+				onPointerCancel={finishResize}
+				onLostPointerCapture={finishResize}
+				title="拖拽改变侧栏宽度"
+			/>
 			<div className="diff-sidebar-in">
 				<div className="diff-side-head">
 					<span className="diff-side-title">{t("diff.title")}</span>

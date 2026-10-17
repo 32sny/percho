@@ -5,6 +5,7 @@ import type { UiPluginManager } from "../ui-plugins/manager";
 import { onUpdateState } from "../updater";
 import { registerAppIpc } from "./app";
 import { registerExtensionDialogIpc } from "./extension-dialogs";
+import { registerGitIpc } from "./git";
 import { registerLanIpc } from "./lan";
 import { registerPackagesIpc } from "./packages";
 import { forward, sendToRenderer } from "./send";
@@ -25,6 +26,7 @@ export function registerIpc(
 	registerSettingsIpc(backend);
 	registerPackagesIpc(backend);
 	registerAppIpc(backend);
+	registerGitIpc();
 	registerExtensionDialogIpc(backend);
 	registerUiPluginsIpc(uiPluginsManager);
 	registerLanIpc(lan);

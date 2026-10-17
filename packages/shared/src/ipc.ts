@@ -8,6 +8,7 @@ export {
 	type ChannelDef,
 	ch,
 	EXTENSION_DIALOG_CHANNELS,
+	GIT_CHANNELS,
 	type InvokeApi,
 	type InvokeHandlers,
 	IpcChannels,

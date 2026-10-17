@@ -6,6 +6,22 @@ import type {
 	ExtensionEditorTextEvent,
 	ExtensionNotifyEvent,
 } from "./extension-dialog";
+import type {
+	GitBlameOptions,
+	GitBlameResult,
+	GitBranchOptions,
+	GitBranchResult,
+	GitCommitOptions,
+	GitDiffOptions,
+	GitDiffResult,
+	GitLogOptions,
+	GitLogResult,
+	GitShowOptions,
+	GitShowResult,
+	GitStashOptions,
+	GitStashResult,
+	GitStatusResult,
+} from "./git";
 import type { LanStatus } from "./lan";
 import type { McpConfigListResult, McpMutationResult, McpServersChangedPayload, McpUpsertInput } from "./mcp";
 import type { CatalogPackageType, CatalogSearchResult, ConfiguredPackageInfo } from "./packages";
@@ -354,6 +370,18 @@ export const UI_PLUGINS_CHANNELS = {
 	uiPluginsOpenDir: ch("uiPlugins:openDir")<{ name?: string }, void>(),
 } as const;
 
+/** Git 域：状态/日志/差异/追溯/分支/提交/储藏 */
+export const GIT_CHANNELS = {
+	gitStatus: ch("git:status")<{ cwd: string; path?: string }, GitStatusResult>(),
+	gitLog: ch("git:log")<GitLogOptions, GitLogResult>(),
+	gitShow: ch("git:show")<GitShowOptions, GitShowResult>(),
+	gitDiff: ch("git:diff")<GitDiffOptions, GitDiffResult>(),
+	gitBlame: ch("git:blame")<GitBlameOptions, GitBlameResult>(),
+	gitBranch: ch("git:branch")<GitBranchOptions, GitBranchResult>(),
+	gitCommit: ch("git:commit")<GitCommitOptions, { ok: boolean; repo: string; sha: string; subject: string; message: string }>(),
+	gitStash: ch("git:stash")<GitStashOptions, GitStashResult>(),
+} as const;
+
 /** 已表化通道全集（分批迁移，终态 = 全部 invoke 通道） */
 export const CHANNEL_TABLE = {
 	...SESSION_CHANNELS,
@@ -364,6 +392,7 @@ export const CHANNEL_TABLE = {
 	...LAN_CHANNELS,
 	...EXTENSION_DIALOG_CHANNELS,
 	...UI_PLUGINS_CHANNELS,
+	...GIT_CHANNELS,
 } as const;
 
 export type ChannelTable = typeof CHANNEL_TABLE;

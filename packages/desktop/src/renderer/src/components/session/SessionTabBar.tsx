@@ -34,7 +34,7 @@ import { useSessionsStore } from "../../stores/sessions";
 import { useTranscriptStore } from "../../stores/transcript";
 import { useUiStore } from "../../stores/ui";
 import { useUiPreferencesStore } from "../../stores/ui-preferences";
-import { CloseIcon, DiffIcon, PanelLeftIcon, PinIcon, PlusIcon } from "../icons";
+import { ArtifactsIcon, CloseIcon, DiffIcon, GitLensIcon, PanelLeftIcon, PinIcon, PlusIcon } from "../icons";
 import { ContextMenu, type ContextMenuItem } from "../ui/ContextMenu";
 import type { MenuAnchor } from "../ui/place-menu";
 import { RenamePopover } from "./RenamePopover";
@@ -241,6 +241,27 @@ export function SessionTabBar() {
 	const cwd = useSessionsStore(selectActiveCwd);
 	const diffSidebarOpen = useUiStore((s) => s.diffSidebarOpen);
 	const toggleDiffSidebar = useUiStore((s) => s.toggleDiffSidebar);
+	const gitLensOpen = useUiStore((s) => s.gitLensOpen);
+	const toggleGitLens = useUiStore((s) => s.toggleGitLens);
+	const artifactsOpen = useUiStore((s) => s.artifactsOpen);
+	const toggleArtifacts = useUiStore((s) => s.toggleArtifacts);
+
+	// 全局快捷键：Mod+Shift+G (Git透镜) / Mod+Shift+A (产物预览)
+	useEffect(() => {
+		const onKeyDown = (e: KeyboardEvent) => {
+			if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
+				if (e.key.toLowerCase() === "g") {
+					e.preventDefault();
+					toggleGitLens();
+				} else if (e.key.toLowerCase() === "a") {
+					e.preventDefault();
+					toggleArtifacts();
+				}
+			}
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [toggleGitLens, toggleArtifacts]);
 	const sidebarCollapsed = useUiPreferencesStore((s) => s.sidebarCollapsed);
 	const toggleSidebarCollapsed = useUiPreferencesStore((s) => s.toggleSidebarCollapsed);
 	const [activeId, setActiveId] = useState<string | null>(null);
@@ -447,6 +468,30 @@ export function SessionTabBar() {
 				aria-label={t("diff.toggle")}
 			>
 				<DiffIcon size={16} />
+			</button>
+			{/* Git 透镜侧栏开关 */}
+			<button
+				type="button"
+				className={`no-drag relative shrink-0 rounded-lg p-1.5 transition-colors ${
+					gitLensOpen ? "bg-hover text-ink" : "text-ink-dim hover:bg-hover hover:text-ink"
+				}`}
+				onClick={toggleGitLens}
+				title="Git 透镜 (Ctrl+Shift+G)"
+				aria-label="Git 透镜"
+			>
+				<GitLensIcon size={16} />
+			</button>
+			{/* 产物与文件预览工作台开关 */}
+			<button
+				type="button"
+				className={`no-drag relative shrink-0 rounded-lg p-1.5 transition-colors ${
+					artifactsOpen ? "bg-hover text-ink" : "text-ink-dim hover:bg-hover hover:text-ink"
+				}`}
+				onClick={toggleArtifacts}
+				title="产物与文件预览工作台 (Ctrl+Shift+A)"
+				aria-label="产物与文件预览工作台"
+			>
+				<ArtifactsIcon size={16} />
 			</button>
 			{menu !== null && (
 				<ContextMenu anchor={menu.anchor} items={contextMenuItems(menu.sessionId)} onClose={closeMenu} />

@@ -7,6 +7,8 @@ import { MessageList } from "./components/chat/MessageList";
 import { SubagentBackButton } from "./components/chat/SubagentBackButton";
 import { TodoPanel } from "./components/chat/TodoPanel";
 import { DiffSidebar } from "./components/diff/DiffSidebar";
+import { GitLens } from "./components/git-lens/GitLens";
+import { ArtifactsDrawer } from "./components/artifacts/ArtifactsDrawer";
 import { DockSlot } from "./components/session/DockSlot";
 import { SessionRail } from "./components/session/SessionRail";
 import { SessionTabBar } from "./components/session/SessionTabBar";
@@ -153,6 +155,8 @@ export default function App() {
 						<DockSlot sessionId={activeSessionId} hideComposer={showEmpty} />
 					</div>
 					<DiffSidebar />
+					<GitLens />
+					<ArtifactsDrawer />
 				</div>
 			</div>
 			{/* 悬浮贡献层：内容列之后、设置弹窗之前（z-20 < z-40，插件层永在弹窗之下） */}

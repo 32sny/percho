@@ -1,6 +1,7 @@
 export * from "./channel-subscriptions";
 export * from "./errors";
 export * from "./extension-dialog";
+export * from "./git";
 export * from "./ipc";
 export * from "./ipc-channels";
 export * from "./lan";

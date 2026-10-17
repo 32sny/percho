@@ -15,6 +15,14 @@ interface UiStore {
 	diffSidebarOpen: boolean;
 	setDiffSidebarOpen: (open: boolean) => void;
 	toggleDiffSidebar: () => void;
+	/** Git 透镜侧栏开关（内存态） */
+	gitLensOpen: boolean;
+	setGitLensOpen: (open: boolean) => void;
+	toggleGitLens: () => void;
+	/** 产物与文件预览工作台侧栏开关（内存态） */
+	artifactsOpen: boolean;
+	setArtifactsOpen: (open: boolean) => void;
+	toggleArtifacts: () => void;
 	/** chip 跳转侧栏的聚焦目标（侧栏消费后清除） */
 	diffFocus: DiffFocus | null;
 	setDiffFocus: (sectionKey: string) => void;
@@ -29,8 +37,47 @@ export const useUiStore = create<UiStore>((set) => ({
 			todoExpanded: { ...state.todoExpanded, [sessionId]: !state.todoExpanded[sessionId] },
 		})),
 	diffSidebarOpen: false,
-	setDiffSidebarOpen: (open) => set({ diffSidebarOpen: open }),
-	toggleDiffSidebar: () => set((state) => ({ diffSidebarOpen: !state.diffSidebarOpen })),
+	setDiffSidebarOpen: (open) =>
+		set({
+			diffSidebarOpen: open,
+			...(open ? { gitLensOpen: false, artifactsOpen: false } : {}),
+		}),
+	toggleDiffSidebar: () =>
+		set((state) => {
+			const next = !state.diffSidebarOpen;
+			return {
+				diffSidebarOpen: next,
+				...(next ? { gitLensOpen: false, artifactsOpen: false } : {}),
+			};
+		}),
+	gitLensOpen: false,
+	setGitLensOpen: (open) =>
+		set({
+			gitLensOpen: open,
+			...(open ? { diffSidebarOpen: false, artifactsOpen: false } : {}),
+		}),
+	toggleGitLens: () =>
+		set((state) => {
+			const next = !state.gitLensOpen;
+			return {
+				gitLensOpen: next,
+				...(next ? { diffSidebarOpen: false, artifactsOpen: false } : {}),
+			};
+		}),
+	artifactsOpen: false,
+	setArtifactsOpen: (open) =>
+		set({
+			artifactsOpen: open,
+			...(open ? { diffSidebarOpen: false, gitLensOpen: false } : {}),
+		}),
+	toggleArtifacts: () =>
+		set((state) => {
+			const next = !state.artifactsOpen;
+			return {
+				artifactsOpen: next,
+				...(next ? { diffSidebarOpen: false, gitLensOpen: false } : {}),
+			};
+		}),
 	diffFocus: null,
 	setDiffFocus: (sectionKey) =>
 		set((state) => ({ diffFocus: { sectionKey, nonce: (state.diffFocus?.nonce ?? 0) + 1 } })),

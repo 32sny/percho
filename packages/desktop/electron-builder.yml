@@ -73,5 +73,5 @@ nsis:
   allowToChangeInstallationDirectory: true
 publish:
   provider: github
-  owner: Jaxton07
+  owner: 32sny
   repo: percho

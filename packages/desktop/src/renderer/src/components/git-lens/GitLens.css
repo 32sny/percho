@@ -1,0 +1,406 @@
+/* Git Lens Panel Styling for Percho
+ * Matches native DiffSidebar aesthetics and adapts dynamically to light/dark themes.
+ */
+
+.gl-panel {
+	position: absolute;
+	inset-block: 0;
+	right: 0;
+	z-index: 30;
+	overflow: hidden;
+	border-radius: 12px 0 0 12px;
+	border-left: 1px solid var(--color-border);
+	background: var(--color-canvas);
+	box-shadow: var(--shadow-pop);
+	color: var(--color-ink);
+	font-size: 13px;
+	user-select: none;
+	display: flex;
+	flex-direction: column;
+	max-width: 90vw;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transform: translate3d(calc(100% + 28px), 0, 0);
+	transition:
+		transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+		opacity 0.18s ease;
+}
+
+.gl-panel.gl-open {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+	transform: translate3d(0, 0, 0);
+}
+
+.gl-panel.is-resizing {
+	transition: none;
+}
+
+/* 拖拽改变宽度把手：完全透明命中区，简洁不干扰视觉 */
+.gl-resize-handle {
+	position: absolute;
+	top: 0;
+	left: -4px;
+	bottom: 0;
+	width: 8px;
+	cursor: col-resize;
+	z-index: 50;
+	background: transparent;
+	border: 0;
+	margin: 0;
+	touch-action: none;
+}
+
+/* 顶部头部：结构对齐 diff-side-head */
+.gl-header {
+	padding: 12px 14px 10px;
+	border-bottom: 1px solid var(--color-border);
+	background: var(--color-canvas);
+	flex-shrink: 0;
+}
+
+.gl-status-line {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+
+.gl-status-info {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	flex: 1;
+}
+
+.gl-status-title {
+	font-weight: 600;
+	font-size: 14px;
+	color: var(--color-ink);
+	flex-shrink: 0;
+}
+
+.gl-status-branch {
+	font-weight: 600;
+	font-size: 12px;
+	color: var(--color-accent, #3b82f6);
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	padding: 2px 7px;
+	border-radius: 6px;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	flex-shrink: 0;
+}
+
+.gl-status-meta {
+	font-size: 12px;
+	color: var(--color-ink-dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1;
+}
+
+.gl-head-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-shrink: 0;
+}
+
+.gl-icon-btn {
+	background: transparent;
+	border: none;
+	color: var(--color-ink-dim);
+	padding: 6px;
+	border-radius: 8px;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	transition: background 150ms, color 150ms;
+}
+
+.gl-icon-btn:hover {
+	background: var(--color-hover);
+	color: var(--color-ink);
+}
+
+/* 分段控制栏 (Tabs) */
+.gl-segmented {
+	display: flex;
+	background: var(--color-surface);
+	padding: 3px;
+	border-radius: 8px;
+	gap: 2px;
+	border: 1px solid var(--color-border);
+}
+
+.gl-segment-btn {
+	flex: 1;
+	background: transparent;
+	border: none;
+	color: var(--color-ink-dim);
+	padding: 5px 0;
+	font-size: 12px;
+	font-weight: 500;
+	border-radius: 6px;
+	cursor: pointer;
+	transition: all 150ms;
+	text-align: center;
+}
+
+.gl-segment-btn:hover {
+	color: var(--color-ink);
+}
+
+.gl-segment-btn.active {
+	background: var(--color-canvas);
+	color: var(--color-ink);
+	font-weight: 600;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* 主内容滚动区 */
+.gl-content {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding: 12px 14px 24px;
+	position: relative;
+}
+
+/* 4 块核心计数卡 */
+.gl-metrics {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 8px;
+	margin-bottom: 16px;
+}
+
+.gl-metric-card {
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	border-radius: 8px;
+	padding: 10px 4px;
+	text-align: center;
+}
+
+.gl-metric-num {
+	font-size: 18px;
+	font-weight: 700;
+	line-height: 1.2;
+	font-variant-numeric: tabular-nums;
+	color: var(--color-ink);
+}
+
+.gl-metric-num.has-items {
+	color: var(--color-accent, #3b82f6);
+}
+
+.gl-metric-num.conflict {
+	color: #ef4444;
+}
+
+.gl-metric-label {
+	font-size: 11px;
+	color: var(--color-ink-dim);
+	margin-top: 3px;
+}
+
+/* 列表与小标题 */
+.gl-section-title {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--color-ink-dim);
+	letter-spacing: 0.02em;
+	margin-bottom: 8px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+/* 提交列表 */
+.gl-commit-list {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	background: var(--color-border);
+	border: 1px solid var(--color-border);
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.gl-commit-item {
+	background: var(--color-canvas);
+	padding: 10px 12px;
+	cursor: pointer;
+	border: none;
+	width: 100%;
+	text-align: left;
+	color: var(--color-ink);
+	transition: background 120ms;
+}
+
+.gl-commit-item:hover {
+	background: var(--color-hover);
+}
+
+.gl-commit-subject {
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--color-ink);
+	line-height: 1.4;
+	margin-bottom: 4px;
+	word-break: break-word;
+}
+
+.gl-commit-meta {
+	font-size: 11px;
+	color: var(--color-ink-dim);
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-variant-numeric: tabular-nums;
+}
+
+.gl-commit-hash {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	color: var(--color-accent, #3b82f6);
+	font-weight: 600;
+}
+
+/* 搜索栏 */
+.gl-search-bar {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.gl-input {
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	color: var(--color-ink);
+	padding: 7px 10px;
+	font-size: 12px;
+	border-radius: 6px;
+	outline: none;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.gl-input:focus {
+	border-color: var(--color-accent, #3b82f6);
+}
+
+/* 改动文件列表 */
+.gl-file-group {
+	margin-bottom: 16px;
+}
+
+.gl-file-item {
+	display: flex;
+	align-items: center;
+	padding: 6px 8px;
+	border-radius: 6px;
+	cursor: pointer;
+	gap: 8px;
+	font-size: 12px;
+	border: none;
+	background: transparent;
+	width: 100%;
+	color: var(--color-ink);
+	text-align: left;
+}
+
+.gl-file-item:hover {
+	background: var(--color-hover);
+}
+
+.gl-file-status {
+	font-family: ui-monospace, SFMono-Regular, monospace;
+	font-weight: 700;
+	width: 16px;
+	text-align: center;
+}
+
+.gl-file-status.M { color: #f59e0b; }
+.gl-file-status.A { color: #10b981; }
+.gl-file-status.D { color: #ef4444; }
+.gl-file-status.U { color: #ec4899; }
+.gl-file-status.Q { color: var(--color-ink-dim); }
+
+.gl-file-path {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 详情抽屉 (Sheet) */
+.gl-sheet {
+	position: absolute;
+	inset: 0;
+	background: var(--color-canvas);
+	z-index: 10;
+	display: flex;
+	flex-direction: column;
+	overflow-y: auto;
+	padding: 14px 16px;
+}
+
+.gl-sheet-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+.gl-back-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	color: var(--color-ink);
+	padding: 4px 10px;
+	border-radius: 6px;
+	font-size: 12px;
+	cursor: pointer;
+	transition: background 120ms;
+}
+
+.gl-back-btn:hover {
+	background: var(--color-hover);
+}
+
+/* 补丁代码块 */
+.gl-patch-box {
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	border-radius: 6px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 11px;
+	line-height: 1.45;
+	padding: 10px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	word-break: break-all;
+	user-select: text;
+	color: var(--color-ink);
+}
+
+.gl-empty {
+	text-align: center;
+	color: var(--color-ink-dim);
+	padding: 32px 16px;
+	font-size: 12px;
+}
