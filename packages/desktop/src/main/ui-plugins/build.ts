@@ -18,13 +18,22 @@ let esbuildPromise: Promise<typeof import("esbuild")> | null = null;
 export function loadEsbuild(): Promise<typeof import("esbuild")> {
 	if (!esbuildPromise) {
 		const bin = process.platform === "win32" ? "esbuild.exe" : "esbuild";
-		const unpacked = join(
-			process.resourcesPath ?? "",
-			`app.asar.unpacked/node_modules/@esbuild/${process.platform}-${process.arch}/bin/${bin}`,
-		);
-		const patched = existsSync(unpacked);
+		const resourceRoot = process.resourcesPath ?? "";
+		const candidates = [
+			join(
+				resourceRoot,
+				`app.asar.unpacked/node_modules/esbuild/node_modules/@esbuild/${process.platform}-${process.arch}/${bin}`,
+			),
+			join(resourceRoot, `app.asar.unpacked/node_modules/@esbuild/${process.platform}-${process.arch}/${bin}`),
+			join(
+				resourceRoot,
+				`app.asar.unpacked/node_modules/@esbuild/${process.platform}-${process.arch}/bin/${bin}`,
+			),
+		];
+		const unpacked = candidates.find((candidate) => existsSync(candidate));
+		const patched = unpacked !== undefined;
 		const prev = process.env.ESBUILD_BINARY_PATH;
-		if (patched) process.env.ESBUILD_BINARY_PATH = unpacked;
+		if (unpacked) process.env.ESBUILD_BINARY_PATH = unpacked;
 		esbuildPromise = import("esbuild").then((mod) => {
 			if (patched) {
 				// 求值已缓存 env → 恢复现场（用户预设过则还原，否则删除），防泄漏给子进程

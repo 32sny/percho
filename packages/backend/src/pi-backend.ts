@@ -68,6 +68,7 @@ import {
 import { ChannelSubscriptionRegistry } from "./channel-subscriptions";
 import { Emitter } from "./emitter";
 import { createLogger } from "./log";
+import { prewarmAntigravityProvider } from "./antigravity-prewarm";
 import { listMcpServers, removeMcpServer, upsertMcpServer } from "./mcp/config-store";
 import { parseMcpNotice } from "./mcp/notices";
 import { PackageAdmin } from "./packages/admin";
@@ -256,6 +257,7 @@ export class PiBackend {
 	private readonly eventRates = new EventRateTracker();
 	private modelRuntime: ModelRuntime | undefined;
 	private modelPromise: Promise<ModelRuntime> | undefined;
+	private antigravityPrewarmPromise: Promise<void> | undefined;
 	/** 设置页（provider/模型/凭证配置）服务 */
 	readonly settings = new SettingsService(() => this.getModelRuntime());
 	/** opencode-go 套餐额度（TTL 缓存；无 key 返回 null） */
@@ -507,8 +509,21 @@ export class PiBackend {
 		this.eventEmitter.emit({ sessionId, event });
 	}
 
+	private async prewarmAntigravityProvider(): Promise<void> {
+		if (!this.antigravityPrewarmPromise) {
+			this.antigravityPrewarmPromise = prewarmAntigravityProvider({
+				getRuntime: () => this.getModelRuntime(),
+			}).catch((error) => {
+				log.warn("Antigravity startup prewarm failed; normal session loading remains available", error);
+				this.antigravityPrewarmPromise = undefined;
+			});
+		}
+		await this.antigravityPrewarmPromise;
+	}
+
 	async init(): Promise<void> {
 		await this.getModelRuntime();
+		await this.prewarmAntigravityProvider();
 	}
 
 	/** 项目文件列表（@ 补全数据源，相对路径、目录带尾 /，TTL 缓存） */
@@ -1264,6 +1279,7 @@ export class PiBackend {
 	}
 
 	async listModels(): Promise<AvailableModel[]> {
+		await this.prewarmAntigravityProvider();
 		const [providers, prefs, runtime] = await Promise.all([
 			this.settings.listProviders(),
 			this.modelPrefs.getPrefs(),
