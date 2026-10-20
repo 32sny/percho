@@ -115,6 +115,7 @@ import { SessionTraces } from "./session/traces";
 import { makeUiContext } from "./session/ui-context";
 import { LoginService } from "./settings/login";
 import { ModelPrefsService } from "./settings/model-prefs";
+import { syncAgentFileField } from "./settings/agent-file-sync";
 import { makeQuotaService } from "./settings/quota";
 import { SettingsService } from "./settings/settings";
 import { slashCommandsForLoader, slashCommandsForSession } from "./slash-commands";
@@ -217,7 +218,12 @@ export class PiBackend {
 	 */
 	private readonly channelSubs = new ChannelSubscriptionRegistry((id) => this.registry.has(id));
 	/** 用户级模型可见性与子代理模型偏好（独立于 CLI 共用 settings.json）。readonly 直暴露 */
-	readonly modelPrefs = new ModelPrefsService(join(getAgentDir(), "model-prefs.json"));
+	readonly modelPrefs = new ModelPrefsService(join(getAgentDir(), "model-prefs.json"), {
+		// 设置面板改子代理模型/思考档位时同步改写 agent .md frontmatter（spec subagent-model-sync），
+		// 让内置链与 Agent 工具链读同一份模型配置；同步失败仅告警，绝不阻断设置保存。
+		onSubagentModelChanged: (agent, modelRef) => this.syncAgentFrontmatter(agent, "model", modelRef),
+		onSubagentThinkingChanged: (agent, level) => this.syncAgentFrontmatter(agent, "thinking", level),
+	});
 	/** 社区包管理（安装/卸载 + 会话热重载）。readonly 直暴露 */
 	readonly packages: PackageAdmin;
 	private readonly eventEmitter = new Emitter<{ sessionId: string; event: SessionEvent }>();
@@ -287,6 +293,25 @@ export class PiBackend {
 			desktopIntegration: options.desktopIntegration,
 			openUrl: options.openExternal,
 		});
+	}
+
+	/**
+	 * agent .md frontmatter 同步（仅 user 级文件；spec subagent-model-sync）。
+	 * 任何异常吞掉降级为 log.warn —— 设置保存永不因 frontmatter 同步失败而失败。
+	 */
+	private async syncAgentFrontmatter(
+		agent: string,
+		field: "model" | "thinking",
+		value: string | null,
+	): Promise<void> {
+		try {
+			const result = await syncAgentFileField(getAgentDir(), agent, field, value);
+			if (!result.synced && result.reason !== "unchanged") {
+				log.warn("agent frontmatter 同步跳过", { agent, field, reason: result.reason });
+			}
+		} catch (err) {
+			log.warn("agent frontmatter 同步失败", { agent, field, err });
+		}
 	}
 
 	/** 自定义工具 = 调用方传入的 + 内置 webfetch（webFetch:false 关闭）+ show_image + todo + subagent */

@@ -8,6 +8,18 @@ import {
 	withProviderModelsHidden,
 } from "@percho/shared";
 import { JsonStore } from "../json-store";
+import { createLogger } from "../log";
+
+const log = createLogger("model-prefs");
+
+/**
+ * prefs 落盘成功后触发的旁路钩子（同一 enqueue 串行域内 await）。
+ * 异常在服务内吞掉（log.warn）降级为告警，绝不让设置保存失败；null 表示删除键（跟随 agent 定义）。
+ */
+export interface ModelPrefsHooks {
+	onSubagentModelChanged?: (agent: string, modelRef: string | null) => Promise<void>;
+	onSubagentThinkingChanged?: (agent: string, level: string | null) => Promise<void>;
+}
 
 function copyPrefs(prefs: ModelPrefs): ModelPrefs {
 	const copy: ModelPrefs = {
@@ -54,17 +66,28 @@ export class ModelPrefsService {
 		return result;
 	}
 
-	private mutate(change: (prefs: ModelPrefs) => ModelPrefs): Promise<ModelPrefs> {
+	private mutate(change: (prefs: ModelPrefs) => ModelPrefs, after?: () => Promise<void>): Promise<ModelPrefs> {
 		return this.enqueue(async () => {
 			const prefs = copyPrefs(change(copyPrefs(await this.read())));
 			await this.store().write(prefs);
 			// 写成功才发布；失败时 cache 保留最后一次权威状态，队列仍可继续。
 			this.cache = prefs;
+			// hook 在同一串行域内 await（与后续读写有序）；异常吞掉降级为告警，不影响 mutate 返回值
+			if (after) {
+				try {
+					await after();
+				} catch (err) {
+					log.warn("model prefs hook failed", err);
+				}
+			}
 			return copyPrefs(prefs);
 		});
 	}
 
-	constructor(private readonly configPath: string) {}
+	constructor(
+		private readonly configPath: string,
+		private readonly hooks?: ModelPrefsHooks,
+	) {}
 
 	private store(): JsonStore<Partial<ModelPrefs>> {
 		return new JsonStore<Partial<ModelPrefs>>({
@@ -120,12 +143,18 @@ export class ModelPrefsService {
 	async setSubagentModel(agent: string, modelRef: string | null): Promise<ModelPrefs> {
 		const cleanAgent = agent.trim();
 		if (!cleanAgent) throw new Error("agent is required");
-		return this.mutate((prefs) => {
-			const cleanModelRef = modelRef?.trim() ?? "";
-			if (cleanModelRef) prefs.subagentModels[cleanAgent] = cleanModelRef;
-			else delete prefs.subagentModels[cleanAgent];
-			return prefs;
-		});
+		const cleanModelRef = modelRef?.trim() ?? "";
+		return this.mutate(
+			(prefs) => {
+				if (cleanModelRef) prefs.subagentModels[cleanAgent] = cleanModelRef;
+				else delete prefs.subagentModels[cleanAgent];
+				return prefs;
+			},
+			async () => {
+				const hook = this.hooks?.onSubagentModelChanged;
+				if (hook) await hook(cleanAgent, cleanModelRef || null);
+			},
+		);
 	}
 
 	async getSubagentModel(agent: string): Promise<string | undefined> {
@@ -142,14 +171,20 @@ export class ModelPrefsService {
 		if (!cleanAgent) throw new Error("agent is required");
 		const cleanLevel = level?.trim() ?? "";
 		if (cleanLevel && !isThinkingLevel(cleanLevel)) throw new Error(`invalid thinking level: ${cleanLevel}`);
-		return this.mutate((prefs) => {
-			const thinking = { ...(prefs.subagentThinking ?? {}) };
-			if (cleanLevel) thinking[cleanAgent] = cleanLevel;
-			else delete thinking[cleanAgent];
-			if (Object.keys(thinking).length > 0) prefs.subagentThinking = thinking;
-			else delete prefs.subagentThinking;
-			return prefs;
-		});
+		return this.mutate(
+			(prefs) => {
+				const thinking = { ...(prefs.subagentThinking ?? {}) };
+				if (cleanLevel) thinking[cleanAgent] = cleanLevel;
+				else delete thinking[cleanAgent];
+				if (Object.keys(thinking).length > 0) prefs.subagentThinking = thinking;
+				else delete prefs.subagentThinking;
+				return prefs;
+			},
+			async () => {
+				const hook = this.hooks?.onSubagentThinkingChanged;
+				if (hook) await hook(cleanAgent, cleanLevel || null);
+			},
+		);
 	}
 
 	/** 内置 subagent 执行器优先；缺省/脏值一律 true（保持现状语义）。 */

@@ -2,14 +2,14 @@ import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ModelPrefsService } from "../src/settings/model-prefs";
+import { type ModelPrefsHooks, ModelPrefsService } from "../src/settings/model-prefs";
 
-async function makeService() {
+async function makeService(hooks?: ModelPrefsHooks) {
 	const dir = await mkdtemp(join(tmpdir(), "percho-model-prefs-"));
 	return {
 		dir,
 		path: join(dir, "model-prefs.json"),
-		service: new ModelPrefsService(join(dir, "model-prefs.json")),
+		service: new ModelPrefsService(join(dir, "model-prefs.json"), hooks),
 	};
 }
 
@@ -73,6 +73,66 @@ describe("ModelPrefsService", () => {
 				subagentModels: {},
 				subagentThinking: { reviewer: "high" },
 			});
+		});
+	});
+
+	describe("hooks（subagent-model-sync）", () => {
+		it("setSubagentModel 成功后 hook 被调且参数正确；null（跟随 agent 定义）时仍被调", async () => {
+			const calls: Array<[string, string | null]> = [];
+			const { service } = await makeService({ onSubagentModelChanged: async (a, m) => {
+				calls.push([a, m]);
+			} });
+			await service.setSubagentModel("fixer", "iiiiitoken/gpt-6.1-sol");
+			await service.setSubagentModel("scout", null);
+			expect(calls).toEqual([
+				["fixer", "iiiiitoken/gpt-6.1-sol"],
+				["scout", null],
+			]);
+			// hook 不影响 prefs 落盘语义
+			expect(await service.getPrefs()).toEqual({
+				hiddenModels: {},
+				subagentModels: { fixer: "iiiiitoken/gpt-6.1-sol" },
+			});
+		});
+
+		it("setSubagentThinking 成功后 hook 被调；非法档位拒写不触发", async () => {
+			const calls: Array<[string, string | null]> = [];
+			const { service } = await makeService({ onSubagentThinkingChanged: async (a, l) => {
+				calls.push([a, l]);
+			} });
+			await service.setSubagentThinking("fixer", "high");
+			await service.setSubagentThinking("fixer", null);
+			expect(calls).toEqual([
+				["fixer", "high"],
+				["fixer", null],
+			]);
+			await expect(service.setSubagentThinking("fixer", "ultra")).rejects.toThrow(/invalid thinking/);
+			expect(calls).toHaveLength(2); // 拒写在 mutate 之前，不触发 hook
+		});
+
+		it("hook 抛错被吞掉：set 正常返回且 prefs 已落盘", async () => {
+			const { path, service } = await makeService({
+				onSubagentModelChanged: () => Promise.reject(new Error("frontmatter io boom")),
+			});
+			await expect(service.setSubagentModel("fixer", "p/m")).resolves.toMatchObject({
+				subagentModels: { fixer: "p/m" },
+			});
+			// 重启服务确认已落盘（hook 失败不影响持久化）
+			expect(await new ModelPrefsService(path).getSubagentModel("fixer")).toBe("p/m");
+		});
+
+		it("hook 在串行域内执行：后续读操作排在 hook 之后", async () => {
+			const order: string[] = [];
+			const { service } = await makeService({
+				onSubagentModelChanged: async () => {
+					await new Promise((r) => setTimeout(r, 20));
+					order.push("hook");
+				},
+			});
+			const setPromise = service.setSubagentModel("fixer", "p/m").then(() => order.push("set-resolved"));
+			const getPromise = service.getPrefs().then(() => order.push("get-resolved"));
+			await Promise.all([setPromise, getPromise]);
+			expect(order).toEqual(["hook", "set-resolved", "get-resolved"]);
 		});
 	});
 
