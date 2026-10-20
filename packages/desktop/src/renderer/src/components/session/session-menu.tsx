@@ -6,7 +6,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSessionsStore } from "../../stores/sessions";
 import { useToastsStore } from "../../stores/toasts";
 import { useUiPreferencesStore } from "../../stores/ui-preferences";
-import { CopyIcon, PencilIcon, PinIcon, TrashIcon } from "../icons";
+import { CopyIcon, FolderIcon, PencilIcon, PinIcon, TrashIcon } from "../icons";
 import type { ContextMenuItem } from "../ui/ContextMenu";
 
 /**
@@ -85,14 +85,15 @@ export async function copySessionDiagnostics(session: SessionMeta): Promise<void
 	}
 }
 
-/** 菜单项：重命名 / 置顶 / 复制诊断 / 删除会话（调用方保证会话可写，见 canOpenSessionMenu）。
- *  后两项只在调用方传了处理器时出现（顶栏胶囊菜单只给前两项），删除走分隔线分组 + 危险红。 */
+/** 菜单项：重命名 / 置顶 / 移动到项目 / 复制诊断 / 删除会话（调用方保证会话可写，见 canOpenSessionMenu）。
+ *  后三项只在调用方传了处理器时出现（顶栏胶囊菜单只给前两项），删除走分隔线分组 + 危险红。 */
 export function sessionMenuItems(
 	t: Translate,
 	options: {
 		sessionId: string;
 		pinned: boolean;
 		onRename: () => void;
+		onMove?: () => void;
 		onCopyDiagnostics?: () => void;
 		onDelete?: () => void;
 	},
@@ -105,6 +106,16 @@ export function sessionMenuItems(
 			icon: <PinIcon size={13} />,
 			onSelect: () => toggleSessionPin(options.sessionId),
 		},
+		...(options.onMove
+			? [
+					{
+						key: "move",
+						label: t("sessionMenu.move"),
+						icon: <FolderIcon size={13} />,
+						onSelect: options.onMove,
+					} satisfies ContextMenuItem,
+				]
+			: []),
 		...(options.onCopyDiagnostics
 			? [
 					{

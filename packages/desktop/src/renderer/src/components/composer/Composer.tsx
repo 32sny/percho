@@ -19,6 +19,7 @@ import { pushToast } from "../../stores/toasts";
 import { selectTranscript, useTranscriptStore } from "../../stores/transcript";
 import { ImagePreviewOverlay } from "../chat/ImagePreview";
 import { ArrowUpIcon, PencilIcon, PlusIcon, StopIcon } from "../icons";
+import { SESSION_DRAG_MIME } from "../sidebar/SessionRow";
 import { AtMenu } from "./AtMenu";
 import { AttachmentChip } from "./AttachmentChip";
 import { ContextRing } from "./ContextRing";
@@ -306,16 +307,40 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 	);
 
 	// Electron sandbox 中 File.path 已移除；图片走真实预览/发送管线，Markdown 等文件走轻量文件名胶囊。
+	// 另收本应用内的会话行拖拽（自定义 MIME）：后端转录成临时 md → 走同一条附件胶囊管线（@路径 惰性读取）。
 	useEffect(() => {
 		if (readOnly) return;
+		const containsSessionDrag = (event: DragEvent) =>
+			event.dataTransfer?.types.includes(SESSION_DRAG_MIME) ?? false;
 		const containsFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
 		const onDragOver = (event: DragEvent) => {
-			if (!containsFiles(event)) return;
+			if (!containsFiles(event) && !containsSessionDrag(event)) return;
 			event.preventDefault();
 			if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 		};
 		const onDrop = (event: DragEvent) => {
-			if (!containsFiles(event) || !event.dataTransfer) return;
+			if (!event.dataTransfer) return;
+			// 会话拖拽分支：自定义 MIME 不含 Files，与文件拖放互不干扰
+			if (containsSessionDrag(event)) {
+				event.preventDefault();
+				const raw = event.dataTransfer.getData(SESSION_DRAG_MIME);
+				let payload: { sessionId: string; sessionFile?: string } | null = null;
+				try {
+					payload = JSON.parse(raw) as { sessionId: string; sessionFile?: string };
+				} catch {
+					payload = null;
+				}
+				if (!payload?.sessionId) return;
+				getPi()
+					.exportSessionTranscript({ sessionId: payload.sessionId, sessionFile: payload.sessionFile })
+					.then(({ path }) => appendAttachments([path]))
+					.catch((error) => {
+						console.error("会话转录导出失败", error);
+						pushToast("error", "toast.sessionTranscriptFailed");
+					});
+				return;
+			}
+			if (!containsFiles(event)) return;
 			event.preventDefault();
 			const files = Array.from(event.dataTransfer.files);
 			const images = files.filter((file) => file.type.startsWith("image/"));

@@ -120,6 +120,16 @@ export const SESSION_CHANNELS = {
 	>(),
 	/** 删除会话（含磁盘 jsonl 文件，不可恢复） */
 	deleteSession: ch("session:delete")<{ sessionId: string; sessionFile?: string }, void>(),
+	/** 移动会话到其他项目（文件搬家 + 头部 cwd 改写；返回移动后的 meta） */
+	moveSession: ch("session:move")<
+		{ sessionId: string; sessionFile?: string; targetCwd: string },
+		SessionMeta
+	>(),
+	/** 会话转可读 Markdown 转录写入临时文件（拖入输入栏胶囊用；返回临时 md 路径） */
+	exportSessionTranscript: ch("session:exportTranscript")<
+		{ sessionId: string; sessionFile?: string; cwd?: string },
+		{ path: string }
+	>(),
 	/** 发送消息；images 为随消息附带的图片（base64） */
 	prompt: ch("session:prompt")<{ sessionId: string; text: string; images?: ImageInput[] }, void>(),
 	/** 仅重试当前末端模型失败，不新增用户消息；受理即返回，执行结果走事件流。 */

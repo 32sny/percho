@@ -13,6 +13,10 @@ export function registerSessionsIpc(backend: PiBackend): void {
 		closeSession: ({ sessionId, intent }) => backend.closeSession(sessionId, intent),
 		getChannelSubscriptionSessionIds: () => backend.getChannelSubscriptionSessionIds(),
 		deleteSession: ({ sessionId, sessionFile }) => backend.deleteSession(sessionId, sessionFile),
+		moveSession: ({ sessionId, sessionFile, targetCwd }) =>
+			backend.moveSession(sessionId, targetCwd, sessionFile),
+		exportSessionTranscript: ({ sessionId, sessionFile, cwd }) =>
+			backend.exportSessionTranscript(sessionId, sessionFile, cwd),
 		prompt: ({ sessionId, text, images }) => backend.prompt(sessionId, text, images),
 		retryLastFailedTurn: ({ sessionId, ref }) => backend.retryLastFailedTurn(sessionId, ref),
 		abort: ({ sessionId }) => backend.abort(sessionId),

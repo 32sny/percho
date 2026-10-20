@@ -1,5 +1,5 @@
 import type { SessionMeta } from "@percho/shared";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useT } from "../../i18n";
 import { PinIcon } from "../icons";
 import { sessionTitle, useSessionStatus } from "../session/session-status";
@@ -12,6 +12,10 @@ const DOT_CLASS: Record<string, string> = {
 	working: "bg-ink sidebar-dot-working",
 	done: "bg-green-500",
 };
+
+/** 会话行拖拽的自定义 MIME（spec PLAN-session-move-project §〇）：只在本应用 window drop 处理里消费，
+ *  不与 Files 拖放（图片/MD 胶囊）互扰。载荷只带定位字段，内容统一由后端转录产出。 */
+export const SESSION_DRAG_MIME = "application/x-percho-session";
 
 /**
  * 左侧栏会话行：无头像（项目归属已由所在分组表达）、单行文字 + 行尾状态点。
@@ -36,12 +40,26 @@ export function SessionRow({
 	const t = useT();
 	const status = useSessionStatus(session.sessionId);
 	const title = sessionTitle(session, t("projects.untitled"), t("projects.daily"));
+	// 0 消息会话还没有磁盘文件（SDK 追加首条 entry 才落盘），无内容可转录 → 不可拖
+	const draggable = (session.messageCount ?? 0) > 0;
 	return (
 		<button
 			type="button"
 			// 可测试性只读属性（spec §6：CDP 按 sessionId 定位行，而不是靠标题文本匹配；纯属性，不影响视觉/交互）
 			data-session-id={session.sessionId}
 			data-session-active={active ? "true" : "false"}
+			draggable={draggable}
+			onDragStart={
+				draggable
+					? (e: ReactDragEvent<HTMLButtonElement>) => {
+							e.dataTransfer.setData(
+								SESSION_DRAG_MIME,
+								JSON.stringify({ sessionId: session.sessionId, sessionFile: session.sessionFile, name: title }),
+							);
+							e.dataTransfer.effectAllowed = "copy";
+						}
+					: undefined
+			}
 			className={`flex h-[31px] w-full items-center gap-2 rounded-[7px] px-1.5 text-left text-ui-135 ${
 				active ? "bg-bubble font-medium text-ink" : "text-ink-2 hover:bg-hover hover:text-ink"
 			}`}

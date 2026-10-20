@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { readFile, unlink } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -96,6 +97,7 @@ import {
 	toBranchSessionMessages,
 } from "./session/messages";
 import { autoNameSession } from "./session/naming";
+import { moveSessionFile } from "./session/move-session";
 import { EventRateTracker } from "./session/rates";
 import {
 	type EventForwarder,
@@ -104,6 +106,7 @@ import {
 	SessionRegistry,
 } from "./session/registry";
 import { renameSessionFile } from "./session/rename";
+import { buildSessionTranscript } from "./session/transcript";
 import { emitSessionShutdown } from "./session/shutdown";
 import { KeyedSingleFlight } from "./session/single-flight";
 import { StreamGuard } from "./session/stream-guard";
@@ -890,6 +893,62 @@ export class PiBackend {
 		if (sessionDir) await TraceRecorder.removeAll(sessionDir, sessionId);
 		this.channelSubs.delete(sessionId);
 		log.info("session deleted", sessionId);
+	}
+
+	/**
+	 * 移动会话到其他项目：文件搬家 + 头部 cwd 改写（spec PLAN-session-move-project §三）。
+	 * sessionId 不变（置顶/权限模式/工作区等按 id 记的状态无损保留）；移动后重开会在新项目
+	 * 目录下加载资源。流式/压缩中拒绝（可逆操作不学 deleteSession 强拆正在跑的一轮）；
+	 * 活跃空闲会话先 dispose 再搬，搬完按新路径重开（返回新 meta，标签页无感归位）。
+	 */
+	async moveSession(sessionId: string, targetCwd: string, sessionFile?: string): Promise<SessionMeta> {
+		const entry = this.registry.get(sessionId);
+		const file = sessionFile ?? entry?.session.sessionManager.getSessionFile();
+		if (entry && (entry.session.isStreaming || entry.session.isCompacting)) {
+			throw new Error("Cannot move while the agent is running or context is compacting");
+		}
+		if (entry) await this.disposeSession(entry);
+		if (!file) throw new Error(`Session file not found: ${sessionId}`);
+		const newPath = await moveSessionFile(file, targetCwd);
+		log.info("session moved", sessionId, { from: file, to: newPath });
+		// 活跃会话：重开（资源加载/信任/权限全部落在新 cwd）并返回新 meta
+		if (entry) return this.openSession(newPath);
+		// 历史会话：离线枚举拿 name/messageCount 等构造 meta（与 listSessions 同源）
+		const target = resolve(targetCwd);
+		const info = (await SessionManager.list(target)).find((item) => item.id === sessionId);
+		if (!info) throw new Error(`Moved session could not be enumerated: ${sessionId}`);
+		return sessionInfoToMeta(info, { cwdFallback: target, active: false });
+	}
+
+	/**
+	 * 会话 → 可读 Markdown 转录临时文件（拖入输入栏胶囊用，spec PLAN §〇）。
+	 * 活跃会话走 registry，未打开的纯解析文件（同 peek，零副作用）；
+	 * 同一 sessionId 重复导出覆盖同名临时文件。
+	 */
+	async exportSessionTranscript(
+		sessionId: string,
+		sessionFile?: string,
+		cwd?: string,
+	): Promise<{ path: string }> {
+		let messages: SessionMessage[];
+		const entry = this.registry.get(sessionId);
+		if (entry) {
+			messages = await this.getSessionMessages(sessionId);
+		} else {
+			const file = sessionFile ?? (await this.findUnloadedSessionFile(sessionId, cwd));
+			if (!file) throw new Error(`Session not found: ${sessionId}`);
+			messages = readSessionMessagesFromContent(await readFile(file, "utf8"));
+		}
+		const dir = join(tmpdir(), "percho-transcripts");
+		await mkdir(dir, { recursive: true });
+		// 文件名用会话名（胶囊展示友好；无名字回退 sessionId）；sessionId 后缀保证同名会话不互盖。
+		// 白名单过滤（字母/数字/空格/-/_/点/中文等非 ASCII）而非黑名单正则，避开 no-control-regex。
+		const sessionName = entry?.session.sessionManager.getSessionName()?.trim();
+		const base = sessionName ? `${sessionName}-${sessionId.slice(0, 8)}` : sessionId;
+		const safeBase = [...base].filter((ch) => /[\w\-. ]/.test(ch) || ch.charCodeAt(0) > 127).join("").slice(0, 80) || sessionId;
+		const path = join(dir, `${safeBase}.md`);
+		await writeFile(path, buildSessionTranscript(messages), "utf8");
+		return { path };
 	}
 
 	async prompt(sessionId: string, text: string, images?: ImageInput[]): Promise<void> {

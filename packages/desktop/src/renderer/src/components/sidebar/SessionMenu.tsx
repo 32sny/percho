@@ -2,7 +2,9 @@ import type { SessionMeta } from "@percho/shared";
 import { useState } from "react";
 import { useT } from "../../i18n";
 import { useProjectsStore } from "../../stores/projects";
+import { useToastsStore } from "../../stores/toasts";
 import { useUiPreferencesStore } from "../../stores/ui-preferences";
+import { MoveSessionDialog } from "../session/MoveSessionDialog";
 import { RenamePopover } from "../session/RenamePopover";
 import {
 	copySessionDiagnostics,
@@ -23,9 +25,11 @@ export function useSessionMenu() {
 	const t = useT();
 	const pinnedSessions = useUiPreferencesStore((s) => s.pinnedSessions);
 	const deleteSession = useProjectsStore((s) => s.deleteSession);
+	const moveSession = useProjectsStore((s) => s.moveSession);
 	const [menu, setMenu] = useState<{ session: SessionMeta; anchor: MenuAnchor } | null>(null);
 	const [renaming, setRenaming] = useState<{ session: SessionMeta; anchor: MenuAnchor } | null>(null);
 	const [deleting, setDeleting] = useState<SessionMeta | null>(null);
+	const [moving, setMoving] = useState<SessionMeta | null>(null);
 
 	const open = (session: SessionMeta, anchor: MenuAnchor) => {
 		// 只读子会话 / 找不到会话的判定在纯函数里（sidebarMenuKind，有单测）；none 就不弹菜单
@@ -43,6 +47,7 @@ export function useSessionMenu() {
 						sessionId: menu.session.sessionId,
 						pinned: pinnedSessions.includes(menu.session.sessionId),
 						onRename: () => setRenaming({ session: menu.session, anchor: menu.anchor }),
+						onMove: () => setMoving(menu.session),
 						onCopyDiagnostics: () => void copySessionDiagnostics(menu.session),
 						onDelete: () => setDeleting(menu.session),
 					})}
@@ -72,6 +77,20 @@ export function useSessionMenu() {
 						setDeleting(null);
 					}}
 					onCancel={() => setDeleting(null)}
+				/>
+			)}
+			{moving && (
+				<MoveSessionDialog
+					currentCwd={moving.cwd}
+					onPick={(targetCwd) => {
+						const session = moving;
+						setMoving(null);
+						void moveSession(session, targetCwd).catch((error) => {
+							console.error("移动会话失败", error);
+							useToastsStore.getState().push("error", "toast.sessionMoveFailed");
+						});
+					}}
+					onCancel={() => setMoving(null)}
 				/>
 			)}
 		</>

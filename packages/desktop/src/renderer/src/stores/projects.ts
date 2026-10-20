@@ -63,6 +63,8 @@ interface ProjectsStore {
 	addProject: () => Promise<void>;
 	/** 删除历史会话（含磁盘文件）；若该会话在顶栏打开中则一并关闭 */
 	deleteSession: (session: SessionMeta) => Promise<void>;
+	/** 移动会话到其他项目（文件搬家 + 头部 cwd 改写）；打开中的会话关后按新 meta 重开 */
+	moveSession: (session: SessionMeta, targetCwd: string) => Promise<void>;
 	/** 删除整个项目：删除该项目下全部会话（含磁盘文件），并从已添加列表移除 */
 	deleteProject: (cwd: string) => Promise<void>;
 	/** 从历史会话打开并切回聊天视图；若已在内存里则直接切换。**用户入口**：真正打开成功后才记入工作区 */
@@ -170,6 +172,25 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => {
 			set((state) => ({
 				allSessions: state.allSessions.filter((s) => s.sessionId !== session.sessionId),
 			}));
+		},
+
+		/** 移动会话到其他项目：后端文件搬家 + 头部 cwd 改写；目录快照替换该条（sessionId 不变，
+		 *  置顶/权限模式等状态无损）。打开中的会话：后端已 dispose 并按新路径重开，renderer
+		 *  走既有 close+open 对账（标签页无感归位到新项目）。 */
+		moveSession: async (session, targetCwd) => {
+			const moved = await getPi().moveSession({
+				sessionId: session.sessionId,
+				sessionFile: session.sessionFile,
+				targetCwd,
+			});
+			set((state) => ({
+				allSessions: state.allSessions.map((s) => (s.sessionId === moved.sessionId ? moved : s)),
+			}));
+			const sessionsState = useSessionsStore.getState();
+			if (sessionsState.sessions.some((s) => s.sessionId === session.sessionId)) {
+				await sessionsState.closeSession(session.sessionId);
+				await get().openSession(moved);
+			}
 		},
 
 		deleteProject: async (cwd) => {
