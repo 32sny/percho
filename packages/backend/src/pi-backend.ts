@@ -304,6 +304,8 @@ export class PiBackend {
 		field: "model" | "thinking",
 		value: string | null,
 	): Promise<void> {
+		// null = 跟随 agent 定义（面板删键）：两链都回退读 frontmatter，动文件反而制造分叉（spec 目标 2）
+		if (value === null) return;
 		try {
 			const result = await syncAgentFileField(getAgentDir(), agent, field, value);
 			if (!result.synced && result.reason !== "unchanged") {
