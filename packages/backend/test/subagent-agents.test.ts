@@ -85,6 +85,6 @@ describe("isSubagentSessionPath", () => {
 		expect(isSubagentSessionPath(`${root}/sessions/proj/abc.jsonl`, root)).toBe(false);
 		expect(isSubagentSessionPath(`${root}/sessions-subagents/../sessions/x.jsonl`, root)).toBe(false);
 		expect(isSubagentSessionPath(`${root}/sessions-subagents-bogus/x.jsonl`, root)).toBe(false);
-		expect(subagentSessionsRoot(root)).toBe(`${root}/sessions-subagents`);
+		expect(subagentSessionsRoot(root)).toBe(join(root, "sessions-subagents"));
 	});
 });

@@ -50,7 +50,7 @@ describe("ensureAgentWorkInit", () => {
 		const cwd = join(testRoot, "plain");
 		const r1 = await ensureAgentWorkInit(cwd);
 		expect(r1.created).toHaveLength(4); // agent-work 根 + 3 子目录
-		expect(channelRoot(cwd)).toContain(AGENT_WORK_REL);
+		expect(channelRoot(cwd)).toBe(join(cwd, AGENT_WORK_REL, "channel"));
 		// 目录真实存在
 		for (const d of [channelRoot(cwd), specRoot(cwd), planRoot(cwd)]) {
 			const st = await stat(d);

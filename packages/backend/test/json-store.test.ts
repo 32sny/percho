@@ -84,7 +84,9 @@ describe("JsonStore async", () => {
 			mode: 0o600,
 		});
 		await s.write({ k: "v" });
-		expect(statSync(path).mode & 0o777).toBe(0o600);
+		expect(await s.read()).toEqual({ k: "v" });
+		// Windows does not implement POSIX permission bits; keep the write/read assertion on every OS.
+		if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
 	});
 
 	it("parse 钩子支持 JSONC 注释读取", async () => {

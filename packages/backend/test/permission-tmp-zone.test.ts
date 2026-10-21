@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isRmSegment, isTemporaryPath, rmSegmentExempt, temporaryRoots } from "../src/permissions/tmp-zone";
 
@@ -17,7 +17,7 @@ describe("temporaryRoots", () => {
 		// 无重复
 		expect(new Set(roots).size).toBe(roots.length);
 		// 全部是绝对路径
-		expect(roots.every((r) => r.startsWith("/"))).toBe(true);
+		expect(roots.every((r) => isAbsolute(r))).toBe(true);
 	});
 
 	it("macOS：额外包含两处 realpath 拼写（/private 前缀形态）", () => {
@@ -55,7 +55,7 @@ describe("isTemporaryPath", () => {
 		expect(isTemporaryPath("/tmp/../etc")).toBe(false);
 		expect(isTemporaryPath("/tmp/a/../../etc")).toBe(false);
 		expect(isTemporaryPath("/tmp/a/../b")).toBe(true);
-		expect(isTemporaryPath(`${tmpdir()}/../${tmpdir().split("/").pop() ?? "T"}/x`)).toBe(true);
+		expect(isTemporaryPath(`${tmpdir()}/../${basename(tmpdir())}/x`)).toBe(true);
 	});
 });
 

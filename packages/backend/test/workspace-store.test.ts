@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	addAllowedPattern,
@@ -26,7 +26,7 @@ describe("workspace-store", () => {
 		addWorkspaceRoot(dir, "/proj", "/other/repo");
 		expect(loadWorkspaces(dir)).toEqual({
 			version: 1,
-			projects: { "/proj": { roots: ["/other/repo"], allowed: [] } },
+			projects: { [resolve("/proj")]: { roots: [resolve("/other/repo")], allowed: [] } },
 		});
 	});
 
@@ -35,16 +35,16 @@ describe("workspace-store", () => {
 		addWorkspaceRoot(dir, "/proj", "/other");
 		addWorkspaceRoot(dir, "/proj", "/other"); // 去重
 		addAllowedPattern(dir, "/proj", "bash: git push*");
-		expect(loadWorkspaces(dir).projects["/proj"].roots).toEqual(["/other"]);
+		expect(loadWorkspaces(dir).projects[resolve("/proj")].roots).toEqual([resolve("/other")]);
 		removeWorkspaceRoot(dir, "/proj", "/other");
 		const afterRemove = loadWorkspaces(dir);
-		expect(afterRemove.projects["/proj"]).toEqual({ roots: [], allowed: ["bash: git push*"] });
+		expect(afterRemove.projects[resolve("/proj")]).toEqual({ roots: [], allowed: ["bash: git push*"] });
 		// 移除最后记忆后条目整体回收
 		const raw = JSON.parse(readFileSync(workspaceConfigPath(dir), "utf-8"));
-		raw.projects["/proj"] = { roots: [], allowed: [] };
+		raw.projects[resolve("/proj")] = { roots: [], allowed: [] };
 		writeFileSync(workspaceConfigPath(dir), JSON.stringify(raw));
 		removeWorkspaceRoot(dir, "/proj", "/nonexistent");
-		expect(loadWorkspaces(dir).projects["/proj"]).toBeUndefined();
+		expect(loadWorkspaces(dir).projects[resolve("/proj")]).toBeUndefined();
 	});
 
 	it("记忆去重后移到末尾（LRU 语义）；非法文件回退空配置", () => {
@@ -52,7 +52,7 @@ describe("workspace-store", () => {
 		addAllowedPattern(dir, "/p", "a*");
 		addAllowedPattern(dir, "/p", "b*");
 		addAllowedPattern(dir, "/p", "a*");
-		expect(loadWorkspaces(dir).projects["/p"].allowed).toEqual(["b*", "a*"]);
+		expect(loadWorkspaces(dir).projects[resolve("/p")].allowed).toEqual(["b*", "a*"]);
 		writeFileSync(workspaceConfigPath(dir), "{broken");
 		expect(loadWorkspaces(dir)).toEqual(emptyWorkspaces());
 	});
@@ -62,7 +62,7 @@ describe("workspace-store", () => {
 		const load = createWorkspacesLoader(dir);
 		expect(load()).toEqual(emptyWorkspaces());
 		addWorkspaceRoot(dir, "/proj", "/other");
-		expect(load().projects["/proj"]).toEqual({ roots: ["/other"], allowed: [] });
+		expect(load().projects[resolve("/proj")]).toEqual({ roots: [resolve("/other")], allowed: [] });
 	});
 });
 

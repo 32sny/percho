@@ -196,7 +196,7 @@ describe("permission-gate 扩展", () => {
 		// 根目录过宽时降级为精确文件授权。
 		const expectedEscapeTitle =
 			dirname(escapePath) === sep ? `write: ${escapePath}` : `write: ${dirname(escapePath)}${sep}*`;
-		expect(confirms.map((c) => c.title)).toEqual(["edit: /etc/*", expectedEscapeTitle]);
+		expect(confirms.map((c) => c.title)).toEqual([`edit: ${dirname("/etc/hosts")}${sep}*`, expectedEscapeTitle]);
 		// 不传 projectRoot → 无边界检查，任意路径放行
 		const open = makeHarness(dir, false);
 		await expect(open.call("edit", { path: "/etc/hosts" })).resolves.toBeUndefined();

@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	createPermissionConfigLoader,
@@ -252,10 +252,10 @@ describe("matchTextFor / suggestPattern", () => {
 
 	it("文件工具用父目录前缀（目录化记忆键）；过宽目录/自定义工具退回精确路径或工具名", () => {
 		expect(suggestPattern("edit", { path: "/a.ts" })).toBe("edit: /a.ts"); // dirname=/ 退回精确
-		expect(suggestPattern("edit", { path: "/x/y/a.ts" })).toBe("edit: /x/y/*");
+		expect(suggestPattern("edit", { path: "/x/y/a.ts" })).toBe(`edit: ${dirname("/x/y/a.ts")}${sep}*`);
 		expect(suggestPattern("write", { path: `${homedir()}/todo.md` })).toBe(`write: ${homedir()}/todo.md`); // 父目录即 home 退回精确
 		expect(suggestPattern("write", { path: `${homedir()}/notes/todo.md` })).toBe(
-			`write: ${homedir()}/notes/*`,
+			`write: ${dirname(`${homedir()}/notes/todo.md`)}${sep}*`,
 		);
 		expect(suggestPattern("my_tool", { foo: 1 })).toBe("my_tool");
 	});

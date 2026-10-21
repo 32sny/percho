@@ -1,6 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { toSessionMessages } from "../src/session/messages";
 import { makeShowImageTool, resolveShowImagePath } from "../src/tools/show-image";
@@ -19,17 +19,17 @@ function executeShowImage(params: { paths: string[] }, cwd: string) {
 describe("resolveShowImagePath", () => {
 	it("~ 与 ~/ 展开为 home", () => {
 		expect(resolveShowImagePath("~", "/cwd", "/home/u")).toBe("/home/u");
-		expect(resolveShowImagePath("~/Downloads/pic.png", "/cwd", "/home/u")).toBe("/home/u/Downloads/pic.png");
+		expect(resolveShowImagePath("~/Downloads/pic.png", "/cwd", "/home/u")).toBe(join("/home/u", "Downloads/pic.png"));
 	});
 
 	it("相对路径按 cwd resolve；绝对路径原样", () => {
-		expect(resolveShowImagePath("a/b.png", "/cwd", "/home/u")).toBe("/cwd/a/b.png");
+		expect(resolveShowImagePath("a/b.png", "/cwd", "/home/u")).toBe(resolve("/cwd", "a/b.png"));
 		expect(resolveShowImagePath("/abs/c.png", "/cwd", "/home/u")).toBe("/abs/c.png");
 	});
 
 	it("unicode 空格归一（macOS 截图窄空格）", () => {
 		expect(resolveShowImagePath("~/截图/claude\u202Fusage.png", "/cwd", "/home/u")).toBe(
-			"/home/u/截图/claude usage.png",
+			join("/home/u", "截图/claude usage.png"),
 		);
 	});
 });
