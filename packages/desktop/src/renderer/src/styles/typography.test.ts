@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FONT_SIZE_TOKENS } from "@percho/shared";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -23,6 +24,29 @@ const globals = readFileSync(join(stylesDir, "globals.css"), "utf8");
 const TOKEN_PX = Object.fromEntries(
 	FONT_SIZE_TOKENS.map((px) => [`text-ui-${String(px).replace(".", "")}`, px]),
 );
+
+// Only the returned standalone Markdown document is outside the host typography system.
+// Parse its exact AST range rather than ignoring Viewport.tsx (which also contains host UI).
+const markdownViewport = join(srcDir, "components", "artifacts", "Viewport.tsx");
+function hostFontSizeSource(file: string, text: string): string {
+	if (file !== markdownViewport) return text;
+	const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+	const render = source.statements.find(
+		(node): node is ts.FunctionDeclaration =>
+			ts.isFunctionDeclaration(node) && node.name?.text === "renderSimpleMarkdown",
+	);
+	const documents = render?.body?.statements.filter(
+		(node): node is ts.ReturnStatement =>
+			ts.isReturnStatement(node) &&
+			!!node.expression &&
+			ts.isTemplateExpression(node.expression) &&
+			node.expression.head.text.startsWith("<!DOCTYPE html>"),
+	) ?? [];
+	expect(documents, "the audited iframe document must remain a single direct return").toHaveLength(1);
+	const template = documents[0]?.expression;
+	if (!template) throw new Error("Missing standalone Markdown document");
+	return text.slice(0, template.getStart(source)) + text.slice(template.end);
+}
 
 function walk(dir: string, out: string[] = []): string[] {
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -120,9 +144,18 @@ describe("组件里的字号", () => {
 		expect(offenders).toEqual([]);
 	});
 
+	it("iframe 例外只豁免指定文件的完整文档模板，不豁免宿主代码", () => {
+		const fixture = 'function renderSimpleMarkdown() { const host = "font-size: 17px"; return `<!DOCTYPE html><style>pre { font-size: 13px; color: ${fg}; }</style></html>`; }\nconst host = "font-size: 19px";';
+		const remaining = hostFontSizeSource(markdownViewport, fixture);
+		expect([...remaining.matchAll(/font-size:\s*[\d.]+px/g)].map((m) => m[0])).toEqual([
+			"font-size: 17px", "font-size: 19px",
+		]);
+		expect(hostFontSizeSource(join(srcDir, "Other.tsx"), fixture)).toBe(fixture);
+	});
+
 	it("字号只用 text-ui-* token（顺手把写死的 font-size 也拦住）", () => {
 		const offenders = sources.flatMap(({ file, text }) =>
-			[...text.matchAll(/font-size:\s*[\d.]+px/g)].map((m) => `${file}: ${m[0]}`),
+			[...hostFontSizeSource(file, text).matchAll(/font-size:\s*[\d.]+px/g)].map((m) => `${file}: ${m[0]}`),
 		);
 		expect(offenders).toEqual([]);
 	});

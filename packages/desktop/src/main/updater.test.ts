@@ -20,6 +20,11 @@ const fake = vi.hoisted(() => ({
 	},
 }));
 vi.mock("node:module", () => ({ createRequire: () => () => ({ autoUpdater: fake.updater }) }));
+// Keep the real logger without loading the unrelated backend/SDK barrel after every resetModules.
+vi.mock("@percho/backend", async () => {
+	const { createLogger } = await import("../../../backend/src/log");
+	return { createLogger };
+});
 vi.mock("node:child_process", () => ({
 	execFile: vi.fn((_file, _args, _options, callback) =>
 		callback(null, "", "Authority=Developer ID Application\nTeamIdentifier=TEST"),
