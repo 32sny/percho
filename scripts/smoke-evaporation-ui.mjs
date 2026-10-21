@@ -5,17 +5,29 @@
 import { execSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 
-const wsUrl = execSync(
-	`curl -s http://127.0.0.1:9224/json | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);const p=j.find(x=>x.type==='page');console.log(p.webSocketDebuggerUrl)})"`,
-)
-	.toString()
-	.trim();
+let wsUrl;
+try {
+	wsUrl = execSync(
+		`curl -s http://127.0.0.1:9224/json | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);const p=j.find(x=>x.type==='page');console.log(p.webSocketDebuggerUrl)})"`,
+	)
+		.toString()
+		.trim();
+	if (!wsUrl) throw new Error("dev 实例未运行或未开 --remote-debugging-port=9224");
+} catch (err) {
+	console.error("[smoke-evaporation] 拿不到 CDP 页面地址：", err.message);
+	process.exit(1);
+}
 const { WebSocket } = await import("ws");
 const ws = new WebSocket(wsUrl);
 let id = 0;
 const pending = new Map();
 ws.on("message", (data) => {
-	const msg = JSON.parse(data.toString());
+	let msg;
+	try {
+		msg = JSON.parse(data.toString());
+	} catch {
+		return; // 非 JSON 帧，忽略
+	}
 	if (msg.id && pending.has(msg.id)) {
 		pending.get(msg.id)(msg);
 		pending.delete(msg.id);
@@ -43,7 +55,12 @@ const settingsFile = `${process.env.HOME}/.pi/agent-dev/settings.json`;
 const backupFile = `${settingsFile}.smoke-bak`;
 const readKeys = () => {
 	if (!existsSync(settingsFile)) return { acp: "(missing file)", evap: undefined };
-	const raw = JSON.parse(readFileSync(settingsFile, "utf8"));
+	let raw;
+	try {
+		raw = JSON.parse(readFileSync(settingsFile, "utf8"));
+	} catch {
+		return { acp: "(unparseable)", evap: "(unparseable)" }; // settings 损坏时按不可解析上报，不中断冒烟
+	}
 	return {
 		acp: Object.hasOwn(raw, "acpCompressionEnabled") ? raw.acpCompressionEnabled : "(absent)",
 		evap: raw.contextEvaporation?.enabled === undefined ? "(missing)" : raw.contextEvaporation.enabled,
