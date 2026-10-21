@@ -159,7 +159,7 @@ describe("same graph parser counterexamples (including preload-style relative cy
 			expect(example.edgeCount).toBe(4);
 			expect(
 				example.graph.get(join(example.root, "index.ts"))?.map((file) => relative(example.root, file)),
-			).toEqual(["types.d.ts", "boot.ts", "folder/index.tsx", "lazy.ts"]);
+			).toEqual(["types.d.ts", "boot.ts", join("folder", "index.tsx"), "lazy.ts"]);
 			expect(example.cycles).toEqual([]);
 		},
 	);
