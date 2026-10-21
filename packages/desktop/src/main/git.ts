@@ -166,8 +166,8 @@ function parseStatusPorcelain(output: string) {
 			continue;
 		}
 		if (line.length < 3) continue;
-		const x = line[0];
-		const y = line[1];
+		const x = line[0]!; // line.length >= 3 guarantees the index-status character.
+		const y = line[1]!; // line.length >= 3 guarantees the worktree-status character.
 		let pathPart = line.slice(3);
 		let origPath: string | null = null;
 		const arrow = pathPart.indexOf(" -> ");
@@ -195,14 +195,14 @@ function parseLogRecords(output: string): GitCommitRecord[] {
 		const fields = part.replace(/^\r?\n/, "").split("\x1f");
 		if (fields.length < 9) continue;
 		records.push({
-			sha: fields[0],
-			shortSha: fields[1],
-			author: fields[2],
-			authorEmail: fields[3],
-			authorDate: fields[4],
-			committerDate: fields[5],
+			sha: fields[0]!, // fields.length >= 9 guarantees the full hash field.
+			shortSha: fields[1]!, // fields.length >= 9 guarantees the short hash field.
+			author: fields[2]!, // fields.length >= 9 guarantees the author field.
+			authorEmail: fields[3]!, // fields.length >= 9 guarantees the author-email field.
+			authorDate: fields[4]!, // fields.length >= 9 guarantees the author-date field.
+			committerDate: fields[5]!, // fields.length >= 9 guarantees the committer-date field.
 			refs: fields[6] || null,
-			subject: fields[7],
+			subject: fields[7]!, // fields.length >= 9 guarantees the subject field.
 			body: String(fields[8] || "").trim(),
 		});
 	}
@@ -216,14 +216,14 @@ function parseNameStatus(output: string): GitFileChange[] {
 		if (!line) continue;
 		const fields = line.split("\t");
 		if (fields.length < 2) continue;
-		const statusField = fields[0];
+		const statusField = fields[0]!; // fields.length >= 2 guarantees the status field.
 		const status = statusField[0] || "?";
 		const score = Number.parseInt(statusField.slice(1), 10);
 		files.push({
 			status,
 			score: Number.isFinite(score) ? score : null,
-			path: fields[fields.length - 1],
-			origPath: fields.length > 2 ? fields[1] : null,
+			path: fields[fields.length - 1]!, // fields.length >= 2 guarantees the last path field.
+			origPath: fields.length > 2 ? fields[1]! : null, // The > 2 branch guarantees the original-path field.
 		});
 	}
 	return files;
@@ -271,7 +271,7 @@ function parseBlameLinePorcelain(output: string): GitBlameLine[] {
 			if (current) records.push(current);
 			const parts = line.split(" ");
 			current = {
-				sha: parts[0],
+				sha: parts[0]!, // The matched blame-header regex guarantees the leading hash token.
 				origLine: Number(parts[1]),
 				finalLine: Number(parts[2]),
 				author: "",
