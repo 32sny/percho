@@ -1,6 +1,7 @@
 import type { TrustRequest } from "@percho/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getPi } from "./api";
+import { ArtifactsDrawer } from "./components/artifacts/ArtifactsDrawer";
 import { CornerStack } from "./components/chat/CornerStack";
 import { EmptyState } from "./components/chat/EmptyState";
 import { MessageList } from "./components/chat/MessageList";
@@ -8,7 +9,6 @@ import { SubagentBackButton } from "./components/chat/SubagentBackButton";
 import { TodoPanel } from "./components/chat/TodoPanel";
 import { DiffSidebar } from "./components/diff/DiffSidebar";
 import { GitLens } from "./components/git-lens/GitLens";
-import { ArtifactsDrawer } from "./components/artifacts/ArtifactsDrawer";
 import { DockSlot } from "./components/session/DockSlot";
 import { SessionRail } from "./components/session/SessionRail";
 import { SessionTabBar } from "./components/session/SessionTabBar";

@@ -38,7 +38,9 @@ describe("cleanPathText", () => {
 describe("resolvePathTarget", () => {
 	it("绝对路径原样（normalize 掉 ./ 与 ..）", () => {
 		expect(resolvePathTarget("/Users/me/proj/src/a.ts", CWD)).toBe(normalize("/Users/me/proj/src/a.ts"));
-		expect(resolvePathTarget("/Users/me/proj/./src/../src/a.ts", CWD)).toBe(normalize("/Users/me/proj/src/a.ts"));
+		expect(resolvePathTarget("/Users/me/proj/./src/../src/a.ts", CWD)).toBe(
+			normalize("/Users/me/proj/src/a.ts"),
+		);
 	});
 
 	it("相对路径以会话 cwd 为基准（cwd 非法/缺省时退回进程 cwd）", () => {
@@ -58,7 +60,9 @@ describe("resolvePathTarget", () => {
 
 	it("file:// URL（含中文与空格的 percent-encoding）", () => {
 		expect(resolvePathTarget("file:///Users/me/proj/a%20b.ts", CWD)).toBe(normalize("/Users/me/proj/a b.ts"));
-		expect(resolvePathTarget("file:///Users/me/%E4%B8%AD%E6%96%87.md", CWD)).toBe(normalize("/Users/me/中文.md"));
+		expect(resolvePathTarget("file:///Users/me/%E4%B8%AD%E6%96%87.md", CWD)).toBe(
+			normalize("/Users/me/中文.md"),
+		);
 		expect(resolvePathTarget("file:///Users/me/proj/a.ts:12", CWD)).toBe(normalize("/Users/me/proj/a.ts"));
 	});
 

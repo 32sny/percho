@@ -4,7 +4,12 @@ import { CloseIcon, FileTextIcon } from "../icons";
 import { Tooltip } from "../ui/Tooltip";
 
 function fileNameOf(path: string): string {
-	return path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
+	return (
+		path
+			.replace(/[/\\]+$/, "")
+			.split(/[/\\]/)
+			.pop() || path
+	);
 }
 
 /**

@@ -1,5 +1,5 @@
 import { deriveTurnChanges, type TurnChanges } from "@percho/shared";
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getPi } from "../../api";
 import { useT } from "../../i18n";
 import { selectActiveCwd } from "../../lib/active-cwd";
@@ -154,31 +154,37 @@ export function DiffSidebar() {
 		};
 	}, [finishResize]);
 
-	const onPointerDownResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-		if (e.button !== 0) return;
-		draggingRef.current = true;
-		handleRef.current = e.currentTarget;
-		pointerIdRef.current = e.pointerId;
-		startXRef.current = e.clientX;
-		startWidthRef.current = width;
-		e.currentTarget.setPointerCapture(e.pointerId);
-		document.body.style.cursor = "col-resize";
-		setResizing(true);
-		e.preventDefault();
-	}, [width]);
+	const onPointerDownResize = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			if (e.button !== 0) return;
+			draggingRef.current = true;
+			handleRef.current = e.currentTarget;
+			pointerIdRef.current = e.pointerId;
+			startXRef.current = e.clientX;
+			startWidthRef.current = width;
+			e.currentTarget.setPointerCapture(e.pointerId);
+			document.body.style.cursor = "col-resize";
+			setResizing(true);
+			e.preventDefault();
+		},
+		[width],
+	);
 
-	const onPointerMoveResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-		if (!draggingRef.current) return;
-		if (e.buttons === 0) {
-			finishResize();
-			return;
-		}
-		const delta = startXRef.current - e.clientX;
-		const maxWidth = Math.round(window.innerWidth * 0.85);
-		const nextWidth = Math.max(320, Math.min(maxWidth, startWidthRef.current + delta));
-		setWidth(nextWidth);
-		localStorage.setItem("percho_diff_sidebar_width", String(nextWidth));
-	}, [finishResize]);
+	const onPointerMoveResize = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			if (!draggingRef.current) return;
+			if (e.buttons === 0) {
+				finishResize();
+				return;
+			}
+			const delta = startXRef.current - e.clientX;
+			const maxWidth = Math.round(window.innerWidth * 0.85);
+			const nextWidth = Math.max(320, Math.min(maxWidth, startWidthRef.current + delta));
+			setWidth(nextWidth);
+			localStorage.setItem("percho_diff_sidebar_width", String(nextWidth));
+		},
+		[finishResize],
+	);
 
 	// 浮层保持常驻，点击聊天区不收起；Esc 是关闭按钮之外的键盘出口。
 	useEffect(() => {
@@ -214,7 +220,8 @@ export function DiffSidebar() {
 			// 彻底杜绝侧栏在 translate3d 动画期间导致外层主窗口发生灾难性的横向 scrollLeft 漂移！
 			const cardRect = card.getBoundingClientRect();
 			const bodyRect = bodyEl.getBoundingClientRect();
-			const targetTop = bodyEl.scrollTop + (cardRect.top - bodyRect.top) - (bodyEl.clientHeight / 2) + (card.clientHeight / 2);
+			const targetTop =
+				bodyEl.scrollTop + (cardRect.top - bodyRect.top) - bodyEl.clientHeight / 2 + card.clientHeight / 2;
 			bodyEl.scrollTo({
 				top: Math.max(0, targetTop),
 				behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",

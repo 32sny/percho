@@ -388,7 +388,10 @@ export const GIT_CHANNELS = {
 	gitDiff: ch("git:diff")<GitDiffOptions, GitDiffResult>(),
 	gitBlame: ch("git:blame")<GitBlameOptions, GitBlameResult>(),
 	gitBranch: ch("git:branch")<GitBranchOptions, GitBranchResult>(),
-	gitCommit: ch("git:commit")<GitCommitOptions, { ok: boolean; repo: string; sha: string; subject: string; message: string }>(),
+	gitCommit: ch("git:commit")<
+		GitCommitOptions,
+		{ ok: boolean; repo: string; sha: string; subject: string; message: string }
+	>(),
 	gitStash: ch("git:stash")<GitStashOptions, GitStashResult>(),
 } as const;
 

@@ -54,7 +54,10 @@ export function buildSessionTranscript(messages: readonly SessionMessage[]): str
 				parts.push(`[子代理] ${message.runs.length} 次运行`, "");
 				break;
 			case "compaction":
-				parts.push(`---（上下文已压缩${message.summary ? `：${truncate(message.summary, 200)}` : ""}）---`, "");
+				parts.push(
+					`---（上下文已压缩${message.summary ? `：${truncate(message.summary, 200)}` : ""}）---`,
+					"",
+				);
 				break;
 		}
 	}

@@ -1,9 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../i18n";
 import { deriveProjects, useProjectsStore } from "../../stores/projects";
-import { useEffect } from "react";
-import { useRef } from "react";
 
 /**
  * 「移动到项目…」目标选择对话框（spec PLAN-session-move-project §三 决策 3）：

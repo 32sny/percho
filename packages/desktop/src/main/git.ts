@@ -30,11 +30,13 @@ const MAX_ENTRIES = 1_000;
 const MAX_PATCH_CHARS = 120_000;
 
 /** One record per commit; fields are unit-separated (%x1f), records are group-separated (%x1e). */
-const LOG_FORMAT = [
-	"%H", "%h", "%an", "%ae", "%aI", "%cI", "%D", "%s", "%b",
-].join("%x1f") + "%x1e";
+const LOG_FORMAT = ["%H", "%h", "%an", "%ae", "%aI", "%cI", "%D", "%s", "%b"].join("%x1f") + "%x1e";
 
-function runGit(repoRoot: string, args: string[], options: { timeoutMs?: number; maxBuffer?: number } = {}): Promise<string> {
+function runGit(
+	repoRoot: string,
+	args: string[],
+	options: { timeoutMs?: number; maxBuffer?: number } = {},
+): Promise<string> {
 	return new Promise((resolve, reject) => {
 		execFile(
 			GIT,
@@ -230,7 +232,8 @@ function parseNameStatus(output: string): GitFileChange[] {
 }
 
 function parseNumstat(output: string) {
-	const files: Array<{ path: string; additions: number | null; deletions: number | null; binary: boolean }> = [];
+	const files: Array<{ path: string; additions: number | null; deletions: number | null; binary: boolean }> =
+		[];
 	const lines = String(output || "").split("\n");
 	for (const line of lines) {
 		if (!line) continue;
@@ -435,7 +438,10 @@ export async function getGitShow(options: GitShowOptions): Promise<GitShowResult
 export async function getGitDiff(options: GitDiffOptions): Promise<GitDiffResult> {
 	const root = await getRepoRootOrThrow(options.cwd);
 	const base = options.base ? requireRef(options.base, "base") : "HEAD";
-	const target = options.target !== undefined && String(options.target) !== "" ? requireRef(options.target, "target") : null;
+	const target =
+		options.target !== undefined && String(options.target) !== ""
+			? requireRef(options.target, "target")
+			: null;
 	const wantPatch = options.patch === true;
 	const wantStat = options.stat !== false;
 	const rel = options.path ? requireRepoPath(options.path) : null;
@@ -516,27 +522,56 @@ export async function handleGitBranch(options: GitBranchOptions): Promise<GitBra
 			if (startPoint) gitArgs.push(startPoint);
 			await runGit(root, gitArgs);
 			const { branches } = await branchList();
-			return { ok: true, repo: root, action, branch: name, message: `Created branch ${name}`, branches, current: null, count: branches.length };
+			return {
+				ok: true,
+				repo: root,
+				action,
+				branch: name,
+				message: `Created branch ${name}`,
+				branches,
+				current: null,
+				count: branches.length,
+			};
 		}
 		case "switch": {
 			const name = requireBranchName(options.name);
 			await runGit(root, ["switch", name]);
 			const { branches, current } = await branchList();
-			return { ok: true, repo: root, action, branch: name, current, message: `Switched to branch ${name}`, branches, count: branches.length };
+			return {
+				ok: true,
+				repo: root,
+				action,
+				branch: name,
+				current,
+				message: `Switched to branch ${name}`,
+				branches,
+				count: branches.length,
+			};
 		}
 		case "delete": {
 			const name = requireBranchName(options.name);
 			const gitArgs = ["branch", options.force === true ? "-D" : "-d", name];
 			await runGit(root, gitArgs);
 			const { branches, current } = await branchList();
-			return { ok: true, repo: root, action, branch: name, current, message: `Deleted branch ${name}`, branches, count: branches.length };
+			return {
+				ok: true,
+				repo: root,
+				action,
+				branch: name,
+				current,
+				message: `Deleted branch ${name}`,
+				branches,
+				count: branches.length,
+			};
 		}
 		default:
 			throw new Error(`unknown git_branch action: ${action}`);
 	}
 }
 
-export async function handleGitCommit(options: GitCommitOptions): Promise<{ ok: boolean; repo: string; sha: string; subject: string; message: string }> {
+export async function handleGitCommit(
+	options: GitCommitOptions,
+): Promise<{ ok: boolean; repo: string; sha: string; subject: string; message: string }> {
 	const root = await getRepoRootOrThrow(options.cwd);
 	const message = String(options.message ?? "").trim();
 	if (!message) throw new Error("message is required for commit");
@@ -597,7 +632,14 @@ export async function handleGitStash(options: GitStashOptions): Promise<GitStash
 		case "pop": {
 			await runGit(root, ["stash", "pop", stashRef]);
 			const stashes = await stashListFor();
-			return { ok: true, repo: root, action, count: stashes.length, stashes, message: `Applied and dropped ${stashRef}` };
+			return {
+				ok: true,
+				repo: root,
+				action,
+				count: stashes.length,
+				stashes,
+				message: `Applied and dropped ${stashRef}`,
+			};
 		}
 		case "apply": {
 			await runGit(root, ["stash", "apply", stashRef]);

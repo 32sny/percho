@@ -19,7 +19,9 @@ function executeShowImage(params: { paths: string[] }, cwd: string) {
 describe("resolveShowImagePath", () => {
 	it("~ 与 ~/ 展开为 home", () => {
 		expect(resolveShowImagePath("~", "/cwd", "/home/u")).toBe("/home/u");
-		expect(resolveShowImagePath("~/Downloads/pic.png", "/cwd", "/home/u")).toBe(join("/home/u", "Downloads/pic.png"));
+		expect(resolveShowImagePath("~/Downloads/pic.png", "/cwd", "/home/u")).toBe(
+			join("/home/u", "Downloads/pic.png"),
+		);
 	});
 
 	it("相对路径按 cwd resolve；绝对路径原样", () => {

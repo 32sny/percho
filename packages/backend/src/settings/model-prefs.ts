@@ -66,7 +66,10 @@ export class ModelPrefsService {
 		return result;
 	}
 
-	private mutate(change: (prefs: ModelPrefs) => ModelPrefs, after?: () => Promise<void>): Promise<ModelPrefs> {
+	private mutate(
+		change: (prefs: ModelPrefs) => ModelPrefs,
+		after?: () => Promise<void>,
+	): Promise<ModelPrefs> {
 		return this.enqueue(async () => {
 			const prefs = copyPrefs(change(copyPrefs(await this.read())));
 			await this.store().write(prefs);

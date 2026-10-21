@@ -54,7 +54,11 @@ export function SessionRow({
 					? (e: ReactDragEvent<HTMLButtonElement>) => {
 							e.dataTransfer.setData(
 								SESSION_DRAG_MIME,
-								JSON.stringify({ sessionId: session.sessionId, sessionFile: session.sessionFile, name: title }),
+								JSON.stringify({
+									sessionId: session.sessionId,
+									sessionFile: session.sessionFile,
+									name: title,
+								}),
 							);
 							e.dataTransfer.effectAllowed = "copy";
 						}

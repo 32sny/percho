@@ -2,8 +2,8 @@ import {
 	DefaultPackageManager,
 	DefaultResourceLoader,
 	getAgentDir,
-	SettingsManager,
 	type ModelRuntime,
+	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { createLogger } from "./log";
 
@@ -23,7 +23,10 @@ export interface AntigravityPrewarmDeps {
 	getRuntime: () => Promise<ModelRuntime>;
 	getAgentDir?: () => string;
 	createPackageManager?: (agentDir: string) => Pick<DefaultPackageManager, "resolve">;
-	createResourceLoader?: (agentDir: string, paths: string[]) => Pick<DefaultResourceLoader, "reload" | "getExtensions">;
+	createResourceLoader?: (
+		agentDir: string,
+		paths: string[],
+	) => Pick<DefaultResourceLoader, "reload" | "getExtensions">;
 }
 
 /**

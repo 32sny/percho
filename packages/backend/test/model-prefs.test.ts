@@ -79,9 +79,11 @@ describe("ModelPrefsService", () => {
 	describe("hooks（subagent-model-sync）", () => {
 		it("setSubagentModel 成功后 hook 被调且参数正确；null（跟随 agent 定义）时仍被调", async () => {
 			const calls: Array<[string, string | null]> = [];
-			const { service } = await makeService({ onSubagentModelChanged: async (a, m) => {
-				calls.push([a, m]);
-			} });
+			const { service } = await makeService({
+				onSubagentModelChanged: async (a, m) => {
+					calls.push([a, m]);
+				},
+			});
 			await service.setSubagentModel("fixer", "iiiiitoken/gpt-6.1-sol");
 			await service.setSubagentModel("scout", null);
 			expect(calls).toEqual([
@@ -97,9 +99,11 @@ describe("ModelPrefsService", () => {
 
 		it("setSubagentThinking 成功后 hook 被调；非法档位拒写不触发", async () => {
 			const calls: Array<[string, string | null]> = [];
-			const { service } = await makeService({ onSubagentThinkingChanged: async (a, l) => {
-				calls.push([a, l]);
-			} });
+			const { service } = await makeService({
+				onSubagentThinkingChanged: async (a, l) => {
+					calls.push([a, l]);
+				},
+			});
 			await service.setSubagentThinking("fixer", "high");
 			await service.setSubagentThinking("fixer", null);
 			expect(calls).toEqual([

@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -16,7 +24,9 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
  * 若 SDK 改编码规则该测试会红。
  */
 export function sessionDirForCwd(cwd: string, agentDir = getAgentDir()): string {
-	const safePath = `--${resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+	const safePath = `--${resolve(cwd)
+		.replace(/^[/\\]/, "")
+		.replace(/[/\\:]/g, "-")}--`;
 	return join(resolve(agentDir), "sessions", safePath);
 }
 

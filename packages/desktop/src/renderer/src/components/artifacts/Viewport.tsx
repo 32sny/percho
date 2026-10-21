@@ -99,11 +99,7 @@ function renderSimpleMarkdown(md: string, isDark: boolean): string {
 	</style></head><body>${html.join("\n")}</body></html>`;
 }
 
-export const Viewport = memo(function Viewport({
-	artifact,
-	viewMode,
-	zoom,
-}: ViewportProps) {
+export const Viewport = memo(function Viewport({ artifact, viewMode, zoom }: ViewportProps) {
 	const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
 
 	const srcDoc = useMemo(() => {

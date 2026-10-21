@@ -35,13 +35,14 @@ function hostFontSizeSource(file: string, text: string): string {
 		(node): node is ts.FunctionDeclaration =>
 			ts.isFunctionDeclaration(node) && node.name?.text === "renderSimpleMarkdown",
 	);
-	const documents = render?.body?.statements.filter(
-		(node): node is ts.ReturnStatement =>
-			ts.isReturnStatement(node) &&
-			!!node.expression &&
-			ts.isTemplateExpression(node.expression) &&
-			node.expression.head.text.startsWith("<!DOCTYPE html>"),
-	) ?? [];
+	const documents =
+		render?.body?.statements.filter(
+			(node): node is ts.ReturnStatement =>
+				ts.isReturnStatement(node) &&
+				!!node.expression &&
+				ts.isTemplateExpression(node.expression) &&
+				node.expression.head.text.startsWith("<!DOCTYPE html>"),
+		) ?? [];
 	expect(documents, "the audited iframe document must remain a single direct return").toHaveLength(1);
 	const template = documents[0]?.expression;
 	if (!template) throw new Error("Missing standalone Markdown document");
@@ -145,10 +146,12 @@ describe("组件里的字号", () => {
 	});
 
 	it("iframe 例外只豁免指定文件的完整文档模板，不豁免宿主代码", () => {
-		const fixture = 'function renderSimpleMarkdown() { const host = "font-size: 17px"; return `<!DOCTYPE html><style>pre { font-size: 13px; color: ${fg}; }</style></html>`; }\nconst host = "font-size: 19px";';
+		const fixture =
+			'function renderSimpleMarkdown() { const host = "font-size: 17px"; return `<!DOCTYPE html><style>pre { font-size: 13px; color: ${fg}; }</style></html>`; }\nconst host = "font-size: 19px";';
 		const remaining = hostFontSizeSource(markdownViewport, fixture);
 		expect([...remaining.matchAll(/font-size:\s*[\d.]+px/g)].map((m) => m[0])).toEqual([
-			"font-size: 17px", "font-size: 19px",
+			"font-size: 17px",
+			"font-size: 19px",
 		]);
 		expect(hostFontSizeSource(join(srcDir, "Other.tsx"), fixture)).toBe(fixture);
 	});

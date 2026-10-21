@@ -124,7 +124,9 @@
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	transition: background 150ms, color 150ms;
+	transition:
+		background 150ms,
+		color 150ms;
 }
 
 .gl-icon-btn:hover {
@@ -332,11 +334,21 @@
 	text-align: center;
 }
 
-.gl-file-status.M { color: #f59e0b; }
-.gl-file-status.A { color: #10b981; }
-.gl-file-status.D { color: #ef4444; }
-.gl-file-status.U { color: #ec4899; }
-.gl-file-status.Q { color: var(--color-ink-dim); }
+.gl-file-status.M {
+	color: #f59e0b;
+}
+.gl-file-status.A {
+	color: #10b981;
+}
+.gl-file-status.D {
+	color: #ef4444;
+}
+.gl-file-status.U {
+	color: #ec4899;
+}
+.gl-file-status.Q {
+	color: var(--color-ink-dim);
+}
 
 .gl-file-path {
 	flex: 1;

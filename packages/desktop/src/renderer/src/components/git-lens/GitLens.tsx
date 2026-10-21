@@ -31,7 +31,10 @@ export function GitLens() {
 	const [activeTab, setActiveTab] = useState<TabKey>("overview");
 	const [status, setStatus] = useState<GitStatusResult | null>(null);
 	const [commits, setCommits] = useState<GitCommitRecord[]>([]);
-	const [branches, setBranches] = useState<{ current: string | null; list: GitBranchItem[] }>({ current: null, list: [] });
+	const [branches, setBranches] = useState<{ current: string | null; list: GitBranchItem[] }>({
+		current: null,
+		list: [],
+	});
 	const [loading, setLoading] = useState(false);
 	const [sheet, setSheet] = useState<SheetState | null>(null);
 
@@ -80,31 +83,37 @@ export function GitLens() {
 		};
 	}, [finishResize]);
 
-	const onPointerDownResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-		if (e.button !== 0) return;
-		draggingRef.current = true;
-		handleRef.current = e.currentTarget;
-		pointerIdRef.current = e.pointerId;
-		startXRef.current = e.clientX;
-		startWidthRef.current = width;
-		e.currentTarget.setPointerCapture(e.pointerId);
-		document.body.style.cursor = "col-resize";
-		setResizing(true);
-		e.preventDefault();
-	}, [width]);
+	const onPointerDownResize = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			if (e.button !== 0) return;
+			draggingRef.current = true;
+			handleRef.current = e.currentTarget;
+			pointerIdRef.current = e.pointerId;
+			startXRef.current = e.clientX;
+			startWidthRef.current = width;
+			e.currentTarget.setPointerCapture(e.pointerId);
+			document.body.style.cursor = "col-resize";
+			setResizing(true);
+			e.preventDefault();
+		},
+		[width],
+	);
 
-	const onPointerMoveResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-		if (!draggingRef.current) return;
-		if (e.buttons === 0) {
-			finishResize();
-			return;
-		}
-		const delta = startXRef.current - e.clientX;
-		const maxWidth = Math.round(window.innerWidth * 0.85);
-		const nextWidth = Math.max(320, Math.min(maxWidth, startWidthRef.current + delta));
-		setWidth(nextWidth);
-		localStorage.setItem("percho_gitlens_width", String(nextWidth));
-	}, [finishResize]);
+	const onPointerMoveResize = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			if (!draggingRef.current) return;
+			if (e.buttons === 0) {
+				finishResize();
+				return;
+			}
+			const delta = startXRef.current - e.clientX;
+			const maxWidth = Math.round(window.innerWidth * 0.85);
+			const nextWidth = Math.max(320, Math.min(maxWidth, startWidthRef.current + delta));
+			setWidth(nextWidth);
+			localStorage.setItem("percho_gitlens_width", String(nextWidth));
+		},
+		[finishResize],
+	);
 
 	const loadStatus = useCallback(async () => {
 		if (!cwd) return;
@@ -116,15 +125,23 @@ export function GitLens() {
 		}
 	}, [cwd]);
 
-	const loadCommits = useCallback(async (query = "", path = "") => {
-		if (!cwd) return;
-		try {
-			const res = await getPi().gitLog({ cwd, count: 50, query: query || undefined, path: path || undefined });
-			setCommits(res.commits);
-		} catch {
-			setCommits([]);
-		}
-	}, [cwd]);
+	const loadCommits = useCallback(
+		async (query = "", path = "") => {
+			if (!cwd) return;
+			try {
+				const res = await getPi().gitLog({
+					cwd,
+					count: 50,
+					query: query || undefined,
+					path: path || undefined,
+				});
+				setCommits(res.commits);
+			} catch {
+				setCommits([]);
+			}
+		},
+		[cwd],
+	);
 
 	const loadBranches = useCallback(async () => {
 		if (!cwd) return;
@@ -138,11 +155,7 @@ export function GitLens() {
 
 	const refreshAll = useCallback(async () => {
 		setLoading(true);
-		await Promise.allSettled([
-			loadStatus(),
-			loadCommits(historyQuery, historyPath),
-			loadBranches(),
-		]);
+		await Promise.allSettled([loadStatus(), loadCommits(historyQuery, historyPath), loadBranches()]);
 		setLoading(false);
 	}, [loadStatus, loadCommits, loadBranches, historyQuery, historyPath]);
 
@@ -277,35 +290,50 @@ export function GitLens() {
 					<button
 						type="button"
 						className={`gl-segment-btn ${activeTab === "overview" ? "active" : ""}`}
-						onClick={() => { setActiveTab("overview"); setSheet(null); }}
+						onClick={() => {
+							setActiveTab("overview");
+							setSheet(null);
+						}}
 					>
 						概览
 					</button>
 					<button
 						type="button"
 						className={`gl-segment-btn ${activeTab === "history" ? "active" : ""}`}
-						onClick={() => { setActiveTab("history"); setSheet(null); }}
+						onClick={() => {
+							setActiveTab("history");
+							setSheet(null);
+						}}
 					>
 						历史
 					</button>
 					<button
 						type="button"
 						className={`gl-segment-btn ${activeTab === "diff" ? "active" : ""}`}
-						onClick={() => { setActiveTab("diff"); setSheet(null); }}
+						onClick={() => {
+							setActiveTab("diff");
+							setSheet(null);
+						}}
 					>
 						改动
 					</button>
 					<button
 						type="button"
 						className={`gl-segment-btn ${activeTab === "branches" ? "active" : ""}`}
-						onClick={() => { setActiveTab("branches"); setSheet(null); }}
+						onClick={() => {
+							setActiveTab("branches");
+							setSheet(null);
+						}}
 					>
 						分支
 					</button>
 					<button
 						type="button"
 						className={`gl-segment-btn ${activeTab === "blame" ? "active" : ""}`}
-						onClick={() => { setActiveTab("blame"); setSheet(null); }}
+						onClick={() => {
+							setActiveTab("blame");
+							setSheet(null);
+						}}
 					>
 						追溯
 					</button>
@@ -454,7 +482,12 @@ export function GitLens() {
 									<span>已暂存 ({status.staged.length})</span>
 								</div>
 								{status.staged.map((f) => (
-									<button key={f.path} type="button" className="gl-file-item" onClick={() => openFileDiff(f.path)}>
+									<button
+										key={f.path}
+										type="button"
+										className="gl-file-item"
+										onClick={() => openFileDiff(f.path)}
+									>
 										<span className={`gl-file-status ${f.x}`}>{f.x}</span>
 										<span className="gl-file-path">{f.path}</span>
 									</button>
@@ -469,7 +502,12 @@ export function GitLens() {
 									<span>未暂存 ({status.unstaged.length})</span>
 								</div>
 								{status.unstaged.map((f) => (
-									<button key={f.path} type="button" className="gl-file-item" onClick={() => openFileDiff(f.path)}>
+									<button
+										key={f.path}
+										type="button"
+										className="gl-file-item"
+										onClick={() => openFileDiff(f.path)}
+									>
 										<span className={`gl-file-status ${f.y}`}>{f.y}</span>
 										<span className="gl-file-path">{f.path}</span>
 									</button>
@@ -484,7 +522,12 @@ export function GitLens() {
 									<span>未跟踪 ({status.untracked.length})</span>
 								</div>
 								{status.untracked.map((f) => (
-									<button key={f.path} type="button" className="gl-file-item" onClick={() => openFileDiff(f.path)}>
+									<button
+										key={f.path}
+										type="button"
+										className="gl-file-item"
+										onClick={() => openFileDiff(f.path)}
+									>
 										<span className="gl-file-status Q">?</span>
 										<span className="gl-file-path">{f.path}</span>
 									</button>
@@ -514,14 +557,17 @@ export function GitLens() {
 										style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
 									>
 										<div>
-											<div style={{ fontWeight: 600, color: isCurrent ? "var(--text-accent, #38bdf8)" : undefined }}>
+											<div
+												style={{
+													fontWeight: 600,
+													color: isCurrent ? "var(--text-accent, #38bdf8)" : undefined,
+												}}
+											>
 												{isCurrent ? "● " : "○ "}
 												{b.name}
 											</div>
 											{b.upstream && (
-												<div style={{ fontSize: 11, color: "var(--text-ink-dim)" }}>
-													↑↓ {b.upstream}
-												</div>
+												<div style={{ fontSize: 11, color: "var(--text-ink-dim)" }}>↑↓ {b.upstream}</div>
 											)}
 										</div>
 										{!isCurrent && (
@@ -563,14 +609,28 @@ export function GitLens() {
 						{blameLines.length > 0 ? (
 							<div className="gl-patch-box">
 								{blameLines.map((line) => (
-									<div key={`${line.sha}-${line.finalLine}`} style={{ display: "flex", gap: 8, padding: "2px 0" }}>
+									<div
+										key={`${line.sha}-${line.finalLine}`}
+										style={{ display: "flex", gap: 8, padding: "2px 0" }}
+									>
 										<span style={{ color: "var(--text-accent, #60a5fa)", width: 55, flexShrink: 0 }}>
 											{line.sha.slice(0, 7)}
 										</span>
-										<span style={{ color: "var(--text-ink-dim)", width: 80, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+										<span
+											style={{
+												color: "var(--text-ink-dim)",
+												width: 80,
+												flexShrink: 0,
+												overflow: "hidden",
+												textOverflow: "ellipsis",
+												whiteSpace: "nowrap",
+											}}
+										>
 											{line.author}
 										</span>
-										<span style={{ width: 35, textAlign: "right", color: "var(--text-ink-dim)", flexShrink: 0 }}>
+										<span
+											style={{ width: 35, textAlign: "right", color: "var(--text-ink-dim)", flexShrink: 0 }}
+										>
 											{line.finalLine}
 										</span>
 										<span style={{ flex: 1, whiteSpace: "pre" }}>{line.content}</span>
@@ -590,7 +650,16 @@ export function GitLens() {
 							<button type="button" className="gl-back-btn" onClick={() => setSheet(null)}>
 								← 返回
 							</button>
-							<span style={{ fontWeight: 600, fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+							<span
+								style={{
+									fontWeight: 600,
+									fontSize: 13,
+									flex: 1,
+									overflow: "hidden",
+									textOverflow: "ellipsis",
+									whiteSpace: "nowrap",
+								}}
+							>
 								{sheet.title}
 							</span>
 						</div>
@@ -598,15 +667,29 @@ export function GitLens() {
 						{sheet.type === "commit" && (
 							<div>
 								{sheet.data?.commit && (
-									<div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: "1px solid var(--border-border)" }}>
+									<div
+										style={{
+											marginBottom: 12,
+											paddingBottom: 10,
+											borderBottom: "1px solid var(--border-border)",
+										}}
+									>
 										<div style={{ fontWeight: 600, marginBottom: 4 }}>{sheet.data.commit.subject}</div>
 										{sheet.data.commit.body && (
-											<div style={{ fontSize: 12, color: "var(--text-ink-dim)", whiteSpace: "pre-wrap", marginBottom: 6 }}>
+											<div
+												style={{
+													fontSize: 12,
+													color: "var(--text-ink-dim)",
+													whiteSpace: "pre-wrap",
+													marginBottom: 6,
+												}}
+											>
 												{sheet.data.commit.body}
 											</div>
 										)}
 										<div style={{ fontSize: 11, color: "var(--text-ink-dim)" }}>
-											{sheet.data.commit.author} · {sheet.data.commit.authorDate?.slice(0, 16).replace("T", " ")}
+											{sheet.data.commit.author} ·{" "}
+											{sheet.data.commit.authorDate?.slice(0, 16).replace("T", " ")}
 										</div>
 									</div>
 								)}

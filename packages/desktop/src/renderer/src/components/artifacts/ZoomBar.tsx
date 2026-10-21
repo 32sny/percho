@@ -6,11 +6,7 @@ export interface ZoomBarProps {
 	onReset: () => void;
 }
 
-export const ZoomBar = memo(function ZoomBar({
-	zoom,
-	onZoomChange,
-	onReset,
-}: ZoomBarProps) {
+export const ZoomBar = memo(function ZoomBar({ zoom, onZoomChange, onReset }: ZoomBarProps) {
 	const [presetOpen, setPresetOpen] = useState(false);
 	const PRESETS = [50, 75, 100, 125, 150, 200];
 
@@ -22,9 +18,7 @@ export const ZoomBar = memo(function ZoomBar({
 	return (
 		<footer className="art-zoombar">
 			<div className="art-zoombar-left">
-				<span className="art-zoombar-pill">
-					{zoom}% 缩放
-				</span>
+				<span className="art-zoombar-pill">{zoom}% 缩放</span>
 			</div>
 
 			<div className="art-zoombar-right">
@@ -78,12 +72,7 @@ export const ZoomBar = memo(function ZoomBar({
 					)}
 				</div>
 
-				<button
-					type="button"
-					className="art-zoom-btn"
-					onClick={() => handleStep(10)}
-					title="放大 (Zoom In)"
-				>
+				<button type="button" className="art-zoom-btn" onClick={() => handleStep(10)} title="放大 (Zoom In)">
 					＋
 				</button>
 

@@ -24,7 +24,10 @@ export function loadEsbuild(): Promise<typeof import("esbuild")> {
 				resourceRoot,
 				`app.asar.unpacked/node_modules/esbuild/node_modules/@esbuild/${process.platform}-${process.arch}/${bin}`,
 			),
-			join(resourceRoot, `app.asar.unpacked/node_modules/@esbuild/${process.platform}-${process.arch}/${bin}`),
+			join(
+				resourceRoot,
+				`app.asar.unpacked/node_modules/@esbuild/${process.platform}-${process.arch}/${bin}`,
+			),
 			join(
 				resourceRoot,
 				`app.asar.unpacked/node_modules/@esbuild/${process.platform}-${process.arch}/bin/${bin}`,

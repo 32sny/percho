@@ -390,7 +390,9 @@ describe("V07 complete plugin contract guard (no import of side-effectful host A
 				fixture,
 				`import * as A from "@percho/plugin-api";\n${aliases.join("\n")}\n${assetChecks.join("\n")}\ndeclare const tool: A.UIToolCall; declare const run: A.SubagentRunUi;\nconst end: number | undefined = tool.endedAt; const diff: string | undefined = tool.diff;\nconst thinking: string | undefined = run.thinkingLevel; const store: unknown = A.useProjectsStore;`,
 			);
-			const declaration = fileURLToPath(new URL("../../../resources/ui-plugins/percho-ui.d.ts", import.meta.url));
+			const declaration = fileURLToPath(
+				new URL("../../../resources/ui-plugins/percho-ui.d.ts", import.meta.url),
+			);
 			const program = ts.createProgram([fixture, declaration], {
 				strict: true,
 				noEmit: true,

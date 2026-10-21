@@ -1,0 +1,10 @@
+# Keep checked source identical to Biome/CI output even when core.autocrlf is enabled.
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.css text eol=lf

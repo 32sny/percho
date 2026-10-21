@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import type { SessionMessage } from "@percho/shared";
+import { describe, expect, it } from "vitest";
 import { buildSessionTranscript } from "../src/session/transcript";
 
 /**
@@ -25,7 +25,10 @@ function assistant(
 
 describe("buildSessionTranscript · 分节格式", () => {
 	it("用户/助手消息按序分节，正文原样", () => {
-		const md = buildSessionTranscript([user("帮我查一下构建为什么失败"), assistant("看了日志，是 TypeScript 报错。")]);
+		const md = buildSessionTranscript([
+			user("帮我查一下构建为什么失败"),
+			assistant("看了日志，是 TypeScript 报错。"),
+		]);
 
 		expect(md).toContain("## 用户");
 		expect(md).toContain("帮我查一下构建为什么失败");

@@ -66,10 +66,10 @@ import {
 	TODO_TOOL_NAME,
 	type TodoItem,
 } from "@percho/shared";
+import { prewarmAntigravityProvider } from "./antigravity-prewarm";
 import { ChannelSubscriptionRegistry } from "./channel-subscriptions";
 import { Emitter } from "./emitter";
 import { createLogger } from "./log";
-import { prewarmAntigravityProvider } from "./antigravity-prewarm";
 import { listMcpServers, removeMcpServer, upsertMcpServer } from "./mcp/config-store";
 import { parseMcpNotice } from "./mcp/notices";
 import { PackageAdmin } from "./packages/admin";
@@ -96,8 +96,8 @@ import {
 	resolveRecallEntryId,
 	toBranchSessionMessages,
 } from "./session/messages";
-import { autoNameSession } from "./session/naming";
 import { moveSessionFile } from "./session/move-session";
+import { autoNameSession } from "./session/naming";
 import { EventRateTracker } from "./session/rates";
 import {
 	type EventForwarder,
@@ -106,16 +106,16 @@ import {
 	SessionRegistry,
 } from "./session/registry";
 import { renameSessionFile } from "./session/rename";
-import { buildSessionTranscript } from "./session/transcript";
 import { emitSessionShutdown } from "./session/shutdown";
 import { KeyedSingleFlight } from "./session/single-flight";
 import { StreamGuard } from "./session/stream-guard";
 import { TraceRecorder } from "./session/trace";
 import { SessionTraces } from "./session/traces";
+import { buildSessionTranscript } from "./session/transcript";
 import { makeUiContext } from "./session/ui-context";
+import { syncAgentFileField } from "./settings/agent-file-sync";
 import { LoginService } from "./settings/login";
 import { ModelPrefsService } from "./settings/model-prefs";
-import { syncAgentFileField } from "./settings/agent-file-sync";
 import { makeQuotaService } from "./settings/quota";
 import { SettingsService } from "./settings/settings";
 import { slashCommandsForLoader, slashCommandsForSession } from "./slash-commands";
@@ -972,7 +972,11 @@ export class PiBackend {
 		// 白名单过滤（字母/数字/空格/-/_/点/中文等非 ASCII）而非黑名单正则，避开 no-control-regex。
 		const sessionName = entry?.session.sessionManager.getSessionName()?.trim();
 		const base = sessionName ? `${sessionName}-${sessionId.slice(0, 8)}` : sessionId;
-		const safeBase = [...base].filter((ch) => /[\w\-. ]/.test(ch) || ch.charCodeAt(0) > 127).join("").slice(0, 80) || sessionId;
+		const safeBase =
+			[...base]
+				.filter((ch) => /[\w\-. ]/.test(ch) || ch.charCodeAt(0) > 127)
+				.join("")
+				.slice(0, 80) || sessionId;
 		const path = join(dir, `${safeBase}.md`);
 		await writeFile(path, buildSessionTranscript(messages), "utf8");
 		return { path };

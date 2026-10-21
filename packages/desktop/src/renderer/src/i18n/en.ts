@@ -296,7 +296,8 @@ export const en: Messages = {
 		copyDiagnostics: "Copy diagnostics",
 		move: "Move to project…",
 		moveTitle: "Move to project",
-		moveDesc: "Pick the project this session should belong to. The session will run in that project's directory afterwards.",
+		moveDesc:
+			"Pick the project this session should belong to. The session will run in that project's directory afterwards.",
 		moveEmpty: "No other projects yet.",
 		delete: "Delete session",
 		deleteTitle: "Delete this session?",

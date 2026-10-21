@@ -1,7 +1,7 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useUiStore } from "../../stores/ui";
-import { useArtifacts } from "./useArtifacts";
 import { TopBar } from "./TopBar";
+import { useArtifacts } from "./useArtifacts";
 import { Viewport } from "./Viewport";
 import { ZoomBar } from "./ZoomBar";
 import "./ArtifactsDrawer.css";
@@ -61,31 +61,37 @@ export function ArtifactsDrawer() {
 		return () => window.removeEventListener("keydown", onKeyDown);
 	}, [isOpen, setOpen]);
 
-	const onPointerDownResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-		if (e.button !== 0 || isExpanded) return;
-		draggingRef.current = true;
-		handleRef.current = e.currentTarget;
-		pointerIdRef.current = e.pointerId;
-		startXRef.current = e.clientX;
-		startWidthRef.current = width;
-		e.currentTarget.setPointerCapture(e.pointerId);
-		document.body.style.cursor = "col-resize";
-		setResizing(true);
-		e.preventDefault();
-	}, [width, isExpanded]);
+	const onPointerDownResize = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			if (e.button !== 0 || isExpanded) return;
+			draggingRef.current = true;
+			handleRef.current = e.currentTarget;
+			pointerIdRef.current = e.pointerId;
+			startXRef.current = e.clientX;
+			startWidthRef.current = width;
+			e.currentTarget.setPointerCapture(e.pointerId);
+			document.body.style.cursor = "col-resize";
+			setResizing(true);
+			e.preventDefault();
+		},
+		[width, isExpanded],
+	);
 
-	const onPointerMoveResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-		if (!draggingRef.current) return;
-		if (e.buttons === 0) {
-			finishResize();
-			return;
-		}
-		const delta = startXRef.current - e.clientX;
-		const maxWidth = Math.round(window.innerWidth * 0.9);
-		const nextWidth = Math.max(360, Math.min(maxWidth, startWidthRef.current + delta));
-		setWidth(nextWidth);
-		localStorage.setItem("percho_artifacts_drawer_width", String(nextWidth));
-	}, [finishResize]);
+	const onPointerMoveResize = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			if (!draggingRef.current) return;
+			if (e.buttons === 0) {
+				finishResize();
+				return;
+			}
+			const delta = startXRef.current - e.clientX;
+			const maxWidth = Math.round(window.innerWidth * 0.9);
+			const nextWidth = Math.max(360, Math.min(maxWidth, startWidthRef.current + delta));
+			setWidth(nextWidth);
+			localStorage.setItem("percho_artifacts_drawer_width", String(nextWidth));
+		},
+		[finishResize],
+	);
 
 	const toggleExpand = useCallback(() => {
 		setIsExpanded((prev) => !prev);
@@ -122,18 +128,10 @@ export function ArtifactsDrawer() {
 				onClose={() => setOpen(false)}
 			/>
 
-			<Viewport
-				artifact={activeArtifact}
-				viewMode={viewMode}
-				zoom={zoom}
-			/>
+			<Viewport artifact={activeArtifact} viewMode={viewMode} zoom={zoom} />
 
 			{activeArtifact?.previewable && viewMode === "preview" && (
-				<ZoomBar
-					zoom={zoom}
-					onZoomChange={setZoom}
-					onReset={() => setZoom(100)}
-				/>
+				<ZoomBar zoom={zoom} onZoomChange={setZoom} onReset={() => setZoom(100)} />
 			)}
 		</aside>
 	);

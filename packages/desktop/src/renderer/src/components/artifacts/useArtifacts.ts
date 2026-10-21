@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSessionsStore } from "../../stores/sessions";
 import { useTranscriptStore } from "../../stores/transcript";
 import { useUiStore } from "../../stores/ui";
@@ -170,12 +170,14 @@ export function useArtifacts() {
 		}
 		// 如果有 diffFocus 触发，优先匹配对应的文件
 		if (diffFocus?.sectionKey) {
-			const focusMatched = artifacts.find((a) => a.toolKey === diffFocus.sectionKey || a.path.includes(diffFocus.sectionKey));
+			const focusMatched = artifacts.find(
+				(a) => a.toolKey === diffFocus.sectionKey || a.path.includes(diffFocus.sectionKey),
+			);
 			if (focusMatched) return focusMatched;
 		}
 		// 默认首选第一个可预览项，否则取第一个
 		const firstPreviewable = artifacts.find((a) => a.previewable);
-		return firstPreviewable || artifacts[0];
+		return firstPreviewable || artifacts[0]!; // The empty-array guard above guarantees the first artifact exists.
 	}, [artifacts, activeArtifactId, diffFocus]);
 
 	return {

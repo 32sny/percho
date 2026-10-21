@@ -1,6 +1,6 @@
-import { memo, useState, useCallback } from "react";
-import type { ArtifactItem } from "./useArtifacts";
+import { memo, useCallback, useState } from "react";
 import { CloseIcon } from "../icons";
+import type { ArtifactItem } from "./useArtifacts";
 
 export interface TopBarProps {
 	artifacts: ArtifactItem[];
@@ -63,12 +63,8 @@ export const TopBar = memo(function TopBar({
 						onClick={() => setDropdownOpen(!dropdownOpen)}
 						title="点击切换产物文件"
 					>
-						<span className="art-file-name">
-							{activeArtifact ? activeArtifact.fileName : "暂无产物"}
-						</span>
-						{artifacts.length > 1 && (
-							<span className="art-badge-count">{artifacts.length}</span>
-						)}
+						<span className="art-file-name">{activeArtifact ? activeArtifact.fileName : "暂无产物"}</span>
+						{artifacts.length > 1 && <span className="art-badge-count">{artifacts.length}</span>}
 						<span style={{ fontSize: 10, opacity: 0.6 }}>▼</span>
 					</button>
 
@@ -99,7 +95,16 @@ export const TopBar = memo(function TopBar({
 												setDropdownOpen(false);
 											}}
 										>
-											<div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1, textAlign: "left" }}>
+											<div
+												style={{
+													display: "flex",
+													alignItems: "center",
+													gap: 6,
+													minWidth: 0,
+													flex: 1,
+													textAlign: "left",
+												}}
+											>
 												<span style={{ fontSize: 13 }}>
 													{item.fileType === "html" ? "🌐" : item.fileType === "svg" ? "🎨" : "📄"}
 												</span>
@@ -108,9 +113,7 @@ export const TopBar = memo(function TopBar({
 													<div className="art-dropdown-item-path">{item.path}</div>
 												</div>
 											</div>
-											{item.previewable && (
-												<span className="art-badge-previewable">可预览</span>
-											)}
+											{item.previewable && <span className="art-badge-previewable">可预览</span>}
 										</button>
 									))}
 								</div>
@@ -170,12 +173,7 @@ export const TopBar = memo(function TopBar({
 					{isExpanded ? "⤓" : "⤢"}
 				</button>
 
-				<button
-					type="button"
-					className="art-icon-action-btn"
-					onClick={onClose}
-					title="关闭工作台"
-				>
+				<button type="button" className="art-icon-action-btn" onClick={onClose} title="关闭工作台">
 					<CloseIcon />
 				</button>
 			</div>
