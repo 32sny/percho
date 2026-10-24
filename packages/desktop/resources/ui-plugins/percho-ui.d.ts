@@ -129,6 +129,7 @@ declare module "@percho/plugin-api" {
 		task?: string;
 		status: "running" | "done" | "error";
 		model?: string;
+		agentId?: string;
 		thinkingLevel?: string;
 		tokens?: number;
 		exitCode?: number;

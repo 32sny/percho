@@ -2,6 +2,7 @@ import { buildStreamGuardUiError, type UiError } from "../errors";
 import type { ImageInput, SessionEvent } from "../session";
 import { parseExpandedSkillInvocation } from "../skill-invocation";
 import { extractSubagentRuns } from "../subagent";
+import { applySubagentNotification, parseSubagentNotification } from "../subagent-notification";
 import { extractTodos, TODO_TOOL_NAME } from "../todo";
 import {
 	emptyStreaming,
@@ -40,6 +41,39 @@ function withStreaming(
 	const streaming = fn(state.streaming);
 	if (streaming === state.streaming) return state;
 	return { ...state, streaming };
+}
+
+/**
+ * 后台子代理完成通知落地：pi-subagents 在每个后台子代理跑完后投递一条 custom 消息
+ * （`<task-notification>`，内含 `<tool-use-id>` 与 `<task-id>`），它不会回头更新当初那次
+ * Agent 工具的结果——所以派工瞬间立起来的 running 行只能在这里按 id 收尾。已提交的
+ * 独立子代理消息（kind=subagent）与正在流式的那批行都要覆盖。
+ */
+function applySubagentNotificationToState(
+	state: SessionTranscriptState,
+	content: unknown,
+): SessionTranscriptState {
+	const notif = parseSubagentNotification(content);
+	if (!notif) return state;
+	let touched = false;
+	const messages = state.messages.map((message) => {
+		if (message.kind !== "subagent") return message;
+		const runs = applySubagentNotification(message.runs, notif, (run) => run.key);
+		if (!runs) return message;
+		touched = true;
+		return { ...message, runs };
+	});
+	const streaming = state.streaming;
+	const streamRuns =
+		streaming && streaming.subagentRuns.length > 0
+			? applySubagentNotification(streaming.subagentRuns, notif, (run) => run.key)
+			: null;
+	if (!touched && !streamRuns) return state;
+	return {
+		...state,
+		messages: touched ? messages : state.messages,
+		...(streamRuns && streaming ? { streaming: { ...streaming, subagentRuns: streamRuns } } : {}),
+	};
 }
 
 /** 按 toolCallId 定点补丁工具条目（无命中原样返回） */
@@ -307,6 +341,11 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 			};
 		}
 		case "message_start": {
+			// 后台子代理完成通知（pi-subagents 的 custom 消息）：不产气泡，只把对应的
+			// running 行收尾成 done/error 并补 token。命中不了就原样返回。
+			if (event.message.role === "custom") {
+				return applySubagentNotificationToState(state, event.message.content);
+			}
 			// 防御：assistant 消息开始但容器不存在时（如 turn_start 缺失）补建
 			if (event.message.role === "assistant" && !state.streaming) {
 				state = {

@@ -42,6 +42,7 @@ interface SubagentRunUi {
 	task?: string;
 	status: "running" | "done" | "error";
 	model?: string;
+	agentId?: string;  // pi-subagents 的后台 agent id（可喂给 steer/get_subagent_result）
 	thinkingLevel?: string;
 	tokens?: number;
 	exitCode?: number;

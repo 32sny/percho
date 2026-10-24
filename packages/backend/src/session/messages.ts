@@ -1,8 +1,10 @@
 import { parseSessionEntries, type SessionEntry, type SessionManager } from "@earendil-works/pi-coding-agent";
 import {
+	applySubagentNotification,
 	extractSubagentRuns,
 	type ImageInput,
 	parseExpandedSkillInvocation,
+	parseSubagentNotification,
 	type SessionMessage,
 	type SessionToolCall,
 } from "@percho/shared";
@@ -227,6 +229,24 @@ export function toSessionMessages(rawMessages: readonly unknown[]): SessionMessa
 	const out: SessionMessage[] = [];
 	const toolById = new Map<string, SessionToolCall>();
 	for (const raw of rawMessages as RawMessage[]) {
+		// pi-subagents 后台完成通知（custom 消息）：不产气泡，只把更早那条仍标着"运行中"的
+		// 子代理消息收尾。历史行没有 toolCallId 键，只能按通知里的 <task-id>（agentId）匹配。
+		if (raw.role === "custom" && raw.customType === "subagent-notification") {
+			const content = typeof raw.content === "string" ? raw.content : blockText(raw.content);
+			const notif = parseSubagentNotification(content);
+			if (notif) {
+				for (let i = out.length - 1; i >= 0; i--) {
+					const candidate = out[i];
+					if (candidate?.role !== "subagent") continue;
+					const runs = applySubagentNotification(candidate.runs, notif);
+					if (runs) {
+						candidate.runs = runs;
+						break;
+					}
+				}
+			}
+			continue;
+		}
 		if (raw.role === "compaction") {
 			// 历史回放的压缩分割线（实时路径由 compaction_start/end 事件产生）
 			out.push({

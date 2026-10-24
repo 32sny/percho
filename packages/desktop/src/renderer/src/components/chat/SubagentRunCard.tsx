@@ -8,6 +8,13 @@ function displayName(name: string): string {
 	return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+/** 紧凑 token 数：13200 → "13.2k token"（与 pi-subagents 自己的显示口径一致） */
+function formatTokens(count: number): string {
+	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M token`;
+	if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k token`;
+	return `${count} token`;
+}
+
 /** 单个子代理行：状态点（工作中呼吸动画 / 完成勾 / 失败红点）+ 加粗名称 + 状态；有会话文件时可点击打开 */
 function SubagentRunRow({ run }: { run: SubagentRunUi }) {
 	const t = useT();
@@ -27,6 +34,9 @@ function SubagentRunRow({ run }: { run: SubagentRunUi }) {
 		<button
 			type="button"
 			disabled={!clickable}
+			// 后台派工时这一行就是"派工回执"：agent id 是 steer_subagent / get_subagent_result
+			// 的唯一凭据，但卡片本身不展示它（太长），挂 hover 提示里供复制。
+			title={run.agentId}
 			// 推入过渡：子代理页从右向左滑入（父页同时向左滑出，见 lib/session-page-slide.ts）
 			onClick={() => {
 				if (!clickable || !run.sessionFile) return;
@@ -48,6 +58,10 @@ function SubagentRunRow({ run }: { run: SubagentRunUi }) {
 				<span className="shrink-0 text-ui-11 text-ink-faint">
 					{t(`thinkingLevels.${run.thinkingLevel}` as MessageKey)}
 				</span>
+			)}
+			{run.model && <span className="shrink-0 text-ui-11 text-ink-faint">{run.model}</span>}
+			{run.tokens != null && (
+				<span className="shrink-0 text-ui-11 text-ink-faint">{formatTokens(run.tokens)}</span>
 			)}
 			<span className="shrink-0 text-ui-11 text-ink-faint">{statusLabel}</span>
 		</button>

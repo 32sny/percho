@@ -7,8 +7,10 @@ export interface SubagentRunData {
 	/** 子代理名（如 reviewer / scout） */
 	agent: string;
 	task?: string;
-	status: "done" | "error";
+	status: "running" | "done" | "error";
 	model?: string;
+	/** pi-subagents 的 agent id（后台派工返回的 Agent ID；完成通知按它回填状态） */
+	agentId?: string;
 	/** 子会话实际生效的思考档位（单次运行元信息） */
 	thinkingLevel?: string;
 	/** 子代理消耗的 token 数 */
@@ -27,6 +29,21 @@ export interface SubagentRunData {
  */
 export function isSubagentToolName(name: string): boolean {
 	return name === "subagent" || name.startsWith("subagent_");
+}
+
+/**
+ * pi-subagents 的 `Agent` 工具把 token 数做成显示字符串（"208.1k token" / "1.2M token"），
+ * 卡片要数字，这里按 k/M 还原；解析不出来就不显示，不猜。
+ */
+function parseCompactTokens(value: unknown): number | undefined {
+	if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+	if (typeof value !== "string") return undefined;
+	const match = /^([\d.]+)\s*([kKmM]?)/.exec(value.trim());
+	if (!match) return undefined;
+	const amount = Number(match[1] ?? "");
+	if (!Number.isFinite(amount)) return undefined;
+	const unit = (match[2] ?? "").toLowerCase();
+	return Math.round(amount * (unit === "k" ? 1_000 : unit === "m" ? 1_000_000 : 1));
 }
 
 /**
@@ -142,6 +159,49 @@ export function extractSubagentRuns(details: unknown): SubagentRunData[] | null 
 				sessionFile ?? (typeof artifactPaths?.jsonlPath === "string" ? artifactPaths.jsonlPath : undefined),
 			tokens: tokenValue,
 		});
+	}
+
+	// pi-subagents 的 `Agent` 工具（前台/后台派工）：details 是扁平的 AgentDetails
+	// （subagentType/description/toolUses/tokens 字符串/status/modelName/tags），没有 results[]。
+	// 只在上面两种形状都没命中时兜底，不影响既有 subagent 家族。
+	if (runs.length === 0) {
+		// SAFETY: details 是工具结果（unknown），这里只做"形状探测"：先按 AgentDetails 的字段名取值，
+		// 每个字段取用前都再过一次 typeof/Array.isArray，断言只负责给字段名，不给字段类型。
+		const flat = d as unknown as {
+			subagentType?: unknown;
+			description?: unknown;
+			status?: unknown;
+			modelName?: unknown;
+			tags?: unknown;
+			tokens?: unknown;
+			sessionFile?: unknown;
+			agentId?: unknown;
+		};
+		const status = typeof flat.status === "string" ? flat.status : undefined;
+		// 三种进行态（running/queued/background）也出行：后台派工一次性返回、之后不再更新工具结果，
+		// 行先在派工瞬间立起来（status=running），完成时由 `subagent-notification` 按 tool-use-id 回填。
+		const pending = status === "running" || status === "queued" || status === "background";
+		if (typeof flat.subagentType === "string" && status) {
+			const tags = Array.isArray(flat.tags)
+				? flat.tags.filter((tag): tag is string => typeof tag === "string")
+				: [];
+			const thinkingTag = tags.find((tag) => tag.startsWith("thinking:"));
+			runs.push({
+				agent: flat.subagentType,
+				task:
+					typeof flat.description === "string" && flat.description.length > 0 ? flat.description : undefined,
+				status: pending ? "running" : status === "error" ? "error" : "done",
+				model: typeof flat.modelName === "string" ? flat.modelName : undefined,
+				agentId: typeof flat.agentId === "string" ? flat.agentId : undefined,
+				thinkingLevel: thinkingTag ? thinkingTag.slice("thinking:".length).trim() : undefined,
+				tokens: parseCompactTokens(flat.tokens),
+				exitCode: !pending && status === "error" ? 1 : undefined,
+				artifactsDir,
+				// 上游 AgentDetails 目前不带会话路径；等 pi-subagents 补上（或本地 fork 加）后，
+				// 这一行会自动让卡片可点开，不需要再改这里。
+				sessionFile: typeof flat.sessionFile === "string" ? flat.sessionFile : undefined,
+			});
+		}
 	}
 	return runs.length > 0 ? runs : null;
 }
