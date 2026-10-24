@@ -11,13 +11,20 @@ if not exist "%REPO_ROOT%\packages\desktop" (
 )
 
 cd /d "%REPO_ROOT%\packages\desktop"
-rem Clear Percho's injected esbuild path so this process uses the project dependency.
+rem Clear injected env inherited from the parent shell:
+rem  - ESBUILD_BINARY_PATH: forces this process to use the project dependency
+rem  - ELECTRON_RUN_AS_NODE: makes electron run as plain node, which fails with
+rem    "does not provide an export named 'BrowserWindow'"
 set "ESBUILD_BINARY_PATH="
+set "ELECTRON_RUN_AS_NODE="
 echo [INFO] Starting Percho dev server...
 echo [INFO] Close this window or press Ctrl+C to stop.
 echo.
 
-call npx electron-vite dev
+rem "npm run dev" runs predev -> build:lan-web first (src/main/lan.ts imports the built
+rem lan-web/index.html). Calling electron-vite directly skips that step and fails with
+rem "Could not resolve ../lan-web/dist/lan-web/index.html?raw".
+call npm run dev
 
 if errorlevel 1 (
     echo.
