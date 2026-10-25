@@ -27,12 +27,11 @@ describe("autoNameSession", () => {
 		expect(calls).toEqual(["帮我修复登录 bug"]);
 	});
 
-	it("超过 30 字截断加省略号", () => {
+	it("长首行完整保存，包含 Emoji 且不受预览 128KiB 限制", () => {
 		const { session, calls } = makeSession();
-		autoNameSession(session, userMsg("这是一个非常非常长的标题它一定会超过三十个字符的限制所以应该被截断"));
-		expect(calls).toHaveLength(1);
-		expect(calls[0]).toHaveLength(31);
-		expect(calls[0]?.endsWith("…")).toBe(true);
+		const title = `这是完整标题😀${"长".repeat(50_000)}`;
+		autoNameSession(session, userMsg(`${title}\n第二行不进入标题`));
+		expect(calls).toEqual([title]);
 	});
 
 	it("已有会话名时不再命名", () => {
@@ -76,6 +75,12 @@ describe("autoNameSession", () => {
 			),
 		);
 		expect(calls).toEqual(["/skill:mindmap"]);
+	});
+
+	it("疑似残缺 Skill 不用内联正文命名", () => {
+		const { session, calls } = makeSession();
+		autoNameSession(session, userMsg('  <skill name="private" location="/secret">\n机密正文'));
+		expect(calls).toEqual([]);
 	});
 
 	it("纯图片消息不命名，后续文本消息仍可命名", () => {

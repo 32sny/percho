@@ -329,6 +329,34 @@ export const en: Messages = {
 		/** Per-group "show more" button at the end of the list (16 more rows each click) */
 		showMore: "Show more",
 	},
+	sessionHover: {
+		keyboardHint: "When focused, press Tab for session details; Escape closes them.",
+		cardHint: "Select text to copy · Shift+Tab returns to the row · Esc closes",
+		copyTitle: "Copy full title",
+		copied: "Title copied",
+		copyFailed: "Could not copy. Select the text and copy it manually.",
+		loading: "Reading the first question…",
+		firstQuestion: "First question (current branch, first line)",
+		model: "Model",
+		directory: "Directory",
+		created: "Created",
+		modified: "Last activity",
+		status: {
+			attention: "Awaiting response",
+			working: "Working",
+			done: "Completed · unread",
+			idle: "Idle",
+			unloaded: "Not loaded / no live status",
+		},
+		unavailable: {
+			notFound: "Session history was not found. The first question is unavailable.",
+			identityMismatch: "Session details do not match. The first question has not been shown.",
+			invalidHistory: "Session history could not be read reliably. The first question is unavailable.",
+			readFailed: "The first question is temporarily unavailable. Please try again later.",
+			limitExceeded: "This session is large, so the first question preview is unavailable. Open the session to view it.",
+			unsafeProjection: "The first question cannot be displayed safely. Open the session to view it.",
+		},
+	},
 	projects: {
 		daily: "Daily",
 		untitled: "Untitled session",
@@ -397,6 +425,9 @@ export const en: Messages = {
 		centerOrb: "Centered status animation",
 		centerOrbHint:
 			"While a task is running, shows an enlarged status animation at the center of the conversation area (above the text, with a translucent scrim dimming whatever is behind it). Only controls the centered animation — the small orb before the Working/Thinking row always stays.",
+		sessionHoverEnabled: "Session title hover card",
+		sessionHoverEnabledHint:
+			"Hovering a session row in the left sidebar shows a detail card (on by default): full title, run status, first question, working directory and times. Keyboard focus works too. Read-only — it never switches sessions or triggers the model; press Esc or move away to close.",
 		lan: {
 			title: "Cross-device",
 			hint: "View live agent progress from your phone on a trusted local network. Off by default; the access token rotates every time it is enabled.",

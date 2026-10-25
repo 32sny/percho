@@ -114,6 +114,19 @@ describe("useUiPreferencesStore", () => {
 			expect(piMock.saveUiState).toHaveBeenLastCalledWith({ state: { sessionRailEnabled: true } });
 		});
 
+		it("悬停详情卡：默认开、可关闭并落盘补丁（与其他开关独立）", async () => {
+			piMock.loadUiState.mockResolvedValue({});
+			await useUiPreferencesStore.getState().init();
+			expect(useUiPreferencesStore.getState().sessionHoverEnabled).toBe(true);
+
+			useUiPreferencesStore.getState().setSessionHoverEnabled(false);
+			expect(useUiPreferencesStore.getState().sessionHoverEnabled).toBe(false);
+			expect(piMock.saveUiState).toHaveBeenLastCalledWith({ state: { sessionHoverEnabled: false } });
+			// 不影响其他显示开关
+			expect(useUiPreferencesStore.getState().barSessionsVisible).toBe(true);
+			expect(useUiPreferencesStore.getState().sessionRailEnabled).toBe(false);
+		});
+
 		it("四项各自落盘补丁（顶栏显隐 / 收起 / 展开分组 / 项目置顶）", () => {
 			const store = useUiPreferencesStore.getState();
 			store.setBarSessionsVisible(false);

@@ -323,6 +323,34 @@ export const zh = {
 		/** 每组末尾「显示更多」按钮（每次多显示 16 条） */
 		showMore: "显示更多",
 	},
+	sessionHover: {
+		keyboardHint: "聚焦后按 Tab 查看会话详情，Esc 关闭。",
+		cardHint: "文字可选择复制 · Shift+Tab 返回会话行 · Esc 关闭",
+		copyTitle: "复制完整标题",
+		copied: "已复制标题",
+		copyFailed: "复制失败，请选中文字后复制。",
+		loading: "正在读取首条提问…",
+		firstQuestion: "首条提问（当前分支首行）",
+		model: "模型",
+		directory: "目录",
+		created: "创建",
+		modified: "最后活动",
+		status: {
+			attention: "等待应答",
+			working: "工作中",
+			done: "完成未读",
+			idle: "空闲",
+			unloaded: "未加载 / 无实时状态",
+		},
+		unavailable: {
+			notFound: "会话记录未找到，首条提问暂不可用。",
+			identityMismatch: "会话信息不匹配，未显示首条提问。",
+			invalidHistory: "会话记录格式异常，首条提问暂不可用。",
+			readFailed: "首条提问暂不可用，请稍后再试。",
+			limitExceeded: "此会话较大，首条提问预览暂不可用；可进入会话查看。",
+			unsafeProjection: "无法安全展示首条提问；可进入会话查看。",
+		},
+	},
 	projects: {
 		daily: "日常",
 		untitled: "未命名会话",
@@ -391,6 +419,9 @@ export const zh = {
 		centerOrb: "居中放大状态动画",
 		centerOrbHint:
 			"任务运行时在对话区域中央显示放大的状态动画（盖在文字之上，半透明遮罩压暗身后文字——工作时专心看动画即可）。只控制中央动画，Working/Thinking 状态行前的小动画始终显示。",
+		sessionHoverEnabled: "会话标题悬停详情",
+		sessionHoverEnabledHint:
+			"鼠标停在左侧会话条目上时弹出详情卡（默认开）：完整标题、运行状态、首条提问、目录与时间，键盘聚焦同样可查看。只是只读展示，不会切换会话或触发模型；Esc 或移开即关闭。",
 		lan: {
 			title: "跨设备互联",
 			hint: "在可信局域网内，用手机实时查看 agent 的运行进度。默认关闭；每次开启会轮换访问令牌。",

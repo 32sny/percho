@@ -105,6 +105,18 @@ describe("sessionWorkspace 白名单（临时会话工作区）", () => {
 		expect(state?.barSessionsVisible).toBe(true);
 	});
 
+	it("悬停详情卡缺字段的旧文件按开启处理，显式 false 才关", async () => {
+		writeFileSync(file(), "{}");
+		expect((await loadUiState())?.sessionHoverEnabled).toBe(true);
+
+		writeFileSync(file(), JSON.stringify({ sessionHoverEnabled: false }));
+		expect((await loadUiState())?.sessionHoverEnabled).toBe(false);
+
+		// 脏值（非布尔）不采信，回落默认开
+		writeFileSync(file(), JSON.stringify({ sessionHoverEnabled: "off" }));
+		expect((await loadUiState())?.sessionHoverEnabled).toBe(true);
+	});
+
 	it("清洗 files：trim、去空、去重保序；activeFile 必须 ∈ files（否则 null）", async () => {
 		writeFileSync(
 			file(),

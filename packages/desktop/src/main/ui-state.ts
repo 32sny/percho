@@ -122,6 +122,9 @@ function normalize(parsed: UiStateFileShape): UiState {
 	// 轨道开关缺省 false：老用户的 `barSessionsVisible:false` 缺 rail 字段时 = 双关 → 保持关 + 工作区空
 	const sessionRailEnabled =
 		typeof parsed.sessionRailEnabled === "boolean" ? parsed.sessionRailEnabled : false;
+	// 悬停详情卡缺省开：旧版本文件没有该字段时按「开启」处理（新功能，不反向改老用户设置）
+	const sessionHoverEnabled =
+		typeof parsed.sessionHoverEnabled === "boolean" ? parsed.sessionHoverEnabled : true;
 	return {
 		lastUsedModel: model ? { provider: model.provider, modelId: model.modelId } : null,
 		lastUsedThinkingLevel: typeof level === "string" ? level : "medium",
@@ -134,6 +137,7 @@ function normalize(parsed: UiStateFileShape): UiState {
 		// 顶栏是否显示工作区胶囊（旧字段 topBarVisible 已废弃：顶栏现在常驻，不再整条隐藏）
 		barSessionsVisible,
 		sessionRailEnabled,
+		sessionHoverEnabled,
 		sessionWorkspace: workspaceSnapshot(parsed.sessionWorkspace, barSessionsVisible, sessionRailEnabled),
 		sidebarCollapsed: typeof parsed.sidebarCollapsed === "boolean" ? parsed.sidebarCollapsed : false,
 		// 侧栏宽度：脏值/越界一律归一化（手改文件、未来改上下界都在这里归一；renderer 只做渲染期夹紧、不回写）

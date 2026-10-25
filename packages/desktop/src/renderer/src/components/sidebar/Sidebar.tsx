@@ -7,6 +7,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSessionsStore } from "../../stores/sessions";
 import { useUiPreferencesStore } from "../../stores/ui-preferences";
 import { ProjectSection } from "./ProjectSection";
+import { SessionHoverProvider } from "./SessionHoverProvider";
 import { SidebarFooter } from "./SidebarFooter";
 import { SidebarGroup } from "./SidebarGroup";
 import { SidebarHeader } from "./SidebarHeader";
@@ -29,6 +30,7 @@ export function Sidebar() {
 	const t = useT();
 	const collapsed = useUiPreferencesStore((s) => s.sidebarCollapsed);
 	const sidebarWidth = useUiPreferencesStore((s) => s.sidebarWidth);
+	const sessionHoverEnabled = useUiPreferencesStore((s) => s.sessionHoverEnabled);
 	const [resizing, setResizing] = useState(false);
 	const asideRef = useRef<HTMLElement>(null);
 	const renderWidth = useSidebarRenderWidth(sidebarWidth, asideRef);
@@ -78,12 +80,19 @@ export function Sidebar() {
 	// 首次开合的起点由派生层给（当前会话所在组），组件不自己再算一遍。
 	const batching = useSidebarBatching({ search, defaults: data.defaultExpandedKeys });
 	const empty = data.daily === null && data.projects.length === 0;
+	const hoverSessions = useMemo(
+		() =>
+			[...(data.daily?.sessions ?? []), ...data.projects.flatMap((project) => project.sessions)].map(
+				(item) => item.session,
+			),
+		[data],
+	);
 
 	// 左栏唯一滚动容器的边界淡出（底部下沿淡出，原来这里是一条 1px 实线）
 	const sidebarScrollRef = useRef<HTMLDivElement>(null);
 	useEdgeFade(sidebarScrollRef);
 
-	return (
+	const content = (
 		<aside
 			ref={asideRef}
 			className={`sidebar fade-rule-v ${collapsed ? "is-collapsed" : ""} ${resizing ? "is-resizing" : ""}`}
@@ -127,5 +136,10 @@ export function Sidebar() {
 				<SidebarFooter />
 			</div>
 		</aside>
+	);
+	return (
+		<SessionHoverProvider sessions={hoverSessions} disabled={collapsed || resizing || !sessionHoverEnabled}>
+			{content}
+		</SessionHoverProvider>
 	);
 }

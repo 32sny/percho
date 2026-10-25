@@ -58,6 +58,11 @@ export interface UiState {
 	 */
 	sessionRailEnabled: boolean;
 	/**
+	 * 左侧栏会话条目**悬停详情卡**开关（缺省 true = 显示）。关掉后不再生成浮层，
+	 * 也不再请求历史首条提问预览；只影响悬停展示，不改会话数据、运行状态与导航。
+	 */
+	sessionHoverEnabled: boolean;
+	/**
 	 * 临时会话工作区快照（缺省空）。存的是**文件路径**而不是内存会话：重启只按需加载
 	 * `activeFile` 一条，其余成员靠历史目录投影画胶囊。
 	 */
@@ -142,6 +147,31 @@ export interface SessionMeta {
 	/** 最后活动时间（unix 毫秒，历史会话列表排序/分组用） */
 	modifiedAt?: number;
 }
+
+export interface SessionHoverPreviewRequest {
+	sessionId: string;
+	cwd: string;
+}
+
+export type SessionHoverPreviewResult =
+	| {
+			status: "ok";
+			sessionId: string;
+			source: "current-branch-first-user-text";
+			text: string;
+	  }
+	| { status: "empty"; sessionId: string }
+	| {
+			status: "unavailable";
+			sessionId: string;
+			reason:
+				| "not_found"
+				| "identity_mismatch"
+				| "invalid_history"
+				| "read_failed"
+				| "limit_exceeded"
+				| "unsafe_projection";
+	  };
 
 export interface SessionStats {
 	/** 累计 token 用量 */

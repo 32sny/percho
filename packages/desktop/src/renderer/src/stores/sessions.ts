@@ -12,6 +12,7 @@ import {
 	isHistoryReady,
 	retrySessionHistory,
 } from "./session-history";
+import { sessionHoverPreview } from "./session-hover-preview";
 import { createSessionLoader } from "./session-loading";
 import {
 	claimActivation,
@@ -680,6 +681,8 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 		if (!activeSessionId) return;
 		try {
 			const recalled = await getPi().recallMessage({ sessionId: activeSessionId, ref });
+			// 分支已改变即失效：随后历史重载即使失败/延后，也不能继续展示撤回前的首条提问。
+			sessionHoverPreview.invalidate(activeSessionId);
 			// 内容回填草稿：已有草稿文本时换行拼接（与排队取回一致），图片追加在尾部
 			useDraftStore.getState().updateDraft(activeSessionId, (d) => ({
 				...d,

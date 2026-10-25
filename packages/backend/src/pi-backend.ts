@@ -50,6 +50,7 @@ import type {
 	QuotaInfo,
 	SessionCloseIntent,
 	SessionEvent,
+	SessionHoverPreviewResult,
 	SessionMessage,
 	SessionMeta,
 	SessionStats,
@@ -111,6 +112,7 @@ import { KeyedSingleFlight } from "./session/single-flight";
 import { StreamGuard } from "./session/stream-guard";
 import { TraceRecorder } from "./session/trace";
 import { SessionTraces } from "./session/traces";
+import { previewLoadedSession, previewSessionFile } from "./session/title-preview";
 import { buildSessionTranscript } from "./session/transcript";
 import { makeUiContext } from "./session/ui-context";
 import { syncAgentFileField } from "./settings/agent-file-sync";
@@ -1249,6 +1251,22 @@ export class PiBackend {
 	async getSessionMessages(sessionId: string): Promise<SessionMessage[]> {
 		const entry = this.requireSession(sessionId);
 		return toBranchSessionMessages(entry.session.sessionManager.getBranch());
+	}
+
+	/** 悬停专用只读入口：精确定位，不加载/创建实例，不走全项目枚举兜底。 */
+	async getSessionHoverPreview(sessionId: string, cwd: string): Promise<SessionHoverPreviewResult> {
+		if (typeof sessionId !== "string" || !sessionId.trim() || typeof cwd !== "string" || !cwd.trim()) {
+			return { status: "unavailable", sessionId, reason: "identity_mismatch" };
+		}
+		const entry = this.registry.get(sessionId);
+		if (entry) return previewLoadedSession(sessionId, cwd, entry.cwd, entry.session.sessionManager);
+		try {
+			const file = SessionManager.findById(cwd, sessionId);
+			if (!file) return { status: "unavailable", sessionId, reason: "not_found" };
+			return await previewSessionFile(sessionId, cwd, file);
+		} catch {
+			return { status: "unavailable", sessionId, reason: "read_failed" };
+		}
 	}
 
 	/**

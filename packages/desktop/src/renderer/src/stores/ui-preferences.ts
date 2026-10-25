@@ -26,6 +26,8 @@ interface UiPreferencesStore {
 	barSessionsVisible: boolean;
 	/** 左侧会话短线轨道开关（设置页，默认**关**）；与顶栏开关各自独立，两个都关则清空工作区 */
 	sessionRailEnabled: boolean;
+	/** 左侧栏会话条目悬停详情卡开关（设置页，默认**开**）；关掉后不生成浮层、不读历史预览，也不影响点击与键盘导航 */
+	sessionHoverEnabled: boolean;
 	/** 左侧栏收起（宽 0，彻底藏起；只有顶栏最左按钮能改，默认展开） */
 	sidebarCollapsed: boolean;
 	/**
@@ -56,6 +58,8 @@ interface UiPreferencesStore {
 	setBarSessionsVisible: (visible: boolean) => void;
 	/** 左侧会话轨道开关（关掉最后一处时由 workspace store 侧订阅清空工作区，见 session-workspace.ts） */
 	setSessionRailEnabled: (enabled: boolean) => void;
+	/** 悬停详情卡开关：只控制浮层与预览请求，不碰会话选择、点击与执行 */
+	setSessionHoverEnabled: (enabled: boolean) => void;
 	/** 收起 / 展开左侧栏（宽 240 ↔ 0） */
 	toggleSidebarCollapsed: () => void;
 	/**
@@ -100,6 +104,7 @@ export const useUiPreferencesStore = create<UiPreferencesStore>((set, get) => ({
 	sessionPermissionModes: {},
 	barSessionsVisible: true,
 	sessionRailEnabled: false,
+	sessionHoverEnabled: true,
 	sidebarCollapsed: false,
 	sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
 	/** 左侧栏展开分组的记录（`setExpandedGroups` 同时置 touched 位） */
@@ -123,6 +128,7 @@ export const useUiPreferencesStore = create<UiPreferencesStore>((set, get) => ({
 			sessionPermissionModes: saved?.sessionPermissionModes ?? {},
 			barSessionsVisible: saved?.barSessionsVisible ?? true,
 			sessionRailEnabled: saved?.sessionRailEnabled ?? false,
+			sessionHoverEnabled: saved?.sessionHoverEnabled ?? true,
 			sidebarCollapsed: saved?.sidebarCollapsed ?? false,
 			sidebarWidth: clampSidebarWidth(saved?.sidebarWidth),
 			expandedGroups: saved?.expandedGroups ?? [],
@@ -149,6 +155,11 @@ export const useUiPreferencesStore = create<UiPreferencesStore>((set, get) => ({
 	setSessionRailEnabled: (enabled) => {
 		set({ sessionRailEnabled: enabled });
 		persistPatch({ sessionRailEnabled: enabled });
+	},
+
+	setSessionHoverEnabled: (enabled) => {
+		set({ sessionHoverEnabled: enabled });
+		persistPatch({ sessionHoverEnabled: enabled });
 	},
 
 	setLastCwd: (cwd) => {
