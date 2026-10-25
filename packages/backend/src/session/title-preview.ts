@@ -1,14 +1,27 @@
 import { open } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import { formatSkillCommand, parseExpandedSkillInvocation, type SessionHoverPreviewResult } from "@percho/shared";
+import {
+	formatSkillCommand,
+	parseExpandedSkillInvocation,
+	type SessionHoverPreviewResult,
+} from "@percho/shared";
 
 const HISTORY_BYTES = 8 * 1024 * 1024;
 const FIRST_LINE_BYTES = 128 * 1024;
 type Reason = Extract<SessionHoverPreviewResult, { status: "unavailable" }>["reason"];
 const ENTRY_TYPES = new Set([
-	"message", "thinking_level_change", "model_change", "usage", "compaction", "branch_summary",
-	"custom", "label", "session_info", "custom_message", "context_edit",
+	"message",
+	"thinking_level_change",
+	"model_change",
+	"usage",
+	"compaction",
+	"branch_summary",
+	"custom",
+	"label",
+	"session_info",
+	"custom_message",
+	"context_edit",
 ]);
 
 class PreviewFailure extends Error {
@@ -26,9 +39,9 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 
 /** 命名和预览共用的安全投影；不限制普通命名长度，也不返回原始 Skill 正文。 */
-export function safeUserFirstLine(content: unknown):
-	| { status: "ok"; text: string }
-	| { status: "empty" | "unsafe_projection" | "invalid_history" } {
+export function safeUserFirstLine(
+	content: unknown,
+): { status: "ok"; text: string } | { status: "empty" | "unsafe_projection" | "invalid_history" } {
 	let text: string;
 	if (typeof content === "string") text = content;
 	else if (Array.isArray(content)) {
@@ -44,8 +57,10 @@ export function safeUserFirstLine(content: unknown):
 	const invocation = parseExpandedSkillInvocation(text);
 	// 不把不完整、带前导空白或嵌套的 Skill 包装退化成普通正文。
 	const skillMarker = /<\/?skill\b/i;
-	if ((!invocation && (skillMarker.test(text) || /^\s*References are relative to /i.test(text))) ||
-		(invocation && (skillMarker.test(invocation.name) || skillMarker.test(invocation.args ?? "")))) {
+	if (
+		(!invocation && (skillMarker.test(text) || /^\s*References are relative to /i.test(text))) ||
+		(invocation && (skillMarker.test(invocation.name) || skillMarker.test(invocation.args ?? "")))
+	) {
 		return { status: "unsafe_projection" };
 	}
 	const projected = invocation ? formatSkillCommand(invocation) : text;
@@ -66,10 +81,16 @@ function checkMemoryBudget(values: readonly unknown[]): void {
 		for (let i = 0; i < text.length; i++) {
 			const code = text.charCodeAt(i);
 			if (code === 34 || code === 92) spend(2);
-			else if (code < 32) spend(code === 8 || code === 9 || code === 10 || code === 12 || code === 13 ? 2 : 6);
+			else if (code < 32)
+				spend(code === 8 || code === 9 || code === 10 || code === 12 || code === 13 ? 2 : 6);
 			else if (code < 128) spend(1);
 			else if (code < 2048) spend(2);
-			else if (code >= 0xd800 && code <= 0xdbff && text.charCodeAt(i + 1) >= 0xdc00 && text.charCodeAt(i + 1) <= 0xdfff) {
+			else if (
+				code >= 0xd800 &&
+				code <= 0xdbff &&
+				text.charCodeAt(i + 1) >= 0xdc00 &&
+				text.charCodeAt(i + 1) <= 0xdfff
+			) {
 				spend(4);
 				i++;
 			} else spend(code >= 0xd800 && code <= 0xdfff ? 6 : 3);
@@ -77,7 +98,10 @@ function checkMemoryBudget(values: readonly unknown[]): void {
 	}
 	function visit(value: unknown, depth: number): void {
 		if (depth > 128) fail("limit_exceeded");
-		if (typeof value === "string") return stringSize(value);
+		if (typeof value === "string") {
+			stringSize(value);
+			return;
+		}
 		if (value === null || typeof value === "number" || typeof value === "boolean") {
 			spend(JSON.stringify(value).length);
 			return;
@@ -125,11 +149,21 @@ interface TreeEntry extends Record<string, unknown> {
 }
 
 /** 与 messages.ts 一样从 leaf 沿 parentId 回溯；额外拒绝歧义/坏树，不使用 SDK 无防环 getBranch。 */
-function previewEntries(sessionId: string, entries: readonly unknown[], leaf: string | null): SessionHoverPreviewResult {
+function previewEntries(
+	sessionId: string,
+	entries: readonly unknown[],
+	leaf: string | null,
+): SessionHoverPreviewResult {
 	const byId = new Map<string, TreeEntry>();
 	for (const raw of entries) {
-		if (!object(raw) || typeof raw.id !== "string" || !raw.id || typeof raw.type !== "string" ||
-			!ENTRY_TYPES.has(raw.type) || !(raw.parentId === null || (typeof raw.parentId === "string" && raw.parentId))) {
+		if (
+			!object(raw) ||
+			typeof raw.id !== "string" ||
+			!raw.id ||
+			typeof raw.type !== "string" ||
+			!ENTRY_TYPES.has(raw.type) ||
+			!(raw.parentId === null || (typeof raw.parentId === "string" && raw.parentId))
+		) {
 			fail("invalid_history");
 		}
 		if (byId.has(raw.id)) fail("invalid_history");
@@ -140,8 +174,12 @@ function previewEntries(sessionId: string, entries: readonly unknown[], leaf: st
 				if (typeof content !== "string") {
 					if (!Array.isArray(content)) fail("invalid_history");
 					for (const part of content) {
-						if (!object(part) || typeof part.type !== "string" ||
-							(part.type === "text" && typeof part.text !== "string")) fail("invalid_history");
+						if (
+							!object(part) ||
+							typeof part.type !== "string" ||
+							(part.type === "text" && typeof part.text !== "string")
+						)
+							fail("invalid_history");
 					}
 				}
 			}
@@ -172,7 +210,7 @@ function previewEntries(sessionId: string, entries: readonly unknown[], leaf: st
 	}
 	for (let i = branch.length - 1; i >= 0; i--) {
 		const entry = branch[i];
-		if (!entry || entry.type !== "message") continue;
+		if (entry?.type !== "message") continue;
 		if (!object(entry.message) || typeof entry.message.role !== "string") fail("invalid_history");
 		if (entry.message.role !== "user") continue;
 		const line = safeUserFirstLine(entry.message.content);
@@ -185,7 +223,11 @@ function previewEntries(sessionId: string, entries: readonly unknown[], leaf: st
 }
 
 function resultForFailure(sessionId: string, error: unknown, fallback: Reason): SessionHoverPreviewResult {
-	return { status: "unavailable", sessionId, reason: error instanceof PreviewFailure ? error.reason : fallback };
+	return {
+		status: "unavailable",
+		sessionId,
+		reason: error instanceof PreviewFailure ? error.reason : fallback,
+	};
 }
 
 /** 内存路径读取 entries + 当前 leaf；不使用压缩上下文，不产生写入或模型/扩展调用。 */
@@ -233,13 +275,20 @@ async function readBounded(file: string): Promise<string> {
 	}
 }
 
-export async function previewSessionFile(sessionId: string, cwd: string, file: string): Promise<SessionHoverPreviewResult> {
+export async function previewSessionFile(
+	sessionId: string,
+	cwd: string,
+	file: string,
+): Promise<SessionHoverPreviewResult> {
 	try {
 		const content = await readBounded(file);
 		let entries: unknown[];
 		try {
 			// SDK parseSessionEntries 仅 JSON.parse 并忽略坏行；此入口必须拒绝坏行，且不迁移。
-			entries = content.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
+			entries = content
+				.split("\n")
+				.filter((line) => line.trim())
+				.map((line) => JSON.parse(line));
 		} catch {
 			return fail("invalid_history");
 		}

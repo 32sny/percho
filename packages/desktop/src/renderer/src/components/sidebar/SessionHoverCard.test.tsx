@@ -17,7 +17,11 @@ const harness = vi.hoisted(() => ({
 		helpId: "hover-help",
 		focusCard: vi.fn().mockReturnValue(false),
 		controller: {
-			pointerEnter: vi.fn(), pointerLeave: vi.fn(), focusRow: vi.fn(), blurRow: vi.fn(), dismiss: vi.fn(),
+			pointerEnter: vi.fn(),
+			pointerLeave: vi.fn(),
+			focusRow: vi.fn(),
+			blurRow: vi.fn(),
+			dismiss: vi.fn(),
 		},
 	},
 }));
@@ -25,15 +29,25 @@ vi.mock("../../i18n", async () => {
 	const { zh } = await import("../../i18n/zh");
 	const { en } = await import("../../i18n/en");
 	return {
-		useT: () => (key: string) => key.split(".").reduce<unknown>((value, part) => (value as Record<string, unknown>)[part], harness.language === "zh" ? zh : en),
-		useI18nStore: (select: (state: { language: string }) => unknown) => select({ language: harness.language }),
+		useT: () => (key: string) =>
+			key
+				.split(".")
+				.reduce<unknown>(
+					(value, part) => (value as Record<string, unknown>)[part],
+					harness.language === "zh" ? zh : en,
+				),
+		useI18nStore: (select: (state: { language: string }) => unknown) =>
+			select({ language: harness.language }),
 	};
 });
 vi.mock("../../stores/sessions", () => ({
-	useSessionsStore: (select: (state: { sessions: SessionMeta[]; lastUsedModel: { modelId: string } }) => unknown) => select({ sessions: harness.sessions, lastUsedModel: { modelId: "DO-NOT-BORROW-CURRENT-MODEL" } }),
+	useSessionsStore: (
+		select: (state: { sessions: SessionMeta[]; lastUsedModel: { modelId: string } }) => unknown,
+	) => select({ sessions: harness.sessions, lastUsedModel: { modelId: "DO-NOT-BORROW-CURRENT-MODEL" } }),
 }));
 vi.mock("../../stores/transcript", () => ({
-	useTranscriptStore: (select: (state: { bySession: Record<string, SessionEntry> }) => unknown) => select({ bySession: harness.entries }),
+	useTranscriptStore: (select: (state: { bySession: Record<string, SessionEntry> }) => unknown) =>
+		select({ bySession: harness.entries }),
 }));
 vi.mock("../../stores/session-hover-preview", async (original) => ({
 	...(await original<typeof import("../../stores/session-hover-preview")>()),
@@ -55,23 +69,43 @@ import { SessionHoverCard } from "./SessionHoverCard";
 import { SessionRow } from "./SessionRow";
 
 const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
-	sessionId: "A", cwd: "C:/项目/完整目录", name: "已保存的标题", active: true,
-	messageCount: 4, createdAt: 1_700_000_000_000, modifiedAt: 1_700_010_000_000,
+	sessionId: "A",
+	cwd: "C:/项目/完整目录",
+	name: "已保存的标题",
+	active: true,
+	messageCount: 4,
+	createdAt: 1_700_000_000_000,
+	modifiedAt: 1_700_010_000_000,
 	...patch,
 });
 const preview = (text: string): SessionHoverPreviewResult => ({
-	status: "ok", sessionId: "A", source: "current-branch-first-user-text", text,
+	status: "ok",
+	sessionId: "A",
+	source: "current-branch-first-user-text",
+	text,
 });
 const entry = (patch: Partial<SessionEntry> = {}): SessionEntry => ({
-	...emptyTranscript(), pendingPermissions: [], pendingDialogs: [], ...patch,
+	...emptyTranscript(),
+	pendingPermissions: [],
+	pendingDialogs: [],
+	...patch,
 });
 function render(session = meta(), result: SessionHoverPreviewResult | null = null) {
 	harness.snapshot = { key: sessionHoverPreviewKey(session), result };
-	return renderToStaticMarkup(React.createElement(SessionHoverCard, {
-		id: "hover-card", cardRef: { current: null }, anchor: {} as HTMLButtonElement, session,
-		onClose: vi.fn(), onPointerEnter: vi.fn(), onPointerLeave: vi.fn(),
-		onFocus: vi.fn(), onBlur: vi.fn(), onKeyDown: vi.fn(),
-	}));
+	return renderToStaticMarkup(
+		React.createElement(SessionHoverCard, {
+			id: "hover-card",
+			cardRef: { current: null },
+			anchor: {} as HTMLButtonElement,
+			session,
+			onClose: vi.fn(),
+			onPointerEnter: vi.fn(),
+			onPointerLeave: vi.fn(),
+			onFocus: vi.fn(),
+			onBlur: vi.fn(),
+			onKeyDown: vi.fn(),
+		}),
+	);
 }
 
 beforeEach(() => {
@@ -103,7 +137,8 @@ describe("悬停卡信息与可访问结构（SSR，非视觉验收）", () => {
 
 	it("使用宿主主题 token 和低于设置弹窗的 z-30，不添加动画", () => {
 		const html = render();
-		for (const token of ["bg-surface", "border-border", "text-ink", "shadow-pop", "z-30"]) expect(html).toContain(token);
+		for (const token of ["bg-surface", "border-border", "text-ink", "shadow-pop", "z-30"])
+			expect(html).toContain(token);
 		expect(html).not.toMatch(/animate-|z-50|z-\[999/);
 	});
 
@@ -124,7 +159,14 @@ describe("悬停卡信息与可访问结构（SSR，非视觉验收）", () => {
 		expect(html).not.toContain("SECRET-EXPANDED-SKILL");
 	});
 
-	it.each(["not_found", "identity_mismatch", "invalid_history", "read_failed", "limit_exceeded", "unsafe_projection"] as const)("%s 仅 inline 降级，保留标题与基础详情", (reason) => {
+	it.each([
+		"not_found",
+		"identity_mismatch",
+		"invalid_history",
+		"read_failed",
+		"limit_exceeded",
+		"unsafe_projection",
+	] as const)("%s 仅 inline 降级，保留标题与基础详情", (reason) => {
 		const html = render(meta(), { status: "unavailable", sessionId: "A", reason });
 		expect(html).toContain("已保存的标题");
 		expect(html).toContain("C:/项目/完整目录");
@@ -177,15 +219,27 @@ describe("SessionRow 原操作与详情触发接线", () => {
 	function row() {
 		const onSelect = vi.fn();
 		const onContextMenu = vi.fn();
-		const button = SessionRow({ session: meta(), active: false, onSelect, onContextMenu }) as React.ReactElement<React.ComponentProps<"button">>;
+		const button = SessionRow({
+			session: meta(),
+			active: false,
+			onSelect,
+			onContextMenu,
+		}) as React.ReactElement<React.ComponentProps<"button">>;
 		return { button, onSelect, onContextMenu };
 	}
 	it("悬停/键盘焦点不选择会话，触发行下没有 Portal/dialog 子节点", () => {
 		const { button, onSelect } = row();
 		const element = { matches: () => true } as unknown as HTMLButtonElement;
-		button.props.onPointerEnter?.({ pointerType: "mouse", currentTarget: element } as React.PointerEvent<HTMLButtonElement>);
+		button.props.onPointerEnter?.({
+			pointerType: "mouse",
+			currentTarget: element,
+		} as React.PointerEvent<HTMLButtonElement>);
 		button.props.onFocus?.({ currentTarget: element } as React.FocusEvent<HTMLButtonElement>);
-		expect(harness.hover.controller.pointerEnter).toHaveBeenCalledWith({ sessionId: "A", cwd: meta().cwd, element });
+		expect(harness.hover.controller.pointerEnter).toHaveBeenCalledWith({
+			sessionId: "A",
+			cwd: meta().cwd,
+			element,
+		});
 		expect(harness.hover.controller.focusRow).toHaveBeenCalledOnce();
 		expect(onSelect).not.toHaveBeenCalled();
 		expect(renderToStaticMarkup(button)).not.toContain('role="dialog"');
@@ -203,7 +257,11 @@ describe("SessionRow 原操作与详情触发接线", () => {
 	it("Tab 只在能主动进入卡片时拦截；Shift+Tab 保留原序", () => {
 		const { button } = row();
 		const preventDefault = vi.fn();
-		const event = { key: "Tab", preventDefault, currentTarget: {} } as unknown as React.KeyboardEvent<HTMLButtonElement>;
+		const event = {
+			key: "Tab",
+			preventDefault,
+			currentTarget: {},
+		} as unknown as React.KeyboardEvent<HTMLButtonElement>;
 		button.props.onKeyDown?.(event);
 		expect(preventDefault).not.toHaveBeenCalled();
 		harness.hover.focusCard.mockReturnValue(true);
@@ -216,11 +274,18 @@ describe("SessionRow 原操作与详情触发接线", () => {
 	it("右键与拖拽关闭详情但继续原菜单/拖拽载荷，不误选择", () => {
 		const { button, onSelect, onContextMenu } = row();
 		const preventDefault = vi.fn();
-		button.props.onContextMenu?.({ clientX: 20, clientY: 30, preventDefault } as unknown as React.MouseEvent<HTMLButtonElement>);
+		button.props.onContextMenu?.({
+			clientX: 20,
+			clientY: 30,
+			preventDefault,
+		} as unknown as React.MouseEvent<HTMLButtonElement>);
 		expect(onContextMenu).toHaveBeenCalledWith({ left: 20, top: 30, width: 0, height: 0 });
 		const dataTransfer = { setData: vi.fn(), effectAllowed: "" };
 		button.props.onDragStart?.({ dataTransfer } as unknown as React.DragEvent<HTMLButtonElement>);
-		expect(dataTransfer.setData).toHaveBeenCalledWith("application/x-percho-session", expect.stringContaining('"sessionId":"A"'));
+		expect(dataTransfer.setData).toHaveBeenCalledWith(
+			"application/x-percho-session",
+			expect.stringContaining('"sessionId":"A"'),
+		);
 		expect(dataTransfer.effectAllowed).toBe("copy");
 		expect(harness.hover.controller.dismiss).toHaveBeenCalledTimes(2);
 		expect(onSelect).not.toHaveBeenCalled();

@@ -78,9 +78,13 @@ export function SessionRow({
 			onKeyDown={(event) => {
 				if (
 					event.key === "Tab" &&
-					!event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey &&
+					!event.shiftKey &&
+					!event.altKey &&
+					!event.ctrlKey &&
+					!event.metaKey &&
 					hover?.focusCard(event.currentTarget)
-				) event.preventDefault();
+				)
+					event.preventDefault();
 			}}
 			draggable={draggable}
 			onDragStart={

@@ -1,17 +1,22 @@
-import type { PiBackend } from "@percho/backend";
-import { CHANNEL_TABLE, IpcChannels, type PiApi, type SessionHoverPreviewResult } from "@percho/shared";
 import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
+import type { PiBackend } from "@percho/backend";
+import { CHANNEL_TABLE, IpcChannels, type PiApi, type SessionHoverPreviewResult } from "@percho/shared";
 import { buildSync } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({ handle: vi.fn() }));
 vi.mock("electron", () => ({ ipcMain: { handle: state.handle } }));
+
 import { registerSessionsIpc } from "./sessions";
 
 const preloadCode = buildSync({
 	entryPoints: [resolve(__dirname, "../../preload/index.ts")],
-	bundle: true, platform: "node", format: "cjs", write: false, external: ["electron"],
+	bundle: true,
+	platform: "node",
+	format: "cjs",
+	write: false,
+	external: ["electron"],
 }).outputFiles[0]?.text;
 
 describe("session:hoverPreview IPC 和真实 preload 桥接", () => {
@@ -35,10 +40,19 @@ describe("session:hoverPreview IPC 和真实 preload 桥接", () => {
 		let api: PiApi | undefined;
 		if (!preloadCode) throw new Error("preload 未构建");
 		runInNewContext(preloadCode, {
-			module: { exports: {} }, exports: {}, process: { platform: "win32" },
+			module: { exports: {} },
+			exports: {},
+			process: { platform: "win32" },
 			require: (name: string) => {
 				if (name !== "electron") throw new Error(`意外模块: ${name}`);
-				return { ipcRenderer: { invoke }, contextBridge: { exposeInMainWorld: (_name: string, value: PiApi) => { api = value; } } };
+				return {
+					ipcRenderer: { invoke },
+					contextBridge: {
+						exposeInMainWorld: (_name: string, value: PiApi) => {
+							api = value;
+						},
+					},
+				};
 			},
 		});
 		if (!api) throw new Error("preload 未暴露 API");

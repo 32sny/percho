@@ -28,7 +28,8 @@ function deferred<T>() {
 }
 const flush = () => vi.advanceTimersByTimeAsync(0);
 const loader = () =>
-	vi.fn<(request: SessionHoverPreviewRequest) => Promise<SessionHoverPreviewResult>>()
+	vi
+		.fn<(request: SessionHoverPreviewRequest) => Promise<SessionHoverPreviewResult>>()
 		.mockImplementation(async ({ sessionId }) => ok(sessionId));
 
 beforeEach(() => {

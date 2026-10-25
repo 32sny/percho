@@ -74,8 +74,9 @@ export function createSessionHoverController({
 		publish(null);
 	}
 	function isInside(): boolean {
-		return !!current && (
-			pointerRow === current.element || focusedRow === current.element || pointerInCard || focusInCard
+		return (
+			!!current &&
+			(pointerRow === current.element || focusedRow === current.element || pointerInCard || focusInCard)
 		);
 	}
 	function maybeClose(): void {
@@ -106,8 +107,10 @@ export function createSessionHoverController({
 	}
 	function enter(target: SessionHoverTarget, keyboard: boolean): void {
 		if (!enabled || suppressed === target.element || !canOpen(target)) return;
-		const same = current?.element === target.element &&
-			current.sessionId === target.sessionId && current.cwd === target.cwd;
+		const same =
+			current?.element === target.element &&
+			current.sessionId === target.sessionId &&
+			current.cwd === target.cwd;
 		clearClose();
 		if (!same) {
 			clearOpen();
@@ -208,10 +211,12 @@ const SessionHoverContext = createContext<HoverContext | null>(null);
 export const useSessionHover = () => useContext(SessionHoverContext);
 
 function isVisible(element: HTMLElement): boolean {
-	return element.isConnected &&
+	return (
+		element.isConnected &&
 		!element.closest('[hidden], [inert], [aria-hidden="true"]') &&
 		element.getClientRects().length > 0 &&
-		getComputedStyle(element).visibility !== "hidden";
+		getComputedStyle(element).visibility !== "hidden"
+	);
 }
 
 /** Trust 在 App 的局部 state 中，不能只订阅 settings.open；同时观察宿主实际模态语义。 */
@@ -220,9 +225,11 @@ function hasBlockingModal(): boolean {
 }
 
 function tabStops(root: ParentNode): HTMLElement[] {
-	return [...root.querySelectorAll<HTMLElement>(
-		'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]',
-	)].filter((element) => element.tabIndex >= 0 && !element.matches(":disabled") && isVisible(element));
+	return [
+		...root.querySelectorAll<HTMLElement>(
+			'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]',
+		),
+	].filter((element) => element.tabIndex >= 0 && !element.matches(":disabled") && isVisible(element));
 }
 
 /**
@@ -267,7 +274,12 @@ export function SessionHoverProvider({
 		// 只为实际渲染的卡片请求；依赖打开代次 + 键字段，不依赖 title/status 的对象引用。
 		// 即便同一事件中「关 → 重开同一行」被 React 合并，也必须重新绑定目标。
 		sessionHoverPreview.setTarget(
-			opened && !disabled && !settingsOpen && sessionId !== undefined && cwd !== undefined && messageCount !== undefined
+			opened &&
+				!disabled &&
+				!settingsOpen &&
+				sessionId !== undefined &&
+				cwd !== undefined &&
+				messageCount !== undefined
 				? { sessionId, cwd, modifiedAt, messageCount }
 				: null,
 		);
@@ -281,7 +293,8 @@ export function SessionHoverProvider({
 			if (
 				node instanceof Node &&
 				(cardRef.current?.contains(node) || controller.getTarget()?.element.contains(node))
-			) return;
+			)
+				return;
 			dismiss();
 		};
 		const onScroll = (event: Event) => {
@@ -333,7 +346,11 @@ export function SessionHoverProvider({
 
 	useEffect(() => {
 		// 订阅生命周期，而不是依赖各菜单操作自觉清缓存；不改 projects/sessions 的业务行为。
-		const invalidateMetas = (before: readonly SessionMeta[], after: readonly SessionMeta[], catalog: boolean) => {
+		const invalidateMetas = (
+			before: readonly SessionMeta[],
+			after: readonly SessionMeta[],
+			catalog: boolean,
+		) => {
 			const previous = new Map(before.map((item) => [item.sessionId, item]));
 			const next = new Map(after.map((item) => [item.sessionId, item]));
 			for (const id of sessionHoverPreview.getSessionIds()) {
@@ -342,12 +359,12 @@ export function SessionHoverProvider({
 				if (oldMeta === newMeta) continue;
 				const target = controller.getTarget();
 				if (
-					target?.sessionId === id && (
-						(catalog && !newMeta) ||
+					target?.sessionId === id &&
+					((catalog && !newMeta) ||
 						(newMeta && newMeta.cwd !== target.cwd) ||
-						(oldMeta && newMeta && oldMeta.sessionFile !== newMeta.sessionFile)
-					)
-				) controller.dismiss();
+						(oldMeta && newMeta && oldMeta.sessionFile !== newMeta.sessionFile))
+				)
+					controller.dismiss();
 				sessionHoverPreview.invalidate(id);
 			}
 		};
@@ -367,9 +384,11 @@ export function SessionHoverProvider({
 				const after = state.bySession[id];
 				if (before === after) continue;
 				// loadHistory（含同消息数重载/撤回）替换数组；流式 token 更新不逐字重读历史。
-				const historyChanged = before?.messages !== after?.messages &&
+				const historyChanged =
+					before?.messages !== after?.messages &&
 					(!after?.agentActive || before?.messages.length !== after.messages.length);
-				if (historyChanged || (before?.agentActive && !after?.agentActive)) sessionHoverPreview.invalidate(id);
+				if (historyChanged || (before?.agentActive && !after?.agentActive))
+					sessionHoverPreview.invalidate(id);
 			}
 		});
 		return () => {
@@ -430,7 +449,9 @@ export function SessionHoverProvider({
 	return (
 		<SessionHoverContext.Provider value={context}>
 			{children}
-			<span id={helpId} className="sr-only">{t("sessionHover.keyboardHint")}</span>
+			<span id={helpId} className="sr-only">
+				{t("sessionHover.keyboardHint")}
+			</span>
 			{opened && session && !disabled && !settingsOpen && (
 				<SessionHoverCard
 					key={JSON.stringify([opened.sessionId, opened.cwd])}

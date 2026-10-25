@@ -86,19 +86,22 @@ export function SessionHoverCard({
 	// model 优先于可能来自旧 meta 的 modelLabel；绝不读取 lastUsedModel/activeSessionId 的模型。
 	const model = session.model ? `${session.model.provider}/${session.model.modelId}` : session.modelLabel;
 	const formatter = useMemo(
-		() => new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en", {
-			year: "numeric",
-			month: "2-digit",
-			day: "2-digit",
-			hour: "2-digit",
-			minute: "2-digit",
-		}),
+		() =>
+			new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en", {
+				year: "numeric",
+				month: "2-digit",
+				day: "2-digit",
+				hour: "2-digit",
+				minute: "2-digit",
+			}),
 		[language],
 	);
 	const date = (timestamp: number | undefined) => {
 		if (timestamp === undefined || !Number.isFinite(timestamp) || timestamp <= 0) return null;
 		const value = new Date(timestamp);
-		return Number.isNaN(value.getTime()) ? null : { label: formatter.format(value), iso: value.toISOString() };
+		return Number.isNaN(value.getTime())
+			? null
+			: { label: formatter.format(value), iso: value.toISOString() };
 	};
 	const created = date(session.createdAt);
 	const modified = date(session.modifiedAt);
@@ -121,8 +124,14 @@ export function SessionHoverCard({
 				{ width: window.innerWidth, height: window.innerHeight },
 			);
 			setPosition((before) =>
-				before && before.x === next.x && before.y === next.y && before.width === next.width &&
-				before.maxHeight === next.maxHeight && before.side === next.side ? before : next,
+				before &&
+				before.x === next.x &&
+				before.y === next.y &&
+				before.width === next.width &&
+				before.maxHeight === next.maxHeight &&
+				before.side === next.side
+					? before
+					: next,
 			);
 		};
 		measure();
@@ -132,10 +141,15 @@ export function SessionHoverCard({
 	}, [anchor, cardRef]);
 
 	const copyGeneration = useRef(0);
-	const [copyFeedback, setCopyFeedback] = useState<{ title: string; status: "copied" | "failed" } | null>(null);
-	useEffect(() => () => {
-		copyGeneration.current += 1;
-	}, []);
+	const [copyFeedback, setCopyFeedback] = useState<{ title: string; status: "copied" | "failed" } | null>(
+		null,
+	);
+	useEffect(
+		() => () => {
+			copyGeneration.current += 1;
+		},
+		[],
+	);
 	const feedback = copyFeedback?.title === title ? copyFeedback.status : null;
 	const copyTitle = async () => {
 		const generation = ++copyGeneration.current;
@@ -248,7 +262,9 @@ export function SessionHoverCard({
 					</>
 				)}
 			</dl>
-			<p id={`${id}-hint`} className="mt-3 text-ui-11 text-ink-dim">{t("sessionHover.cardHint")}</p>
+			<p id={`${id}-hint`} className="mt-3 text-ui-11 text-ink-dim">
+				{t("sessionHover.cardHint")}
+			</p>
 			{feedback && (
 				<p role="status" className="mt-1 text-ui-12 text-ink-2">
 					{t(feedback === "copied" ? "sessionHover.copied" : "sessionHover.copyFailed")}

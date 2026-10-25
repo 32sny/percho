@@ -9,19 +9,33 @@ import type { RegisteredSession, SessionRegistry } from "../src/session/registry
 
 // ESM 内建模块的原始导出不可 spy；只为读取增长测试提供可替换的薄代理。
 vi.mock("node:fs/promises", async (importOriginal) => ({
-	...await importOriginal<typeof import("node:fs/promises")>(),
+	...(await importOriginal<typeof import("node:fs/promises")>()),
 }));
 
 const ID = "hover-session";
 const CWD = "/tmp/hover-project";
 const MAX_HISTORY = 8 * 1024 * 1024;
 const MAX_LINE = 128 * 1024;
-const header = (id = ID, cwd = CWD) => ({ type: "session", version: 3, id, cwd, timestamp: "2026-01-01T00:00:00Z" });
+const header = (id = ID, cwd = CWD) => ({
+	type: "session",
+	version: 3,
+	id,
+	cwd,
+	timestamp: "2026-01-01T00:00:00Z",
+});
 const user = (id: string, parentId: string | null, content: unknown) => ({
-	type: "message", id, parentId, timestamp: "2026-01-01T00:00:00Z",
+	type: "message",
+	id,
+	parentId,
+	timestamp: "2026-01-01T00:00:00Z",
 	message: { role: "user", content, timestamp: 1 },
 });
-const ok = (text: string) => ({ status: "ok", sessionId: ID, source: "current-branch-first-user-text", text });
+const ok = (text: string) => ({
+	status: "ok",
+	sessionId: ID,
+	source: "current-branch-first-user-text",
+	text,
+});
 const unavailable = (reason: string) => ({ status: "unavailable", sessionId: ID, reason });
 let dir: string;
 let backend: PiBackend;
@@ -34,13 +48,23 @@ function history(entries: unknown[], sessionHeader = header()) {
 	return file;
 }
 
-function loaded(entries: unknown[], leaf: string | null = (entries.at(-1) as { id?: string })?.id ?? null, sessionHeader = header()) {
+function loaded(
+	entries: unknown[],
+	leaf: string | null = (entries.at(-1) as { id?: string })?.id ?? null,
+	sessionHeader = header(),
+) {
 	const registry = (backend as unknown as { registry: SessionRegistry }).registry;
-	const getBranch = vi.fn(() => { throw new Error("不得调用无循环保护的 getBranch"); });
+	const getBranch = vi.fn(() => {
+		throw new Error("不得调用无循环保护的 getBranch");
+	});
 	const session = {
-		sessionId: ID, messages: [{ role: "user", content: "压缩后的错误上下文" }],
+		sessionId: ID,
+		messages: [{ role: "user", content: "压缩后的错误上下文" }],
 		sessionManager: {
-			getHeader: () => sessionHeader, getEntries: () => entries, getLeafId: () => leaf, getBranch,
+			getHeader: () => sessionHeader,
+			getEntries: () => entries,
+			getLeafId: () => leaf,
+			getBranch,
 		},
 	} as unknown as AgentSession;
 	const existing = registry.get(ID);
@@ -67,9 +91,15 @@ describe("PiBackend.getSessionHoverPreview 只读窄预览", () => {
 		]);
 		const before = readFileSync(file);
 		const mtime = statSync(file).mtimeMs;
-		const spies = [vi.spyOn(SessionManager, "open"), vi.spyOn(SessionManager, "create"),
-			vi.spyOn(backend, "openSession"), vi.spyOn(backend, "createSession"), vi.spyOn(backend, "prompt"),
-			vi.spyOn(backend, "listAllSessions"), vi.spyOn(backend, "peekSessionMessages")];
+		const spies = [
+			vi.spyOn(SessionManager, "open"),
+			vi.spyOn(SessionManager, "create"),
+			vi.spyOn(backend, "openSession"),
+			vi.spyOn(backend, "createSession"),
+			vi.spyOn(backend, "prompt"),
+			vi.spyOn(backend, "listAllSessions"),
+			vi.spyOn(backend, "peekSessionMessages"),
+		];
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(ok("旧名称之外的完整首条提问"));
 		expect(find).toHaveBeenCalledWith(CWD, ID);
 		for (const spy of spies) expect(spy).not.toHaveBeenCalled();
@@ -78,21 +108,31 @@ describe("PiBackend.getSessionHoverPreview 只读窄预览", () => {
 	});
 
 	it("取当前分支而非最早物理消息，跳过图片/空白文本", async () => {
-		history([user("old", null, "其他分支"), user("image", null, [{ type: "image", data: "AAAA" }]),
-			user("blank", "image", " \n "), user("now", "blank", [{ type: "text", text: "当前分支\n后续" }])]);
+		history([
+			user("old", null, "其他分支"),
+			user("image", null, [{ type: "image", data: "AAAA" }]),
+			user("blank", "image", " \n "),
+			user("now", "blank", [{ type: "text", text: "当前分支\n后续" }]),
+		]);
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(ok("当前分支"));
 	});
 
 	it("Skill 只返回安全命令，不返回正文/路径/sourceText", async () => {
-		history([user("u", null, '<skill name="mindmap" location="/secret/SKILL.md">\nReferences are relative to /secret.\n\n机密正文\n</skill>\n\n画架构图\n后续')]);
+		history([
+			user(
+				"u",
+				null,
+				'<skill name="mindmap" location="/secret/SKILL.md">\nReferences are relative to /secret.\n\n机密正文\n</skill>\n\n画架构图\n后续',
+			),
+		]);
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(ok("/skill:mindmap 画架构图"));
 	});
 
 	it.each([
 		'<skill name="private" location="/secret">\n机密正文',
 		'  <skill name="private" location="/secret">\n机密正文\n</skill>',
-		'正文\n</skill>',
-		'References are relative to /secret.\n\n疑似丢失头部的 Skill 正文',
+		"正文\n</skill>",
+		"References are relative to /secret.\n\n疑似丢失头部的 Skill 正文",
 	])("疑似残缺 Skill 失败关闭，不回退到后续用户消息", async (text) => {
 		history([user("u", null, text), user("later", "u", "后续提问")]);
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(unavailable("unsafe_projection"));
@@ -159,7 +199,9 @@ describe("PiBackend.getSessionHoverPreview 只读窄预览", () => {
 			return { bytesRead: length, buffer };
 		});
 		const open = vi.spyOn(fs, "open").mockResolvedValue({
-			stat: async () => ({ size: 1 }), read, close,
+			stat: async () => ({ size: 1 }),
+			read,
+			close,
 		} as unknown as Awaited<ReturnType<typeof fs.open>>);
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(unavailable("limit_exceeded"));
 		expect(open).toHaveBeenCalledWith(join(dir, "growing.jsonl"), "r");
@@ -168,7 +210,10 @@ describe("PiBackend.getSessionHoverPreview 只读窄预览", () => {
 	});
 
 	it("已加载使用完整当前分支 leaf，忽略模型上下文与另一分支", async () => {
-		const { registry, session, getBranch } = loaded([user("a", null, "当前完整历史"), user("b", null, "其他分支")], "a");
+		const { registry, session, getBranch } = loaded(
+			[user("a", null, "当前完整历史"), user("b", null, "其他分支")],
+			"a",
+		);
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(ok("当前完整历史"));
 		expect(find).not.toHaveBeenCalled();
 		expect(getBranch).not.toHaveBeenCalled();
@@ -177,7 +222,8 @@ describe("PiBackend.getSessionHoverPreview 只读窄预览", () => {
 
 	it("SDK 内存会话的实际 branch/compaction/Skill 只读投影", async () => {
 		const manager = SessionManager.inMemory(CWD);
-		const skill = '<skill name="safe" location="/secret/SKILL.md">\nReferences are relative to /secret.\n\n机密\n</skill>\n\n参数';
+		const skill =
+			'<skill name="safe" location="/secret/SKILL.md">\nReferences are relative to /secret.\n\n机密\n</skill>\n\n参数';
 		const root = manager.appendMessage({ role: "user", content: skill, timestamp: 1 });
 		manager.appendCompaction("摘要不应替代历史", root, 100);
 		manager.appendMessage({ role: "user", content: "其他分支", timestamp: 2 });
@@ -211,10 +257,18 @@ describe("PiBackend.getSessionHoverPreview 只读窄预览", () => {
 	});
 
 	it("内存预算包含非当前分支和工具正文，坏对象循环失败关闭", async () => {
-		loaded([user("a", null, "可用首行"), {
-			type: "message", id: "tool", parentId: null,
-			message: { role: "toolResult", content: "x".repeat(MAX_HISTORY) },
-		}], "a");
+		loaded(
+			[
+				user("a", null, "可用首行"),
+				{
+					type: "message",
+					id: "tool",
+					parentId: null,
+					message: { role: "toolResult", content: "x".repeat(MAX_HISTORY) },
+				},
+			],
+			"a",
+		);
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(unavailable("limit_exceeded"));
 		const entry = user("cycle", null, "正文") as Record<string, unknown>;
 		entry.self = entry;
@@ -248,8 +302,11 @@ describe("PiBackend.getSessionHoverPreview 只读窄预览", () => {
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(unavailable("invalid_history"));
 		const close = vi.fn().mockResolvedValue(undefined);
 		vi.spyOn(fs, "open").mockResolvedValue({
-			stat: async () => ({ size: 1 }), close,
-			read: async () => { throw new Error("读取失败"); },
+			stat: async () => ({ size: 1 }),
+			close,
+			read: async () => {
+				throw new Error("读取失败");
+			},
 		} as unknown as Awaited<ReturnType<typeof fs.open>>);
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(unavailable("read_failed"));
 		expect(close).toHaveBeenCalledOnce();

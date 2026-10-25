@@ -1,7 +1,10 @@
 import type { SessionHoverPreviewRequest, SessionHoverPreviewResult, SessionMeta } from "@percho/shared";
 import { getPi } from "../api";
 
-export type SessionHoverPreviewTarget = Pick<SessionMeta, "sessionId" | "cwd" | "modifiedAt" | "messageCount">;
+export type SessionHoverPreviewTarget = Pick<
+	SessionMeta,
+	"sessionId" | "cwd" | "modifiedAt" | "messageCount"
+>;
 export interface SessionHoverPreviewSnapshot {
 	readonly key: string;
 	/** null = 当前目标等待/读取中；失败也使用 shared 的窄 DTO，不另造 IPC 结果类型。 */
@@ -124,7 +127,8 @@ export function createSessionHoverPreviewCache(fetchPreview: FetchPreview) {
 			for (const [key, entry] of entries) {
 				if (sessionId === undefined || entry.sessionId === sessionId) entries.delete(key);
 			}
-			if (flight && (sessionId === undefined || flight.meta.sessionId === sessionId)) flight.invalidated = true;
+			if (flight && (sessionId === undefined || flight.meta.sessionId === sessionId))
+				flight.invalidated = true;
 			reconcile();
 		},
 		/** 生命周期订阅只检查有缓存/请求的 id，最多 100 缓存 + 在途/当前目标，不遍历整份历史。 */
@@ -137,4 +141,6 @@ export function createSessionHoverPreviewCache(fetchPreview: FetchPreview) {
 	};
 }
 
-export const sessionHoverPreview = createSessionHoverPreviewCache((request) => getPi().getSessionHoverPreview(request));
+export const sessionHoverPreview = createSessionHoverPreviewCache((request) =>
+	getPi().getSessionHoverPreview(request),
+);

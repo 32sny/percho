@@ -353,7 +353,8 @@ export const en: Messages = {
 			identityMismatch: "Session details do not match. The first question has not been shown.",
 			invalidHistory: "Session history could not be read reliably. The first question is unavailable.",
 			readFailed: "The first question is temporarily unavailable. Please try again later.",
-			limitExceeded: "This session is large, so the first question preview is unavailable. Open the session to view it.",
+			limitExceeded:
+				"This session is large, so the first question preview is unavailable. Open the session to view it.",
 			unsafeProjection: "The first question cannot be displayed safely. Open the session to view it.",
 		},
 	},
