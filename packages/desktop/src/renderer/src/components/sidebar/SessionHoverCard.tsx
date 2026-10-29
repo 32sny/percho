@@ -173,7 +173,9 @@ export function SessionHoverCard({
 	};
 	const openParent = () => {
 		onDismiss();
-		void withSessionSlide("pop", () => returnToParent(session.sessionId, rememberedParent ? undefined : recoveredParent));
+		void withSessionSlide("pop", () =>
+			returnToParent(session.sessionId, rememberedParent ? undefined : recoveredParent),
+		);
 	};
 
 	// 分页焦点归还：加载完最后一页「显示更多」消失时焦点给「收起」；收起后焦点回到「显示更多」或首个子行。
