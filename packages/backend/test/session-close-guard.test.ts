@@ -15,7 +15,26 @@ import type { SessionRegistry } from "../src/session/registry";
 const root = mkdtempSync(join(tmpdir(), "pi-close-guard-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-function makeBackend(sessionId: string, streaming: boolean, sessionFile?: string, topics: string[] = []) {
+function makeBackend(
+	sessionId: string,
+	streaming: boolean,
+	sessionFile?: string,
+	topics: string[] = [],
+	controlSnapshot?: {
+		runtimeId: string;
+		revision: number;
+		phase: "idle" | "preparing" | "running" | "compacting" | "interrupting" | "blocked";
+		autoDispatchPaused: boolean;
+		items: {
+			messageId: string;
+			source: "user" | "extension" | "system";
+			mode: "queue" | "steer" | "interrupt";
+			state: "queued" | "held" | "recovering";
+			preview: string;
+			imageCount: number;
+		}[];
+	},
+) {
 	const backend = new PiBackend({ projectTrust: false, permissionGates: false });
 	const registry = (backend as unknown as { registry: SessionRegistry }).registry;
 	const dispose = vi.fn();
@@ -29,6 +48,7 @@ function makeBackend(sessionId: string, streaming: boolean, sessionFile?: string
 		} as unknown as AgentSession,
 		unsubscribe: () => {},
 		cwd: root,
+		messageControl: controlSnapshot ? { getSnapshot: () => controlSnapshot, dispose: () => {} } : undefined,
 		gate: { dispose: () => {} },
 		dialogs: { dispose: () => {} },
 		modeRef: { get: () => "default" },
@@ -56,6 +76,39 @@ describe("PiBackend.closeSession 守卫", () => {
 	it("会话根本不在 registry（已关/从未打开）→ closed=true（幂等：它确实没在跑）", async () => {
 		const { backend } = makeBackend("s3", false);
 		await expect(backend.closeSession("不存在的会话")).resolves.toEqual({ closed: true });
+	});
+});
+
+describe("PiBackend message-control close protection", () => {
+	it("拒绝 GC/user close 与 delete，直到 pending user item 被明确清空", async () => {
+		const snapshot = {
+			runtimeId: "runtime-1",
+			revision: 2,
+			phase: "idle" as const,
+			autoDispatchPaused: false,
+			items: [
+				{
+					messageId: "m1",
+					source: "user" as const,
+					mode: "queue" as const,
+					state: "held" as const,
+					preview: "unsent",
+					imageCount: 0,
+				},
+			],
+		};
+		const dir = join(root, "pending");
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "pending.jsonl");
+		writeFileSync(file, "");
+		const { backend, registry, dispose } = makeBackend("pending", false, file, [], snapshot);
+		await expect(backend.closeSession("pending", "gc")).resolves.toEqual({ closed: false });
+		await expect(backend.closeSession("pending", "user")).resolves.toEqual({ closed: false });
+		await expect(backend.deleteSession("pending", file)).rejects.toThrow("SESSION_MESSAGE_CONTROL_PENDING");
+		expect(dispose).not.toHaveBeenCalled();
+		expect(registry.has("pending")).toBe(true);
+		snapshot.items = [];
+		await expect(backend.closeSession("pending", "user")).resolves.toEqual({ closed: true });
 	});
 });
 

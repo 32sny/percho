@@ -1832,3 +1832,101 @@ describe("REDUCED_EVENT_TYPES 与 reducer 分支对齐（单一事实源）", ()
 		}
 	});
 });
+
+describe("message control 投影（message_control_update / controlMessageId）", () => {
+	const snapshot = (over: Record<string, unknown> = {}) => ({
+		runtimeId: "rt1",
+		revision: 3,
+		phase: "running" as const,
+		autoDispatchPaused: false,
+		items: [
+			{
+				messageId: "m1",
+				source: "user" as const,
+				mode: "queue" as const,
+				state: "queued" as const,
+				preview: "排队内容",
+				imageCount: 0,
+			},
+		],
+		...over,
+	});
+	const update = (snap: ReturnType<typeof snapshot>) =>
+		({ type: "message_control_update", snapshot: snap }) as unknown as SessionEvent;
+
+	beforeEach(() => {
+		useTranscriptStore.setState({ bySession: {} });
+	});
+
+	it("message_control_update 投影快照到会话状态（队列条目可见）", () => {
+		useTranscriptStore.getState().applyEvent("s1", update(snapshot()));
+		const entry = useTranscriptStore.getState().bySession.s1;
+		expect(entry?.control?.revision).toBe(3);
+		expect(entry?.control?.items.map((i) => i.messageId)).toEqual(["m1"]);
+		expect(entry?.controlRuntimeId).toBe("rt1");
+	});
+
+	it("setControlSnapshot 明确替换：重开同 id 会话的旧 runtime 快照被清掉，旧事件不接管", () => {
+		useTranscriptStore.getState().applyEvent("s1", update(snapshot()));
+		// 会话重开：load 路径显式清（未拉取到新快照前先清旧的）
+		useTranscriptStore.getState().setControlSnapshot("s1", null);
+		expect(useTranscriptStore.getState().bySession.s1?.control).toBeNull();
+		// 旧 runtime 的迟到事件不得接管（runtime 未钉住时按新实例采纳规则也不吃旧快照）
+		useTranscriptStore.getState().setControlSnapshot("s1", snapshot({ runtimeId: "rt2", revision: 1 }));
+		useTranscriptStore.getState().applyEvent("s1", update(snapshot({ runtimeId: "rt1", revision: 9 })));
+		const entry = useTranscriptStore.getState().bySession.s1;
+		expect(entry?.control?.runtimeId).toBe("rt2");
+		expect(entry?.control?.revision).toBe(1);
+	});
+
+	it("旧 revision 不覆盖更新快照（同 runtime 单调）", () => {
+		useTranscriptStore.getState().applyEvent("s1", update(snapshot({ revision: 5 })));
+		useTranscriptStore.getState().applyEvent("s1", update(snapshot({ revision: 4 })));
+		expect(useTranscriptStore.getState().bySession.s1?.control?.revision).toBe(5);
+	});
+
+	it("message_start 携带 controlMessageId 精确认领乐观气泡（不靠文本碰巧相同）", () => {
+		const id = useTranscriptStore
+			.getState()
+			.appendOptimisticUser("s1", { text: "一样的文本", images: [], controlMessageId: "m-42" });
+		// 不同 controlMessageId 的权威消息不得认领这条
+		useTranscriptStore.getState().applyEvent("s1", {
+			type: "message_start",
+			controlMessageId: "m-other",
+			message: { role: "user", content: [{ type: "text", text: "一样的文本" }] },
+		} as never);
+		let messages = useTranscriptStore.getState().bySession.s1?.messages ?? [];
+		expect(messages.filter((m) => m.kind === "user")).toHaveLength(2);
+		// 匹配的 controlMessageId 原位认领
+		useTranscriptStore.getState().applyEvent("s1", {
+			type: "message_start",
+			controlMessageId: "m-42",
+			message: { role: "user", content: [{ type: "text", text: "一样的文本" }] },
+		} as never);
+		messages = useTranscriptStore.getState().bySession.s1?.messages ?? [];
+		const users = messages.filter((m) => m.kind === "user");
+		expect(users).toHaveLength(2);
+		expect(users.some((m) => m.pending)).toBe(false);
+		// 原位认领：认领后的权威消息占据乐观气泡原位置（在 m-other 之前）
+		const first = messages[0];
+		expect(first).toMatchObject({ kind: "user", text: "一样的文本" });
+		expect(first?.kind === "user" && first.pending).toBeFalsy();
+		expect(id).toBeTruthy();
+	});
+
+	it("receipt failed 移除对应乐观气泡（不回填会话草稿以外状态）", () => {
+		useTranscriptStore
+			.getState()
+			.appendOptimisticUser("s1", { text: "hi", images: [], controlMessageId: "m-7" });
+		useTranscriptStore.getState().applyEvent("s1", {
+			type: "message_control_update",
+			snapshot: snapshot({ items: [] }),
+			receipt: { messageId: "m-7", requestId: "m-7", status: "failed", error: "boom" },
+		} as never);
+		expect(useTranscriptStore.getState().bySession.s1?.messages).toHaveLength(0);
+	});
+
+	it("REDUCED_EVENT_TYPES 含 message_control_update", () => {
+		expect(REDUCED_EVENT_TYPES).toContain("message_control_update");
+	});
+});

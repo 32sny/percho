@@ -1,4 +1,5 @@
 import type { UiError } from "../errors";
+import type { ControlSnapshot } from "../message-control";
 import type { ImageInput } from "../session";
 import type { SkillInvocationDisplay } from "../skill-invocation";
 import type { TodoItem } from "../todo";
@@ -54,6 +55,8 @@ export type UIMessage =
 			 * 仅 UI 态——不入历史、不入 trace、不写盘；认出后即清。
 			 */
 			pending?: boolean;
+			/** 托管发送的消息 id（= requestId）：权威 message_start 按它精确认领，不靠文本碰巧相同 */
+			controlMessageId?: string;
 	  })
 	| (UIBaseMessage & {
 			kind: "assistant";
@@ -186,6 +189,11 @@ export interface SessionTranscriptState {
 	pendingLlmError: UiError | null;
 	/** SDK 自动重试瞬时信息（auto_retry_start → 状态行；auto_retry_end/turn_start/agent_settled 清） */
 	retrying: RetryInfo | null;
+	/** 消息控制快照投影（message_control_update 事件驱动；load 时 getMessageControl 显式替换）。
+	 *  与 phase/agentActive 是两条独立来源：UI 忙碌判定取保守并集，谁都不覆盖谁（见 Composer busy 归并）。 */
+	control: ControlSnapshot | null;
+	/** 已采纳的控制 runtimeId：钉住后旧 runtime 的迟到事件一律拒收（同 id 会话重开防串实例） */
+	controlRuntimeId?: string;
 	/** 最近一次 agent run 的固化结束时刻（agent_end willRetry=false / agent_settled 盖戳，agent_start 清）；
 	 * 最后一轮计时定格用——晚于最后一条消息落地，取 max 防「运行中末帧 > 定格值」回退 */
 	runEndedAt?: number;
@@ -203,5 +211,6 @@ export function emptyTranscript(): SessionTranscriptState {
 		todos: [],
 		pendingLlmError: null,
 		retrying: null,
+		control: null,
 	};
 }

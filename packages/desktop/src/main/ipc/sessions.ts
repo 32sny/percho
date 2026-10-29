@@ -18,6 +18,11 @@ export function registerSessionsIpc(backend: PiBackend): void {
 		exportSessionTranscript: ({ sessionId, sessionFile, cwd }) =>
 			backend.exportSessionTranscript(sessionId, sessionFile, cwd),
 		prompt: ({ sessionId, text, images }) => backend.prompt(sessionId, text, images),
+		submitMessage: (request) => backend.submitMessage(request),
+		getMessageControl: ({ sessionId }) => backend.getMessageControl(sessionId),
+		changePendingMessage: (request) => backend.changePendingMessage(request),
+		recoverPendingMessage: (request) => backend.recoverPendingMessage(request),
+		stopMessageControl: (request) => backend.stopMessageControl(request),
 		retryLastFailedTurn: ({ sessionId, ref }) => backend.retryLastFailedTurn(sessionId, ref),
 		abort: ({ sessionId }) => backend.abort(sessionId),
 		setModel: ({ sessionId, provider, modelId }) => backend.setModel(sessionId, provider, modelId),

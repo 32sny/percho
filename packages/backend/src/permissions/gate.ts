@@ -1,6 +1,11 @@
 import type { PermissionAnswer, PermissionRequest, PermissionRequestKind } from "@percho/shared";
 
 export type PermissionResponder = (req: PermissionRequest) => void;
+export type PermissionResolvedResponder = (result: {
+	sessionId: string;
+	requestId: string;
+	answered: boolean;
+}) => void;
 
 /** 权限请求附加元数据（内置权限门控扩展专用；其余扩展 confirm 不带） */
 export interface PermissionRequestMeta {
@@ -18,14 +23,25 @@ let nextId = 0;
 export class PermissionGate {
 	private readonly pending = new Map<
 		string,
-		{ resolve: (answer: boolean) => void; message: string; meta?: PermissionRequestMeta }
+		{
+			resolve: (answer: boolean) => void;
+			message: string;
+			meta?: PermissionRequestMeta;
+			signal?: AbortSignal;
+			onAbort?: () => void;
+		}
 	>();
 	private readonly titles = new Map<string, string>();
 	private readonly alwaysAllowed = new Set<string>();
 
 	private sessionId = "";
+	private onResolved: PermissionResolvedResponder = () => {};
 
 	constructor(private readonly onRequest: PermissionResponder) {}
+
+	setResolvedListener(listener: PermissionResolvedResponder): void {
+		this.onResolved = listener;
+	}
 
 	/** 会话创建后才能确定 sessionId，创建后绑定 */
 	bindSession(sessionId: string): void {
@@ -33,13 +49,24 @@ export class PermissionGate {
 	}
 
 	/** 实现 ExtensionUIContext.confirm 的语义；meta 由内置权限扩展携带（kind/suggestDir） */
-	confirm(title: string, message: string, meta?: PermissionRequestMeta): Promise<boolean> {
+	confirm(
+		title: string,
+		message: string,
+		meta?: PermissionRequestMeta,
+		signal?: AbortSignal,
+	): Promise<boolean> {
+		if (signal?.aborted) return Promise.resolve(false);
 		if (this.alwaysAllowed.has(title)) {
 			return Promise.resolve(true);
 		}
 		const id = `perm-${this.sessionId}-${nextId++}`;
 		return new Promise<boolean>((resolve) => {
-			this.pending.set(id, { resolve, message, meta });
+			const entry = { resolve, message, meta, signal, onAbort: undefined as (() => void) | undefined };
+			if (signal) {
+				entry.onAbort = () => this.settle(id, false);
+				signal.addEventListener("abort", entry.onAbort, { once: true });
+			}
+			this.pending.set(id, entry);
 			this.titles.set(id, title);
 			this.onRequest({
 				id,
@@ -81,15 +108,29 @@ export class PermissionGate {
 		const title = this.titles.get(requestId) ?? "";
 		this.pending.delete(requestId);
 		this.titles.delete(requestId);
+		if (entry.signal && entry.onAbort) entry.signal.removeEventListener("abort", entry.onAbort);
 		if (answer === "allowAlways" && title) {
 			this.alwaysAllowed.add(title);
 		}
 		entry.resolve(answer === "allow" || answer === "allowAlways" || answer === "allowDir");
+		this.onResolved({ sessionId: this.sessionId, requestId, answered: true });
+	}
+
+	cancelPending(): void {
+		for (const id of [...this.pending.keys()]) this.settle(id, false);
 	}
 
 	dispose(): void {
-		for (const { resolve } of this.pending.values()) resolve(false);
-		this.pending.clear();
-		this.titles.clear();
+		for (const id of [...this.pending.keys()]) this.settle(id, false);
+	}
+
+	private settle(requestId: string, answer: boolean): void {
+		const entry = this.pending.get(requestId);
+		if (!entry) return;
+		this.pending.delete(requestId);
+		this.titles.delete(requestId);
+		if (entry.signal && entry.onAbort) entry.signal.removeEventListener("abort", entry.onAbort);
+		entry.resolve(answer);
+		this.onResolved({ sessionId: this.sessionId, requestId, answered: false });
 	}
 }

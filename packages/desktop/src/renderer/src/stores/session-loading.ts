@@ -66,11 +66,30 @@ export function createSessionLoader(ports: SessionDataPorts) {
 			useTranscriptStore.getState().bySession[sessionId]?.agentActive === true;
 		const transcriptBefore = useTranscriptStore.getState().bySession[sessionId];
 		const openingEpoch = historyOpenEpoch(sessionId);
-		const [history, followUpQueue, todos, permissionMode] = await Promise.all([
+		const [history, followUpQueue, todos, permissionMode, control] = await Promise.all([
 			skipHistory ? Promise.resolve(null) : getPi().getSessionMessages({ sessionId }),
 			getPi().getFollowUpMessages({ sessionId }),
 			getPi().getTodos({ sessionId }),
 			getPi().getPermissionMode({ sessionId }),
+			// 控制快照：同 id 会话可被重开（runtime 不同），load 时必须明确替换旧快照；
+			// 通道未就绪/失败按 null 处理（显式清空，防旧实例事件接管），不影响四件套
+			(
+				getPi() as unknown as {
+					getMessageControl?: (req: {
+						sessionId: string;
+					}) => Promise<{ ok: true; value: import("@percho/shared").ControlSnapshot } | { ok: false }>;
+				}
+			).getMessageControl
+				? (
+						getPi() as unknown as {
+							getMessageControl: (req: {
+								sessionId: string;
+							}) => Promise<{ ok: true; value: import("@percho/shared").ControlSnapshot } | { ok: false }>;
+						}
+					)
+						.getMessageControl({ sessionId })
+						.catch(() => null)
+				: Promise.resolve(null),
 		]);
 		// TOCTOU 复核：await 期间会话转为 live（如恰好有 prompt 竞态）时丢弃迟到历史，
 		// 防旧快照覆盖刚建立的流式态（queue/todo/permissionMode 是幂等快照，照常应用）
@@ -86,6 +105,8 @@ export function createSessionLoader(ports: SessionDataPorts) {
 			finishSessionHistory(sessionId);
 		}
 		t.setFollowUpQueue(sessionId, followUpQueue);
+		// 显式替换（含清空）：旧 runtime 快照/事件一律作废，事件侧由 reducer 的 runtime 钉住兜底
+		t.setControlSnapshot(sessionId, control?.ok ? control.value : null);
 		t.loadTodos(sessionId, todos);
 		ports.writePermissionMode(sessionId, permissionMode);
 		if (historyNeedsRetry) {

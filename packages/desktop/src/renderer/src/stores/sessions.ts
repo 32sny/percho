@@ -12,6 +12,7 @@ import { errText } from "../lib/error-text";
 import { clampThinkingLevel } from "../lib/thinking";
 import { useChannelSubscriptionsStore } from "./channel-subscriptions";
 import { COMPOSER_FOCUS_EVENT, useDraftStore } from "./drafts";
+import { discardPendingPayloads } from "./pending-payloads";
 import {
 	finishSessionHistory,
 	hasPendingSessionHistory,
@@ -559,6 +560,15 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 		})),
 
 	closeSession: async (sessionId, intent) => {
+		// 用户关闭总是从权威快照检查待发项，不能依赖可能过时的本地投影。
+		// GC 不触发用户确认；由后端策略拒绝带待发项的卸载。
+		if (intent !== "gc") {
+			const discarded = await discardPendingPayloads(sessionId);
+			if (discarded !== "empty" && discarded !== "ok") {
+				if (discarded !== "cancelled") pushToast("warning", "toast.pendingPayloadDiscardFailed");
+				return { closed: false };
+			}
+		}
 		try {
 			// intent 只在本轮是「内存策略自动卸载」时带上，用户主动关不传（保持既有语义）
 			const { closed } = await getPi().closeSession(intent ? { sessionId, intent } : { sessionId });

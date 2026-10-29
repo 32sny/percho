@@ -69,6 +69,23 @@ describe("PermissionGate", () => {
 		await expect(other).resolves.toBe(true);
 	});
 
+	it("run signal abort 只拒绝本轮待决权限并广播 reason=aborted，不清会话白名单", async () => {
+		const { gate, requests } = makeGate();
+		const resolved: Array<{ sessionId: string; requestId: string; answered: boolean }> = [];
+		gate.setResolvedListener((event) => resolved.push(event));
+		const signal = new AbortController();
+		const first = gate.confirm("bash", "cmd");
+		gate.respond(requests[0]!.id, "allowAlways");
+		await expect(first).resolves.toBe(true);
+
+		const pending = gate.confirm("edit", "file", undefined, signal.signal);
+		signal.abort();
+		await expect(pending).resolves.toBe(false);
+		expect(resolved).toContainEqual({ sessionId: "s1", requestId: requests[1]!.id, answered: false });
+		await expect(gate.confirm("bash", "cmd2")).resolves.toBe(true);
+		expect(requests).toHaveLength(2);
+	});
+
 	it("dispose 时未决请求全部拒绝", async () => {
 		const { gate, requests } = makeGate();
 		const promise = gate.confirm("x", "y");

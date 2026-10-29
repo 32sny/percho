@@ -1,11 +1,30 @@
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts
-index 03f811e..f71e3af 100644
+index 03f811e..e75714b 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts
-@@ -525,6 +525,10 @@ export declare class AgentSession {
+@@ -25,6 +25,7 @@ import type { ResourceLoader } from "./resource-loader.ts";
+ import { type BranchSummaryEntry, type SessionEntry, SessionManager } from "./session-manager.ts";
+ import { type CacheWarmingMode, type SettingsManager } from "./settings-manager.ts";
+ import { type BashOperations } from "./tools/bash.ts";
++import type { MessageControlHandle } from "./message-control.ts";
+ /** Parsed skill block from a user message */
+ export interface ParsedSkillBlock {
+     name: string;
+@@ -219,6 +220,7 @@ export declare class AgentSession {
+     private _eventListeners;
+     private _isAgentRunActive;
+     private _agentRunAbortRequested;
++    private _messageControl?;
+     private _idleWaitPromise;
+     private _resolveIdleWait;
+     /** Tracks pending steering messages for UI display. Removed when delivered. */
+@@ -524,7 +526,12 @@ export declare class AgentSession {
+      * @throws Error if streaming and no streamingBehavior specified
       * @throws Error if no model selected or no API key available (when not streaming)
       */
-     prompt(text: string, options?: PromptOptions): Promise<void>;
+-    prompt(text: string, options?: PromptOptions): Promise<void>;
++    prompt(text: string, options?: PromptOptions & { controlMessageId?: string }): Promise<void>;
++    enableMessageControl(): MessageControlHandle;
 +    /** Percho patch: retry the terminal failure using durable context omission, without user input. */
 +    retryLastFailedTurn(ref: { timestamp: number; entryId: string }, options?: {
 +        preflightResult?: (disposition: "started") => void;
@@ -14,15 +33,67 @@ index 03f811e..f71e3af 100644
       * Try to execute an extension command. Returns true if command was found and executed.
       */
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js b/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js
-index ec5f44e..7786dc4 100644
+index ec5f44e..ddb9626 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js
-@@ -1373,16 +1373,16 @@ export class AgentSession {
+@@ -46,6 +46,7 @@ import { createAllToolDefinitions } from "./tools/index.js";
+ import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
+ import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.js";
+ import { findLatestResponse, getBranchSelection, getVirtualModelState, isVirtualModel, VIRTUAL_MODEL_STATE_ENTRY, } from "./virtual-models.js";
++import { MessageControl } from "./message-control.js";
+ /**
+  * Parse a skill block from message text.
+  * Returns null if the text doesn't contain a skill block.
+@@ -89,6 +90,7 @@ export class AgentSession {
+     _eventListeners = [];
+     _isAgentRunActive = false;
+     _agentRunAbortRequested = false;
++    _messageControl;
+     _idleWaitPromise;
+     _resolveIdleWait;
+     /** Tracks pending steering messages for UI display. Removed when delivered. */
+@@ -215,6 +217,11 @@ export class AgentSession {
+     get modelRuntime() {
+         return this._modelRuntime;
+     }
++    enableMessageControl() {
++        if (!this._messageControl)
++            this._messageControl = new MessageControl(this);
++        return this._messageControl.handle();
++    }
+     async _getRequiredRequestAuth(model, signal) {
+         let result;
+         try {
+@@ -720,12 +727,13 @@ export class AgentSession {
+                 this._nestedToolCalls.clear();
+             }
+         }
++        if (event.type === "message_start") this._messageControl?.onMessageStart(event);
+         // When a user message starts, check if it's from either queue and remove it BEFORE emitting
+         // This ensures the UI sees the updated queue state
+         if (event.type === "message_start" && event.message.role === "user") {
+             this._overflowRecoveryAttempted = false;
+             const messageText = contentText(event.message.content, "");
+-            if (messageText) {
++            if (messageText && !this._messageControl) {
+                 // Check steering queue first
+                 const steeringIndex = this._steeringMessages.indexOf(messageText);
+                 if (steeringIndex !== -1) {
+@@ -986,6 +994,7 @@ export class AgentSession {
+      * Call this when completely done with the session.
+      */
+     dispose() {
++        this._messageControl?.dispose();
+         try {
+             this.abortRetry();
+             this.abortCompaction();
+@@ -1373,16 +1382,17 @@ export class AgentSession {
      // =========================================================================
      // Prompting
      // =========================================================================
 -    async _runAgentPrompt(messages) {
 +    async _runAgentPrompt(messages, failedResponse) {
++        this._messageControl?.assertLive();
          this._agentRunAbortRequested = false;
 -        // Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
 -        this._failedResponse = undefined;
@@ -41,7 +112,7 @@ index ec5f44e..7786dc4 100644
              await this.agent.prompt(messages);
              while (!this._agentRunAbortRequested) {
                  if (await this._handlePostAgentRun()) {
-@@ -1501,6 +1501,48 @@ export class AgentSession {
+@@ -1501,6 +1511,50 @@ export class AgentSession {
          }
          return { images: normalizedImages, hints };
      }
@@ -51,6 +122,8 @@ index ec5f44e..7786dc4 100644
 +     * The timestamp is the assistant message timestamp, not the error card creation time.
 +     */
 +    async retryLastFailedTurn(ref, options) {
++        if (this._messageControl && !this._messageControl.hasScope())
++            return this._messageControl.runAuxiliary(() => this.retryLastFailedTurn(ref, options));
 +        if (!this.isIdle || this._isEmittingAgentSettled || this._isBeforeSettle || this.agent.hasQueuedMessages()) {
 +            throw new Error("Cannot retry while the session is busy or has queued messages");
 +        }
@@ -90,3 +163,648 @@ index ec5f44e..7786dc4 100644
      /**
       * Send a prompt to the agent.
       * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
+@@ -1511,6 +1565,11 @@ export class AgentSession {
+      * @throws Error if no model selected or no API key available (when not streaming)
+      */
+     async prompt(text, options) {
++        if (this._messageControl) return this._messageControl.submitPublicPrompt(text, options);
++        return this._promptUncontrolled(text, options);
++    }
++    async _promptUncontrolled(text, options) {
++        this._messageControl?.assertLive();
+         if (this._isEmittingAgentSettled) {
+             this._deferredSettledActions.push(async () => await this.prompt(text, options));
+             return;
+@@ -1521,6 +1580,7 @@ export class AgentSession {
+         // Extension commands manage their own LLM interaction via pi.sendMessage()
+         if (expandPromptTemplates && text.startsWith("/")) {
+             const handled = await this._tryExecuteExtensionCommand(text);
++            this._messageControl?.assertLive();
+             if (handled) {
+                 // Extension command executed, no prompt to send
+                 preflightResult?.("handled");
+@@ -1532,6 +1592,7 @@ export class AgentSession {
+         }
+         // Emit input event for extension interception (before skill/template expansion)
+         const processedInput = await this._runInputHandlers(text, options?.images, options?.source ?? "interactive", this.isStreaming ? options?.streamingBehavior : undefined);
++        this._messageControl?.assertLive();
+         if (!processedInput) {
+             preflightResult?.("handled");
+             return;
+@@ -1543,6 +1604,13 @@ export class AgentSession {
+             expandedText = this._expandSkillCommand(expandedText);
+             expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+         }
++        // A queued preparation may finish after the active run. Never let it start a
++        // second run from this async continuation; the controller owns that hand-off.
++        if (this._messageControl?.queueScope) {
++            this._messageControl.enqueuePrepared(expandedText, currentImages, options?.streamingBehavior === "steer" ? "steer" : "queue");
++            preflightResult?.("queued");
++            return;
++        }
+         // If streaming, queue via steer() or followUp() based on option
+         if (this.isStreaming) {
+             if (!options?.streamingBehavior) {
+@@ -1566,6 +1634,7 @@ export class AgentSession {
+         }
+         const hasConfiguredAuth = this._modelRuntime.hasConfiguredAuth(this.model.provider) ||
+             (await this._modelRuntime.checkAuth(this.model.provider)) !== undefined;
++        this._messageControl?.assertLive();
+         if (!hasConfiguredAuth) {
+             const isOAuth = this._modelRuntime.isUsingOAuth(this.model.provider);
+             if (isOAuth) {
+@@ -1580,11 +1649,13 @@ export class AgentSession {
+         const lastAssistant = this._findLastAssistantMessage();
+         if (lastAssistant) {
+             await this._checkCompaction(lastAssistant, false);
++            this._messageControl?.assertLive();
+         }
+         // Emit before_agent_start before normalizing images so extension-driven model
+         // selection determines the resize profile used for the request and history.
+         const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
+         const result = await this._extensionRunner.emitBeforeAgentStart(expandedText, currentImages, this._baseSystemPromptOptions);
++        this._messageControl?.assertLive();
+         // Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
+         // which updates the live loadout instead. An explicit edit wins; otherwise the live
+         // loadout is authoritative, so a setActiveTools() call is not undone here.
+@@ -1593,16 +1664,15 @@ export class AgentSession {
+         if (!handlerEditedTools)
+             result.systemPromptOptions.selectedTools = this.getActiveToolNames();
+         const normalized = await this._normalizePromptImages(currentImages);
++        this._messageControl?.assertLive();
+         const userText = normalized.hints.length > 0 ? `${expandedText}\n\n${normalized.hints.join("\n")}` : expandedText;
+         // Build messages only after hooks and image normalization have completed.
+         const messages = [];
+         const userContent = [{ type: "text", text: userText }];
+         userContent.push(...normalized.images);
+-        messages.push({
+-            role: "user",
+-            content: userContent,
+-            timestamp: Date.now(),
+-        });
++        const userMessage = { role: "user", content: userContent, timestamp: Date.now() };
++        this._messageControl?.trackMessage(userMessage);
++        messages.push(userMessage);
+         // Inject any pending "nextTurn" messages as context alongside the user message
+         for (const msg of this._pendingNextTurnMessages) {
+             messages.push(msg);
+@@ -1710,6 +1780,7 @@ export class AgentSession {
+      * @throws Error if text is an extension command
+      */
+     async steer(text, images, options) {
++        if (this._messageControl) return this._messageControl.submitPublicPrompt(text, { images, streamingBehavior: "steer", source: options?.source });
+         return this._queueUserInput(text, images, "steer", options?.source ?? "interactive");
+     }
+     /**
+@@ -1721,12 +1792,14 @@ export class AgentSession {
+      * @throws Error if text is an extension command
+      */
+     async followUp(text, images, options) {
++        if (this._messageControl) return this._messageControl.submitPublicPrompt(text, { images, streamingBehavior: "followUp", source: options?.source });
+         return this._queueUserInput(text, images, "followUp", options?.source ?? "interactive");
+     }
+     /**
+      * Internal: Queue a steering message (already expanded, no extension command check).
+      */
+     async _queueSteer(text, images) {
++        if (this._messageControl?.enqueuePrepared(text, images, "steer")) return;
+         this._steeringMessages.push(text);
+         this._emitQueueUpdate();
+         const content = [{ type: "text", text }];
+@@ -1743,6 +1816,7 @@ export class AgentSession {
+      * Internal: Queue a follow-up message (already expanded, no extension command check).
+      */
+     async _queueFollowUp(text, images) {
++        if (this._messageControl?.enqueuePrepared(text, images, "queue")) return;
+         this._followUpMessages.push(text);
+         this._emitQueueUpdate();
+         const content = [{ type: "text", text }];
+@@ -1785,6 +1859,10 @@ export class AgentSession {
+             details: message.details,
+             timestamp: Date.now(),
+         };
++        if (this._messageControl && options?.deliverAs !== "nextTurn" &&
++            (options?.triggerTurn || (this.isStreaming && options?.triggerTurn !== false))) {
++            return this._messageControl.submitCustom(appMessage, options);
++        }
+         if (options?.deliverAs === "nextTurn") {
+             this._pendingNextTurnMessages.push(appMessage);
+         }
+@@ -1876,6 +1954,7 @@ export class AgentSession {
+      * @returns Object with steering and followUp arrays
+      */
+     clearQueue() {
++        if (this._messageControl) return this._messageControl.clearLegacy();
+         const steering = [...this._steeringMessages];
+         const followUp = [...this._followUpMessages];
+         this._steeringMessages = [];
+@@ -1903,6 +1982,10 @@ export class AgentSession {
+      * Abort current operation and wait for agent to become idle.
+      */
+     async abort() {
++        if (this._messageControl) return this._messageControl.abortLegacy();
++        return this._abortUncontrolled();
++    }
++    async _abortUncontrolled() {
+         if (this._isAgentRunActive) {
+             this._agentRunAbortRequested = true;
+         }
+diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.d.ts
+new file mode 100644
+index 0000000..37b6baa
+--- /dev/null
++++ b/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.d.ts
+@@ -0,0 +1,17 @@
++export type MessageMode = "queue" | "steer" | "interrupt";
++export type ControlPhase = "idle" | "preparing" | "running" | "compacting" | "interrupting" | "blocked";
++export interface MessagePayload { text: string; images?: { data: string; mimeType: string }[]; draft?: { text: string; attachments: string[]; quotes: string[]; slashCommand: string | null; imageNames?: string[] } }
++export interface ControlIdentity { sessionId: string; runtimeId: string; requestId: string }
++export interface MessageSubmitRequest extends ControlIdentity { mode: MessageMode; payload: MessagePayload; recovery?: { messageId: string; expectedRevision: number } }
++export interface MessageAck { requestId: string; messageId: string; operationId?: string; disposition: "started" | "queued" | "handled" | "interrupting" | "held" }
++export interface ControlledItem { messageId: string; source: "user" | "extension" | "system"; mode: MessageMode; state: "queued" | "held" | "recovering"; preview: string; imageCount: number }
++export interface ControlSnapshot { runtimeId: string; revision: number; runId?: string; phase: ControlPhase; compactionKind?: "manual" | "auto"; autoDispatchPaused: boolean; operation?: { operationId: string; messageId?: string; sendAfterStop: boolean; startedAt: number; slow?: boolean }; items: ControlledItem[] }
++export type ControlErrorCode = "not_found" | "read_only" | "stale_runtime" | "stale_revision" | "invalid_payload" | "image_unsupported" | "queue_full" | "busy" | "compacting" | "command_mode_unsupported" | "already_committed" | "request_id_conflict" | "preflight_failed";
++export type ControlResult<T> = { ok: true; value: T } | { ok: false; error: { code: ControlErrorCode; message: string; snapshot?: ControlSnapshot } };
++export interface PendingMessageRequest extends ControlIdentity { messageId: string; expectedRevision: number }
++export interface ChangePendingMessageRequest extends PendingMessageRequest { action: "steer" | "interrupt" | "resend" | "discard" }
++export interface ChangePendingMessageResult { snapshot: ControlSnapshot; ack?: MessageAck }
++export interface RecoverPendingMessageResult { payload: MessagePayload; messageId: string; snapshot: ControlSnapshot }
++export interface StopMessageControlResult { operationId: string; snapshot: ControlSnapshot }
++export interface MessageControlUpdate { snapshot: ControlSnapshot; receipt?: { messageId: string; requestId: string; status: "committed" | "handled" | "failed"; error?: string } }
++export interface MessageControlHandle { submit(request: MessageSubmitRequest, source?: "user" | "extension" | "system"): Promise<ControlResult<MessageAck>>; getSnapshot(): ControlSnapshot; changePending(request: ChangePendingMessageRequest): Promise<ControlResult<ChangePendingMessageResult>>; recover(request: PendingMessageRequest): ControlResult<RecoverPendingMessageResult>; stop(identity: ControlIdentity): ControlResult<StopMessageControlResult>; subscribe(listener: (update: MessageControlUpdate) => void): () => void; readonly signal: AbortSignal | undefined; waitForIdle(): Promise<void>; dispose(): void }
+diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.js b/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.js
+new file mode 100644
+index 0000000..853850f
+--- /dev/null
++++ b/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.js
+@@ -0,0 +1,458 @@
++import { AsyncLocalStorage } from "node:async_hooks";
++import { randomUUID } from "node:crypto";
++
++// Scope belongs to an async invocation, never a global bypass flag spanning awaits.
++const scopes = new AsyncLocalStorage();
++const ok = (value) => ({ ok: true, value });
++const clone = (value) => structuredClone(value);
++const fingerprint = (value) => JSON.stringify(value);
++const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
++
++export class MessageControl {
++    constructor(session) {
++        this.session = session;
++        this.runtimeId = randomUUID();
++        this.revision = 0;
++        this.epoch = 0;
++        this.records = new Map();
++        this.requests = new Map();
++        this.listeners = new Set();
++        this.tasks = new Set();
++        this.invocations = new Set();
++        this.messageRecords = new WeakMap();
++        this.autoDispatchPaused = false;
++        this.disposed = false;
++        this.active = undefined;
++        this.operation = undefined;
++        this.phase = "idle";
++        this.unsubscribe = session.subscribe(event => {
++            if (["auto_compaction_start", "auto_compaction_end", "compaction_start", "compaction_end"].includes(event.type)) this.publish();
++        });
++    }
++    failure(code, message) { return { ok: false, error: { code, message, snapshot: this.snapshot() } }; }
++    get busy() { return this.tasks.size > 0 || !this.session.isIdle; }
++    get signal() {
++        const scope = scopes.getStore();
++        return (scope?.owner === this ? scope.controller.signal : this.active?.controller.signal)
++            ?? this.session.agent.signal ?? this.session._compactionAbortController?.signal;
++    }
++    snapshot() {
++        let phase = this.operation?.waiting ? (this.operation.blocked ? "blocked" : "interrupting") : this.phase;
++        if (!this.operation?.waiting && this.session.isCompacting) phase = "compacting";
++        if (phase === "idle" && !this.session.isIdle) phase = "running";
++        return {
++            runtimeId: this.runtimeId, revision: this.revision, phase,
++            autoDispatchPaused: this.autoDispatchPaused,
++            ...(this.active ? { runId: this.active.runId } : {}),
++            ...(this.session.isCompacting ? { compactionKind: this.session._compactionAbortController ? "manual" : "auto" } : {}),
++            ...(this.operation ? { operation: { operationId: this.operation.id, messageId: this.operation.target?.id,
++                sendAfterStop: this.operation.sendAfterStop, startedAt: this.operation.startedAt, slow: this.operation.slow } } : {}),
++            items: [...this.records.values()].filter(r => !r.committed && !r.consumed).map(r => ({
++                messageId: r.id, source: r.source, mode: r.mode, state: r.state,
++                preview: r.payload.text.slice(0, 240), imageCount: r.payload.images?.length ?? 0,
++            })),
++        };
++    }
++    publish(receipt) {
++        if (this.disposed) return;
++        this.revision++;
++        const update = { snapshot: this.snapshot(), ...(receipt ? { receipt } : {}) };
++        for (const listener of this.listeners) {
++            try { listener(clone(update)); } catch { /* A host observer cannot break queue ownership. */ }
++        }
++    }
++    handle() {
++        if (this.publicHandle) return this.publicHandle;
++        const self = this;
++        return this.publicHandle = {
++            submit: (request, source = "user") => self.submit(request, source),
++            getSnapshot: () => self.snapshot(),
++            changePending: request => self.changePending(request),
++            recover: request => self.recover(request),
++            stop: request => self.stop(request),
++            subscribe(listener) { self.listeners.add(listener); return () => self.listeners.delete(listener); },
++            get signal() { return self.signal; },
++            waitForIdle: () => self.waitForIdle(),
++            dispose: () => self.dispose(),
++        };
++    }
++    identity(request) {
++        if (this.disposed) return this.failure("not_found", "Session has been disposed");
++        if (!request || request.sessionId !== this.session.sessionId || request.runtimeId !== this.runtimeId)
++            return this.failure("stale_runtime", "Session runtime has changed");
++        if (typeof request.requestId !== "string" || !request.requestId || request.requestId.length > 200)
++            return this.failure("invalid_payload", "A valid request ID is required");
++    }
++    previous(request, kind) {
++        const prior = this.requests.get(request.requestId);
++        if (!prior) return;
++        return prior.fingerprint === fingerprint([kind, request]) ? prior.result
++            : this.failure("request_id_conflict", "Request ID was reused with different input");
++    }
++    remember(request, kind, result) {
++        this.requests.set(request.requestId, { fingerprint: fingerprint([kind, request]), result });
++        return result;
++    }
++    capacity(mode, source, except) {
++        return source === "user" && [...this.records.values()].some(r => r !== except && (r !== this.active?.record || r.state !== "queued") && r.source === "user" && r.mode === mode && !r.committed && !r.consumed);
++    }
++    validatePayload(request) {
++        const p = request.payload;
++        if (!["queue", "steer", "interrupt"].includes(request.mode) || !p || typeof p.text !== "string"
++            || (!p.text.trim() && !p.images?.length) || (p.images !== undefined && (!Array.isArray(p.images)
++            || p.images.some(i => !i || typeof i.data !== "string" || typeof i.mimeType !== "string"))))
++            return this.failure("invalid_payload", "Message payload is invalid");
++        if (request.mode !== "queue" && (p.draft?.slashCommand || (p.draft?.text ?? p.text).trimStart().startsWith("/")))
++            return this.failure("command_mode_unsupported", "Stop first before sending a command");
++        if (p.images?.length && this.session.model?.input && !this.session.model.input.includes("image"))
++            return this.failure("image_unsupported", "The selected model does not support images");
++        if (this.session._compactionAbortController) return this.failure("compacting", "Manual compaction is in progress");
++    }
++    submit(request, source = "user", options = {}) {
++        const invalid = this.identity(request);
++        if (invalid) return Promise.resolve(invalid);
++        const prior = this.previous(request, "submit");
++        if (prior) return Promise.resolve(prior);
++        const badPayload = this.validatePayload(request);
++        if (badPayload) return Promise.resolve(badPayload);
++        if (this.operation && source === "user") return Promise.resolve(this.failure("busy", "The previous operation is still stopping"));
++        let original;
++        if (request.recovery) {
++            if (request.recovery.expectedRevision !== this.revision) return Promise.resolve(this.failure("stale_revision", "Pending messages changed"));
++            original = this.records.get(request.recovery.messageId);
++            if (!original || original.committed) return Promise.resolve(this.failure("already_committed", "Message is no longer pending"));
++            if (original.processing) return Promise.resolve(this.failure("busy", "Message preparation has not stopped"));
++        }
++        // Idle direct sends do not occupy the queued slot after commit, but held items still own it.
++        if (this.capacity(request.mode, source, original)) return Promise.resolve(this.failure("queue_full", "This message slot is occupied; recover or discard it first"));
++        const record = { id: original?.id ?? request.requestId, requestId: request.requestId, payload: clone(request.payload),
++            source, mode: request.mode, state: "queued", options, committed: false, consumed: false,
++            ack: deferred(), generation: this.epoch };
++        if (original) this.detach(original);
++        this.records.set(record.id, record);
++        const result = record.ack.promise;
++        this.remember(request, "submit", result);
++        if (request.mode === "interrupt" && this.busy) {
++            this.beginStop(record);
++            this.ack(record, "interrupting");
++        } else if (source === "user" && !this.busy && !this.operation) {
++            this.autoDispatchPaused = false;
++            this.launch(record, true);
++        } else if (!this.busy && !this.autoDispatchPaused && !this.operation) {
++            this.launch(record, true);
++        } else {
++            this.ack(record, "queued");
++            this.publish();
++            this.kick();
++        }
++        return result;
++    }
++    ack(record, disposition, error) {
++        if (record.acked) return;
++        record.acked = true;
++        record.ack.resolve(error ?? ok({ requestId: record.requestId, messageId: record.id, disposition,
++            ...(disposition === "interrupting" ? { operationId: this.operation?.id } : {}) }));
++    }
++    hasScope() { return scopes.getStore()?.owner === this; }
++    get queueScope() { const s = scopes.getStore(); return s?.owner === this && s.startRun === false; }
++    async runAuxiliary(fn) {
++        if (this.busy || this.operation || this.autoDispatchPaused) throw new Error("Session is busy or paused");
++        const scope = { owner: this, epoch: this.epoch, controller: new AbortController(), runId: randomUUID(), startRun: true };
++        this.active = scope; this.phase = "running"; this.invocations.add(scope); this.publish();
++        const task = Promise.resolve().then(() => scopes.run(scope, fn)).finally(() => {
++            this.tasks.delete(task); this.invocations.delete(scope);
++            if (this.active === scope) { this.active = undefined; this.phase = "idle"; }
++            this.publish(); this.kick();
++        });
++        this.tasks.add(task);
++        return task;
++    }
++    assertLive() {
++        const scope = scopes.getStore();
++        if (scope?.owner === this && (this.disposed || scope.epoch !== this.epoch || scope.controller.signal.aborted))
++            throw new Error("Message preparation was cancelled");
++    }
++    // Initial user messages are tracked by object identity; identifiers never enter model content.
++    trackMessage(message) {
++        const scope = scopes.getStore();
++        if (scope?.owner === this && scope.record) this.messageRecords.set(message, scope.record);
++    }
++    onMessageStart(event) {
++        const record = this.messageRecords.get(event.message);
++        if (!record) return;
++        event.controlMessageId = record.id;
++        if (record.committed) return;
++        record.committed = true;
++        this.records.delete(record.id);
++        this.syncTextQueues();
++        if (this.operation?.target === record) {
++            this.clearTimers(this.operation);
++            this.operation = undefined;
++            this.autoDispatchPaused = false;
++        }
++        this.publish({ messageId: record.id, requestId: record.requestId, status: "committed" });
++        this.kick();
++    }
++    enqueuePrepared(text, images, mode) {
++        const scope = scopes.getStore();
++        if (scope?.owner !== this || !scope.record) return false;
++        this.assertLive();
++        const r = scope.record;
++        r.prepared = { role: "user", content: [{ type: "text", text }, ...(images ?? []).map(i => ({ type: "image", data: i.data, mimeType: i.mimeType }))], timestamp: Date.now() };
++        this.messageRecords.set(r.prepared, r);
++        r.mode = mode === "steer" ? "steer" : "queue";
++        this.putPrepared(r);
++        return true;
++    }
++    putPrepared(record) {
++        if (record.enqueued || record.state !== "queued" || record.committed || this.autoDispatchPaused || this.operation?.waiting) return;
++        record.enqueued = true;
++        (record.mode === "steer" ? this.session.agent.steer.bind(this.session.agent) : this.session.agent.followUp.bind(this.session.agent))(record.prepared);
++        this.syncTextQueues();
++        this.publish();
++    }
++    detach(record) {
++        // SDK-internal queue storage is a transport, not an additional message owner.
++        for (const queue of [this.session.agent.steeringQueue, this.session.agent.followUpQueue]) {
++            queue.messages = queue.messages.filter(message => this.messageRecords.get(message) !== record);
++        }
++        record.enqueued = false;
++        this.syncTextQueues();
++    }
++    syncTextQueues() {
++        for (const [field, queue] of [["_steeringMessages", this.session.agent.steeringQueue], ["_followUpMessages", this.session.agent.followUpQueue]]) {
++            this.session[field] = queue.messages.filter(m => m.role === "user").map(m => m.content.filter(c => c.type === "text").map(c => c.text).join(""));
++        }
++        this.session._emitQueueUpdate();
++    }
++    launch(record, startRun) {
++        if (record.processing || record.state !== "queued" || this.disposed) return;
++        const scope = { owner: this, record, epoch: this.epoch, controller: new AbortController(), runId: randomUUID(), startRun };
++        if (startRun && record.enqueued) this.detach(record);
++        if (startRun) { this.active = scope; this.phase = "preparing"; }
++        record.processing = true;
++        record.generation = this.epoch;
++        this.invocations.add(scope);
++        this.publish();
++        const task = Promise.resolve().then(() => scopes.run(scope, async () => {
++            this.assertLive();
++            if (record.prepared) {
++                // Mode changes reuse the already processed message, not its template source.
++                this.trackMessage(record.prepared);
++                this.ack(record, "started");
++                this.phase = "running";
++                await this.session._runAgentPrompt([record.prepared]);
++            } else if (record.custom) {
++                record.prepared = record.custom;
++                this.trackMessage(record.prepared);
++                if (startRun) {
++                    this.phase = "running";
++                    await this.session._runAgentPrompt([record.prepared]);
++                } else this.putPrepared(record);
++                this.ack(record, startRun ? "started" : "queued");
++            } else {
++                await this.session._promptUncontrolled(record.payload.text, {
++                    ...record.options, images: record.payload.images?.map(i => ({ type: "image", data: i.data, mimeType: i.mimeType })),
++                    source: record.source === "user" ? "interactive" : "extension",
++                    streamingBehavior: record.mode === "steer" ? "steer" : "followUp",
++                    preflightResult: disposition => {
++                        this.assertLive();
++                        if (disposition === "handled") {
++                            record.consumed = true;
++                            this.records.delete(record.id);
++                            if (this.operation?.target === record) { this.clearTimers(this.operation); this.operation = undefined; this.autoDispatchPaused = true; }
++                            this.publish({ messageId: record.id, requestId: record.requestId, status: "handled" });
++                        } else if (disposition === "started" && this.active === scope) {
++                            this.phase = "running";
++                            this.publish();
++                            this.kick();
++                        }
++                        this.ack(record, disposition);
++                    },
++                });
++            }
++        })).catch(error => {
++            if (!record.committed && !record.consumed) {
++                this.detach(record);
++                record.state = record.source !== "user" && scope.epoch !== this.epoch ? "queued" : "held";
++                if (record.state === "queued") record.mode = "queue";
++                this.records.set(record.id, record);
++                this.ack(record, "held", this.failure("preflight_failed", error instanceof Error ? error.message : String(error)));
++                this.publish({ messageId: record.id, requestId: record.requestId, status: "failed", error: error instanceof Error ? error.message : String(error) });
++            }
++            if (this.operation?.target === record) { this.clearTimers(this.operation); this.operation = undefined; this.autoDispatchPaused = true; }
++        }).finally(() => {
++            record.processing = false;
++            this.invocations.delete(scope);
++            this.tasks.delete(task);
++            if (this.active === scope) { this.active = undefined; this.phase = "idle"; }
++            this.ack(record, record.consumed ? "handled" : record.committed ? "started" : "held");
++            this.publish();
++            this.kick();
++        });
++        this.tasks.add(task);
++    }
++    kick() {
++        if (this.disposed || this.autoDispatchPaused || this.operation) return;
++        const eligible = [...this.records.values()].filter(r => r.state === "queued" && !r.processing && !r.committed && !r.consumed);
++        if (!eligible.length) return;
++        if (!this.active && this.session.isIdle && !this.tasks.size) {
++            this.launch(eligible.find(r => r.mode === "steer") ?? eligible[0], true);
++        } else if (this.active && this.phase === "running" && this.session.agent.state.isStreaming) {
++            for (const record of eligible) {
++                if (record.enqueued) continue;
++                if (record.prepared) this.putPrepared(record);
++                else this.launch(record, false);
++            }
++        }
++    }
++    beginStop(target) {
++        this.epoch++;
++        this.autoDispatchPaused = true;
++        const operation = { id: randomUUID(), target, sendAfterStop: !!target, waiting: true, blocked: false, startedAt: Date.now() };
++        this.operation = operation;
++        for (const record of this.records.values()) {
++            if (record === target) continue;
++            this.detach(record);
++            if (record.source === "user") record.state = "held";
++            else { record.state = "queued"; record.mode = "queue"; }
++        }
++        for (const scope of this.invocations) scope.controller.abort();
++        const rawAbort = this.session._abortUncontrolled();
++        const outstanding = [...this.tasks, rawAbort];
++        operation.slowTimer = setTimeout(() => { if (this.operation === operation && operation.waiting) { operation.slow = true; this.publish(); } }, 5000);
++        operation.timeout = setTimeout(() => {
++            if (this.operation !== operation || !operation.waiting) return;
++            operation.blocked = true;
++            operation.sendAfterStop = false;
++            if (target) target.state = "held";
++            this.publish();
++        }, 30000);
++        operation.slowTimer.unref?.(); operation.timeout.unref?.();
++        this.publish();
++        void Promise.allSettled(outstanding).then(() => {
++            if (this.disposed || this.operation !== operation) return;
++            this.clearTimers(operation);
++            operation.waiting = false;
++            this.phase = "idle";
++            if (target && operation.sendAfterStop && !operation.blocked) {
++                target.state = "queued";
++                this.launch(target, true);
++            } else {
++                this.operation = undefined;
++                this.publish();
++            }
++        });
++        return operation;
++    }
++    clearTimers(operation) { clearTimeout(operation.slowTimer); clearTimeout(operation.timeout); }
++    stop(request) {
++        const invalid = this.identity(request);
++        if (invalid) return invalid;
++        const prior = this.previous(request, "stop");
++        if (prior) return prior;
++        if (this.operation) {
++            this.operation.sendAfterStop = false;
++            if (this.operation.target) this.operation.target.state = "held";
++            // A replacement may already be preparing after the old run stopped.
++            if (!this.operation.waiting) { this.clearTimers(this.operation); this.operation = undefined; this.beginStop(); }
++            this.publish();
++        } else this.beginStop();
++        return this.remember(request, "stop", ok({ operationId: this.operation.id, snapshot: this.snapshot() }));
++    }
++    pending(request, kind) {
++        const invalid = this.identity(request);
++        if (invalid) return { error: invalid };
++        const prior = this.previous(request, kind);
++        if (prior) return { prior };
++        if (request.expectedRevision !== this.revision) return { error: this.failure("stale_revision", "Pending messages changed") };
++        const record = this.records.get(request.messageId);
++        if (!record || record.committed) return { error: this.failure("already_committed", "Message is no longer pending") };
++        if (record.processing || this.operation?.target === record) return { error: this.failure("busy", "This message is still being prepared or stopped") };
++        return { record };
++    }
++    recover(request) {
++        const found = this.pending(request, "recover");
++        if (found.error || found.prior) return found.error ?? found.prior;
++        const r = found.record;
++        this.detach(r); r.state = "recovering"; this.publish();
++        return this.remember(request, "recover", ok({ messageId: r.id, payload: clone(r.payload), snapshot: this.snapshot() }));
++    }
++    async changePending(request) {
++        const found = this.pending(request, "change");
++        if (found.error || found.prior) return found.error ?? found.prior;
++        const r = found.record;
++        if (!["steer", "interrupt", "resend", "discard"].includes(request.action)) return this.failure("invalid_payload", "Unknown pending-message action");
++        if (request.action === "discard") {
++            this.detach(r); this.records.delete(r.id); this.publish();
++            return this.remember(request, "change", ok({ snapshot: this.snapshot() }));
++        }
++        if (this.operation) return this.failure("busy", "The previous operation is still stopping");
++        const mode = request.action === "resend" ? r.mode : request.action;
++        const invalid = this.validatePayload({ mode, payload: r.payload });
++        if (invalid) return invalid;
++        if (this.capacity(mode, r.source, r)) return this.failure("queue_full", "This message slot is occupied");
++        this.detach(r); r.mode = mode; r.state = "queued";
++        let ack;
++        if (mode === "interrupt" && this.busy) {
++            const op = this.beginStop(r);
++            ack = { requestId: request.requestId, messageId: r.id, operationId: op.id, disposition: "interrupting" };
++        } else {
++            this.autoDispatchPaused = false;
++            this.publish(); this.kick();
++            ack = { requestId: request.requestId, messageId: r.id, disposition: "queued" };
++        }
++        return this.remember(request, "change", ok({ snapshot: this.snapshot(), ack }));
++    }
++    clearLegacy() {
++        const old = { steering: [...this.session._steeringMessages], followUp: [...this.session._followUpMessages] };
++        for (const r of this.records.values()) { this.detach(r); r.state = "held"; }
++        this.publish();
++        return old;
++    }
++    async abortLegacy() {
++        this.stop({ sessionId: this.session.sessionId, runtimeId: this.runtimeId, requestId: randomUUID() });
++        await this.waitForIdle();
++    }
++    async waitForIdle() {
++        while (this.tasks.size) await Promise.allSettled([...this.tasks]);
++        await this.session.waitForIdle();
++        // Stop settlement may launch its replacement in the next microtask.
++        await Promise.resolve();
++        if (this.tasks.size) return this.waitForIdle();
++    }
++    submitPublicPrompt(text, options = {}) {
++        const scope = scopes.getStore();
++        const nested = scope?.owner === this;
++        const source = nested || options.source === "extension" ? "extension" : "user";
++        const request = { sessionId: this.session.sessionId, runtimeId: this.runtimeId, requestId: randomUUID(),
++            mode: nested && scope.epoch !== this.epoch ? "queue" : options.streamingBehavior === "steer" ? "steer" : "queue", payload: { text, images: options.images } };
++        return this.submit(request, source, { expandPromptTemplates: options.expandPromptTemplates }).then(result => {
++            if (!result.ok) throw new Error(result.error.message);
++            options.preflightResult?.(result.value.disposition === "held" ? "queued" : result.value.disposition);
++            return result.value.disposition === "handled" ? "handled" : "queued";
++        });
++    }
++    submitCustom(message, options) {
++        const requestId = randomUUID();
++        const record = { id: requestId, requestId, payload: { text: typeof message.content === "string" ? message.content : "" },
++            source: "extension", mode: options?.deliverAs === "followUp" ? "queue" : "steer", state: "queued",
++            custom: message, ack: deferred(), generation: this.epoch };
++        if (this.autoDispatchPaused || this.operation) record.mode = "queue";
++        this.records.set(record.id, record);
++        this.publish(); this.kick();
++        return Promise.resolve();
++    }
++    dispose() {
++        if (this.disposed) return;
++        this.disposed = true;
++        if (this.operation) this.clearTimers(this.operation);
++        for (const scope of this.invocations) scope.controller.abort();
++        for (const r of this.records.values()) this.ack(r, "held", this.failure("not_found", "Session disposed"));
++        this.session.agent.abort();
++        this.unsubscribe?.();
++        this.listeners.clear();
++        this.records.clear();
++        this.requests.clear();
++    }
++}
+diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts
+index 9f9bd73..2fb820d 100644
+--- a/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts
++++ b/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts
+@@ -1,6 +1,7 @@
+ export { type Args, parseArgs } from "./cli/args.ts";
+ export { CONFIG_DIR_NAME, getAgentDir, getDocsPath, getExamplesPath, getPackageDir, getReadmePath, VERSION, } from "./config.ts";
+ export { AgentSession, type AgentSessionConfig, type AgentSessionEvent, type AgentSessionEventListener, type ModelCycleResult, type ParsedSkillBlock, type PromptOptions, parseSkillBlock, type SessionStats, } from "./core/agent-session.ts";
++export type { MessageControlHandle, MessageSubmitRequest, MessageAck, ControlSnapshot, ControlResult, MessagePayload, MessageControlUpdate, ChangePendingMessageRequest, PendingMessageRequest, ChangePendingMessageResult, RecoverPendingMessageResult, StopMessageControlResult, ControlIdentity, ControlledItem, MessageMode, ControlPhase } from "./core/message-control.ts";
+ export { readStoredCredential } from "./core/auth-storage.ts";
+ export type { CacheWarmingDecision, CacheWarmingStatus } from "./core/cache-warmer.ts";
+ export { type BranchPreparation, type BranchSummaryResult, type CollectEntriesResult, type CompactionResult, type CutPointResult, calculateContextTokens, collectEntriesForBranchSummary, compact, DEFAULT_COMPACTION_SETTINGS, estimateTokens, type FileOperations, findCutPoint, findTurnStartIndex, type GenerateBranchSummaryOptions, generateBranchSummary, generateSummary, generateSummaryWithUsage, getLastAssistantUsage, prepareBranchEntries, serializeConversation, shouldCompact, } from "./core/compaction/index.ts";

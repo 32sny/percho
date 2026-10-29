@@ -2,7 +2,7 @@ import type { ImageInput } from "@percho/shared";
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import { getPi } from "../../api";
 import { useActiveModelInfo, useSessionReadOnly } from "../../hooks/use-session-state";
-import { useT } from "../../i18n";
+import { type MessageKey, useT } from "../../i18n";
 import { selectActiveCwd } from "../../lib/active-cwd";
 import { prepareImageAttachment } from "../../lib/image-attachment";
 import { RegionHost } from "../../plugins/RegionHost";
@@ -18,7 +18,7 @@ import { useSessionsStore } from "../../stores/sessions";
 import { pushToast } from "../../stores/toasts";
 import { selectTranscript, useTranscriptStore } from "../../stores/transcript";
 import { ImagePreviewOverlay } from "../chat/ImagePreview";
-import { ArrowUpIcon, PencilIcon, PlusIcon, StopIcon } from "../icons";
+import { ArrowUpIcon, ChevronDownIcon, PencilIcon, PlusIcon, StopIcon } from "../icons";
 import { SESSION_DRAG_MIME } from "../sidebar/SessionRow";
 import { AtMenu } from "./AtMenu";
 import { AttachmentChip } from "./AttachmentChip";
@@ -27,9 +27,10 @@ import { resolveDroppedFilePaths } from "./drop-files";
 import { ImageTray } from "./ImageTray";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionPicker } from "./PermissionPicker";
-import { QueueBar } from "./QueueBar";
+import { QueueBar, type QueueItemAction } from "./QueueBar";
 import { QuoteChip } from "./QuoteChip";
 import { SendErrorBar } from "./SendErrorBar";
+import { SendModeMenu, type SendModePick } from "./SendModeMenu";
 import { SlashMenu } from "./SlashMenu";
 import { slashPresentation } from "./slash-label";
 import { useAtCompletion } from "./use-at-completion";
@@ -151,6 +152,21 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 		}
 		await latestSendRef.current();
 	};
+	/** Ctrl+Enter / 菜单「打断并发送」：同样等附件预处理落地后发（interrupt 一次性，不改 Enter 默认） */
+	const latestInterruptRef = useRef(() => send.handleSend("interrupt"));
+	latestInterruptRef.current = () => send.handleSend("interrupt");
+	const sendInterruptWhenReady = async () => {
+		if (preparingRef.current.length > 0) {
+			const inFlight = preparingRef.current;
+			preparingRef.current = [];
+			await Promise.all(inFlight);
+		}
+		await latestInterruptRef.current();
+	};
+	const handleQueueAction = (item: { messageId: string; preview: string }, action: QueueItemAction) => {
+		if (action === "recover") void send.recoverPending(item);
+		else void send.changePending(item, action);
+	};
 	const focusTextarea = () => textareaRef.current?.focus();
 
 	/**
@@ -168,14 +184,34 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 		event.preventDefault();
 		textareaRef.current?.focus();
 	};
+	// 忙碌保守并集：真实事件态（phase/agentActive）与控制快照相位任一忙即忙——两份真源不互相覆盖
+	const control = transcript.control;
+	const controlPhase = control?.phase ?? "idle";
+	const controlBusy = controlPhase !== "idle";
 	const isStreaming = transcript.phase === "streaming" || sending;
+	const isBusy = isStreaming || transcript.agentActive || controlBusy;
+	/** 运行中的待发控制项（QueueBar 新形态；legacy 回退 followUpQueue 文本） */
+	const controlItems = control?.items ?? [];
+	/** 模式菜单一次性开关（不记默认；Esc 只关菜单不取消） */
+	const [modeMenuOpen, setModeMenuOpen] = useState(false);
+	const modeDisabledReason: MessageKey | null = readOnly
+		? "composer.modeDisabledReadOnly"
+		: compacting
+			? "composer.modeDisabledCompacting"
+			: slashCommand
+				? "composer.modeDisabledSlash"
+				: null;
 	const placeholder = readOnly
 		? t("composer.placeholderReadOnly")
 		: compacting
 			? t("composer.placeholderCompacting")
-			: isStreaming
-				? t("composer.placeholderQueued")
-				: t("composer.placeholder");
+			: controlPhase === "blocked"
+				? t("composer.placeholderBlocked")
+				: controlPhase === "interrupting"
+					? t("composer.placeholderInterrupting")
+					: isStreaming
+						? t("composer.placeholderQueued")
+						: t("composer.placeholder");
 
 	const slash = useSlashMenu({
 		activeSessionId,
@@ -280,6 +316,13 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 			}
 		}
 		if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+			// Ctrl+Enter = 打断并发送（仅输入焦点、无 IME 合成、无菜单/弹窗打开时）
+			if (e.ctrlKey) {
+				if (modeMenuOpen || slash.slashOpen || at.atOpen) return;
+				e.preventDefault();
+				void sendInterruptWhenReady();
+				return;
+			}
 			e.preventDefault();
 			void sendWhenReady();
 		}
@@ -411,11 +454,17 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 						onPick={at.handleAtPick}
 					/>
 				)}
-				{followUpQueue.length > 0 && (
+				{controlItems.length > 0 ? (
+					<QueueBar items={controlItems} onAction={handleQueueAction} />
+				) : followUpQueue.length > 0 ? (
 					<QueueBar
-						text={followUpQueue[0] ?? ""}
+						legacyText={followUpQueue[0] ?? ""}
 						onRestore={() => void send.handleRestoreQueue(focusTextarea)}
 					/>
+				) : null}
+				{/* 停止操作状态行：interrupting（5s 后 slow 换文案）/ blocked 与占位符区分展示 */}
+				{controlPhase === "interrupting" && control?.operation?.slow && (
+					<p className="mb-1.5 text-ui-12 text-amber-500">{t("composer.stoppingSlow")}</p>
 				)}
 				{/* 扩展 setEditorText 预填提示（画板⑩）：一次性来源标注，首次键入即清除 */}
 				{extensionPrefillSource && (
@@ -513,7 +562,42 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 						<div className={readOnly ? "pointer-events-none opacity-40" : undefined}>
 							<ModelPicker />
 						</div>
-						{isStreaming && !hasContent ? (
+						{/* 发送方式菜单（一次性选择：优先插话 / 打断并发送；不改 Enter 默认 queue） */}
+						{hasContent && !readOnly && (
+							<div className="relative">
+								<button
+									type="button"
+									className="flex h-8 w-5 items-center justify-center rounded-full text-ink-dim transition-colors hover:bg-hover hover:text-ink"
+									aria-label={t("composer.modeMenuTitle")}
+									onClick={() => setModeMenuOpen((open) => !open)}
+								>
+									<ChevronDownIcon size={12} />
+								</button>
+								{modeMenuOpen && (
+									<SendModeMenu
+										disabledReason={modeDisabledReason}
+										onPick={(mode: SendModePick) => {
+											if (mode === "interrupt") void sendInterruptWhenReady();
+											else void send.handleSend("steer");
+										}}
+										onClose={() => setModeMenuOpen(false)}
+									/>
+								)}
+							</div>
+						)}
+						{hasContent && (
+							<button
+								type="button"
+								className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-on-ink transition-colors hover:bg-ink-2 disabled:opacity-30"
+								disabled={readOnly || sending}
+								onClick={() => void sendWhenReady()}
+								aria-label={t("composer.send")}
+							>
+								<ArrowUpIcon size={20} />
+							</button>
+						)}
+						{/* 独立停止：运行中常显（有草稿也可点），与菜单发送解耦 */}
+						{isBusy && (
 							<button
 								type="button"
 								className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-on-ink transition-colors hover:bg-red-600"
@@ -521,16 +605,6 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 								aria-label={t("composer.stop")}
 							>
 								<StopIcon />
-							</button>
-						) : (
-							<button
-								type="button"
-								className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-on-ink transition-colors hover:bg-ink-2 disabled:opacity-30"
-								disabled={readOnly || !hasContent || sending}
-								onClick={() => void sendWhenReady()}
-								aria-label={t("composer.send")}
-							>
-								<ArrowUpIcon size={20} />
 							</button>
 						)}
 					</div>

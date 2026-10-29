@@ -24,6 +24,18 @@ import type {
 } from "./git";
 import type { LanStatus } from "./lan";
 import type { McpConfigListResult, McpMutationResult, McpServersChangedPayload, McpUpsertInput } from "./mcp";
+import type {
+	ChangePendingMessageRequest,
+	ChangePendingMessageResult,
+	ControlIdentity,
+	ControlResult,
+	ControlSnapshot,
+	MessageAck,
+	MessageSubmitRequest,
+	PendingMessageRequest,
+	RecoverPendingMessageResult,
+	StopMessageControlResult,
+} from "./message-control";
 import type { CatalogPackageType, CatalogSearchResult, ConfiguredPackageInfo } from "./packages";
 import type {
 	AppInfo,
@@ -135,6 +147,21 @@ export const SESSION_CHANNELS = {
 	>(),
 	/** 发送消息；images 为随消息附带的图片（base64） */
 	prompt: ch("session:prompt")<{ sessionId: string; text: string; images?: ImageInput[] }, PromptAck>(),
+	/** 托管消息控制：受理回执与最终执行状态分离。 */
+	submitMessage: ch("session:submitMessage")<MessageSubmitRequest, ControlResult<MessageAck>>(),
+	getMessageControl: ch("session:getMessageControl")<{ sessionId: string }, ControlResult<ControlSnapshot>>(),
+	changePendingMessage: ch("session:changePendingMessage")<
+		ChangePendingMessageRequest,
+		ControlResult<ChangePendingMessageResult>
+	>(),
+	recoverPendingMessage: ch("session:recoverPendingMessage")<
+		PendingMessageRequest,
+		ControlResult<RecoverPendingMessageResult>
+	>(),
+	stopMessageControl: ch("session:stopMessageControl")<
+		ControlIdentity,
+		ControlResult<StopMessageControlResult>
+	>(),
 	/** 仅重试当前末端模型失败，不新增用户消息；受理即返回，执行结果走事件流。 */
 	retryLastFailedTurn: ch("session:retryLastFailedTurn")<
 		{ sessionId: string; ref: { timestamp: number; entryId: string } },

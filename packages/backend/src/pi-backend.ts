@@ -6,6 +6,7 @@ import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import {
 	type AgentSession,
+	type AgentSessionEvent,
 	type CreateAgentSessionResult,
 	createAgentSession,
 	type DefaultResourceLoader,
@@ -23,9 +24,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type {
 	AvailableModel,
+	ChangePendingMessageRequest,
+	ChangePendingMessageResult,
 	ChannelSubscriptionsSnapshot,
 	ContextManagerMode,
 	ContextUsageInfo,
+	ControlIdentity,
+	ControlResult,
+	ControlSnapshot,
 	CreateSessionOptions,
 	ExtensionDialogRequest,
 	ExtensionDialogResolved,
@@ -43,12 +49,16 @@ import type {
 	McpServersChangedPayload,
 	McpToolView,
 	McpUpsertInput,
+	MessageAck,
+	MessageSubmitRequest,
+	PendingMessageRequest,
 	PermissionAnswer,
 	PermissionMode,
 	PermissionRequest,
 	PermissionResolved,
 	PromptAck,
 	QuotaInfo,
+	RecoverPendingMessageResult,
 	SessionCloseIntent,
 	SessionEvent,
 	SessionHoverLiveRun,
@@ -57,6 +67,7 @@ import type {
 	SessionMeta,
 	SessionStats,
 	SlashCommandInfo,
+	StopMessageControlResult,
 	SubagentInfo,
 	TrustAnswer,
 	TrustRequest,
@@ -90,6 +101,12 @@ import { addAllowedPattern, addWorkspaceRoot } from "./project/workspace-store";
 import { slimBulkyEvent, slimMessageUpdate } from "./session/event-slim";
 import { ExtensionDialogHost } from "./session/extension-dialog-host";
 import { SessionHydrationGate } from "./session/hydration-gate";
+import {
+	createMessageControlAdapter,
+	failure,
+	type MessageControlHandle,
+	validateControlledPayload,
+} from "./session/message-control";
 import {
 	blockImages,
 	blockText,
@@ -463,6 +480,7 @@ export class PiBackend {
 	private async bindSessionExtensions(
 		session: AgentSession,
 		sessionId: string,
+		runSignal?: () => AbortSignal | undefined,
 	): Promise<ExtensionDialogHost> {
 		const dialogs = new ExtensionDialogHost({
 			onRequest: (req) => this.extensionDialogRequestEmitter.emit(req),
@@ -484,6 +502,7 @@ export class PiBackend {
 		await session.bindExtensions({
 			uiContext: makeUiContext({
 				dialogs,
+				runSignal,
 				onNotify: (message, level, source) => {
 					this.handleMcpNotice(sessionId, message);
 					this.extensionNotifyEmitter.emit({ sessionId, extensionPath: source, message, level });
@@ -544,9 +563,13 @@ export class PiBackend {
 			}
 			return;
 		}
-		if (event.type !== "subagent_mutex" && event.type !== "stream_guard_tripped")
-			this.traces.record(sessionId, event);
-		this.eventEmitter.emit({ sessionId, event });
+		if (
+			event.type !== "subagent_mutex" &&
+			event.type !== "stream_guard_tripped" &&
+			event.type !== "message_control_update"
+		)
+			this.traces.record(sessionId, event as AgentSessionEvent);
+		this.eventEmitter.emit({ sessionId, event: event as SessionEvent });
 	}
 
 	private async prewarmAntigravityProvider(): Promise<void> {
@@ -660,9 +683,12 @@ export class PiBackend {
 		}) => Promise<CreateAgentSessionResult>,
 	): Promise<AgentSession> {
 		const gate = new PermissionGate((req) => this.permissionEmitter.emit(req));
+		gate.setResolvedListener((result) => this.permissionResolvedEmitter.emit(result));
 		// 权限扩展的确认通道直接桥到 gate（携带 kind/suggestDir 元数据，驱动「允许此目录」/持久化）
-		const confirmBridge: PermissionConfirm = (title, message, meta) => gate.confirm(title, message, meta);
+		const confirmBridge: PermissionConfirm = (title, message, meta) =>
+			gate.confirm(title, message, meta, gateRunSignal?.());
 		// 会话权限模式引用：一律 default 起步（D1：不落盘、不继承），随工厂闭包注入求值链
+		let gateRunSignal: (() => AbortSignal | undefined) | undefined;
 		const modeRef: PermissionModeRef = { current: "default" };
 		let loaded: { settingsManager: SettingsManagerType; resourceLoader: DefaultResourceLoader } | undefined;
 		const load = async () => {
@@ -671,6 +697,16 @@ export class PiBackend {
 		};
 		const preferBuiltin = await this.subagentPreferBuiltin();
 		const { session, extensionsResult } = await makeSession({ gate, preferBuiltin, load });
+		gate.bindSession(session.sessionId);
+		const messageControl = readOnly ? undefined : this.enableMessageControl(session);
+		const messageControlAdapter = messageControl ? createMessageControlAdapter(messageControl) : undefined;
+		gateRunSignal = () => messageControlAdapter?.signal;
+		const unsubscribeMessageControl = messageControl?.subscribe((update) =>
+			this.eventEmitter.emit({
+				sessionId: session.sessionId,
+				event: { type: "message_control_update", ...update },
+			}),
+		);
 		const mutex = applySubagentMutex(session, extensionsResult, preferBuiltin);
 		if (mutex.shadowed.length > 0) {
 			log.info("third-party subagent tools shadowed", session.sessionId, mutex);
@@ -682,8 +718,11 @@ export class PiBackend {
 				});
 			}
 		}
-		gate.bindSession(session.sessionId);
-		const dialogs = await this.bindSessionExtensions(session, session.sessionId);
+		const dialogs = await this.bindSessionExtensions(
+			session,
+			session.sessionId,
+			() => messageControl?.signal,
+		);
 		const unsubscribe = session.subscribe((event) => {
 			autoNameSession(session, event);
 			// D8：自研触发的那次压缩在 UI 上说「自动（上下文阈值）」——只改转发副本
@@ -696,6 +735,9 @@ export class PiBackend {
 				cwd,
 				gate,
 				dialogs,
+				messageControl,
+				messageControlAdapter,
+				unsubscribeMessageControl,
 				modeRef,
 				readOnly: readOnly || undefined,
 			});
@@ -711,7 +753,14 @@ export class PiBackend {
 			}
 			// Release only the new instance: no holder-id cleanup or shutdown emission.
 			try {
-				releaseEntryResources({ unsubscribe, gate, dialogs });
+				releaseEntryResources({
+					unsubscribe,
+					gate,
+					dialogs,
+					messageControl,
+					messageControlAdapter,
+					unsubscribeMessageControl,
+				});
 			} catch (cleanupError) {
 				log.warn("conflicting entry cleanup failed", session.sessionId, cleanupError);
 			}
@@ -797,9 +846,8 @@ export class PiBackend {
 		const entry = this.registry.get(sessionId);
 		// 没有该会话 = 它本来就没在跑（幂等成功）：调用方该照常清掉自己的会话条目
 		if (!entry) return { closed: true };
-		if (entry.session.isStreaming) {
-			// 等审批也在此列（实测 isStreaming 两态都为 true）：用户切走/自动卸载都不能把这一轮掐掉
-			log.warn("closeSession ignored: streaming", sessionId);
+		if (this.sessionHasUnsettledControl(entry)) {
+			log.warn("closeSession ignored: active or pending message control", sessionId);
 			return { closed: false };
 		}
 		// 自动 GC 不得卸掉有频道订阅的会话（快照按 sessionId 精确查，退订后自然恢复资格）。
@@ -850,6 +898,23 @@ export class PiBackend {
 			failures.push(error);
 		}
 		if (failures.length) throw failures[0];
+	}
+
+	private sessionHasUnsettledControl(entry: RegisteredSession): boolean {
+		if (entry.session.isStreaming) return true;
+		const snapshot = entry.messageControl?.getSnapshot();
+		if (!snapshot) return false;
+		if (["preparing", "running", "compacting", "interrupting", "blocked"].includes(snapshot.phase))
+			return true;
+		return this.sessionHasPendingUserMessages(entry) || snapshot.operation?.sendAfterStop === true;
+	}
+
+	private sessionHasPendingUserMessages(entry: RegisteredSession): boolean {
+		const snapshot = entry.messageControl?.getSnapshot();
+		return (
+			!!snapshot &&
+			(snapshot.items.some((item) => item.source === "user") || snapshot.operation?.sendAfterStop === true)
+		);
 	}
 
 	/** 真正的处置：dispose + registry/全局键控子系统清理（closeSession 与 deleteSession 共用） */
@@ -923,6 +988,11 @@ export class PiBackend {
 		const entry = this.registry.get(sessionId);
 		const sessionDir = entry?.session.sessionManager.getSessionDir();
 		const file = sessionFile ?? entry?.session.sessionManager.getSessionFile();
+		if (entry && this.sessionHasPendingUserMessages(entry)) {
+			throw new Error(
+				"SESSION_MESSAGE_CONTROL_PENDING: discard pending messages before deleting this session",
+			);
+		}
 		// 显式删除是用户的明确意图（既有行为：即便正跑着也删），**绕开 closeSession 的 isStreaming 拒绝**，
 		// 否则会变成「拒绝 dispose 但磁盘文件照删」的跛脚状态（阶段 0 实测确认这条路径不先 abort）
 		if (entry) await this.disposeSession(entry);
@@ -996,6 +1066,162 @@ export class PiBackend {
 		const path = join(dir, `${safeBase}.md`);
 		await writeFile(path, buildSessionTranscript(messages), "utf8");
 		return { path };
+	}
+
+	private enableMessageControl(session: AgentSession): MessageControlHandle | undefined {
+		const candidate = session as AgentSession & { enableMessageControl?: () => MessageControlHandle };
+		return typeof candidate.enableMessageControl === "function"
+			? candidate.enableMessageControl()
+			: undefined;
+	}
+
+	getMessageControlSnapshots(): ControlSnapshot[] {
+		return this.registry.list().flatMap((entry) => {
+			const result = entry.messageControl?.getSnapshot();
+			return result ? [result] : [];
+		});
+	}
+
+	async getMessageControl(sessionId: string): Promise<ControlResult<ControlSnapshot>> {
+		const entry = this.registry.get(sessionId);
+		if (!entry) return failure("not_found", "Session is not active");
+		if (!entry.messageControl)
+			return failure(entry.readOnly ? "read_only" : "not_found", "Message control is unavailable");
+		return (
+			entry.messageControlAdapter?.getSnapshot() ?? { ok: true, value: entry.messageControl.getSnapshot() }
+		);
+	}
+
+	async submitMessage(request: MessageSubmitRequest): Promise<ControlResult<MessageAck>> {
+		if (
+			!request ||
+			typeof request.sessionId !== "string" ||
+			!request.sessionId ||
+			typeof request.runtimeId !== "string" ||
+			!request.runtimeId ||
+			typeof request.requestId !== "string" ||
+			!request.requestId ||
+			!(["queue", "steer", "interrupt"] as const).includes(request.mode)
+		)
+			return failure("invalid_payload", "Message control request identity or mode is invalid");
+		const entry = this.registry.get(request.sessionId);
+		if (!entry) return failure("not_found", "Session is not active");
+		if (entry.readOnly) return failure("read_only", "Session is read-only");
+		if (!entry.messageControl) return failure("not_found", "Message control is unavailable");
+		const valid = validateControlledPayload(request.payload);
+		if (!valid.ok) return valid;
+		const snapshotResult = entry.messageControlAdapter?.getSnapshot();
+		if (!snapshotResult?.ok) return failure("not_found", "Message control snapshot unavailable");
+		const snapshot = snapshotResult.value;
+		if (request.runtimeId !== snapshot.runtimeId)
+			return failure("stale_runtime", "Session runtime changed", snapshot);
+		if (snapshot.phase === "compacting" && snapshot.compactionKind === "manual")
+			return failure("compacting", "Cannot send while manually compacting", snapshot);
+		if (request.payload.images?.length && entry.session.model && !entry.session.model.input.includes("image"))
+			return failure("image_unsupported", "The active model does not support image input", snapshot);
+		const commandCandidates = [
+			request.payload.draft?.slashCommand,
+			request.payload.draft?.text,
+			request.payload.text,
+		];
+		if (
+			request.mode !== "queue" &&
+			commandCandidates.some((value) => typeof value === "string" && value.trimStart().startsWith("/"))
+		)
+			return failure(
+				"command_mode_unsupported",
+				"Stop the current run before sending a slash command",
+				snapshot,
+			);
+		return (
+			entry.messageControlAdapter?.submit(request) ?? failure("not_found", "Message control is unavailable")
+		);
+	}
+
+	async changePendingMessage(
+		request: ChangePendingMessageRequest,
+	): Promise<ControlResult<ChangePendingMessageResult>> {
+		if (
+			!request ||
+			typeof request.sessionId !== "string" ||
+			typeof request.runtimeId !== "string" ||
+			typeof request.requestId !== "string" ||
+			typeof request.messageId !== "string" ||
+			!Number.isInteger(request.expectedRevision) ||
+			!["steer", "interrupt", "resend", "discard"].includes(request.action)
+		)
+			return failure("invalid_payload", "Pending message request is invalid");
+		const entry = this.registry.get(request.sessionId);
+		if (!entry) return failure("not_found", "Session is not active");
+		if (entry.readOnly) return failure("read_only", "Session is read-only");
+		if (!entry.messageControl) return failure("not_found", "Message control is unavailable");
+		const current = entry.messageControl.getSnapshot();
+		if (
+			request.sessionId !== entry.session.sessionId ||
+			request.runtimeId !== current.runtimeId ||
+			!request.requestId ||
+			!request.messageId ||
+			!Number.isInteger(request.expectedRevision)
+		)
+			return failure("stale_runtime", "Message control identity is invalid", current);
+		return (
+			entry.messageControlAdapter?.changePending(request) ??
+			failure("not_found", "Message control is unavailable")
+		);
+	}
+
+	async recoverPendingMessage(
+		request: PendingMessageRequest,
+	): Promise<ControlResult<RecoverPendingMessageResult>> {
+		if (
+			!request ||
+			typeof request.sessionId !== "string" ||
+			typeof request.runtimeId !== "string" ||
+			typeof request.requestId !== "string" ||
+			typeof request.messageId !== "string" ||
+			!Number.isInteger(request.expectedRevision)
+		)
+			return failure("invalid_payload", "Pending message request is invalid");
+		const entry = this.registry.get(request.sessionId);
+		if (!entry) return failure("not_found", "Session is not active");
+		if (entry.readOnly) return failure("read_only", "Session is read-only");
+		if (!entry.messageControl) return failure("not_found", "Message control is unavailable");
+		const current = entry.messageControl.getSnapshot();
+		if (
+			request.sessionId !== entry.session.sessionId ||
+			request.runtimeId !== current.runtimeId ||
+			!request.requestId ||
+			!request.messageId ||
+			!Number.isInteger(request.expectedRevision)
+		)
+			return failure("stale_runtime", "Message control identity is invalid", current);
+		return (
+			entry.messageControlAdapter?.recover(request) ?? failure("not_found", "Message control is unavailable")
+		);
+	}
+
+	async stopMessageControl(request: ControlIdentity): Promise<ControlResult<StopMessageControlResult>> {
+		if (
+			!request ||
+			typeof request.sessionId !== "string" ||
+			typeof request.runtimeId !== "string" ||
+			typeof request.requestId !== "string"
+		)
+			return failure("invalid_payload", "Stop request identity is invalid");
+		const entry = this.registry.get(request.sessionId);
+		if (!entry) return failure("not_found", "Session is not active");
+		if (entry.readOnly) return failure("read_only", "Session is read-only");
+		if (!entry.messageControl) return failure("not_found", "Message control is unavailable");
+		const current = entry.messageControl.getSnapshot();
+		if (
+			request.sessionId !== entry.session.sessionId ||
+			request.runtimeId !== current.runtimeId ||
+			!request.requestId
+		)
+			return failure("stale_runtime", "Message control identity is invalid", current);
+		return (
+			entry.messageControlAdapter?.stop(request) ?? failure("not_found", "Message control is unavailable")
+		);
 	}
 
 	async prompt(sessionId: string, text: string, images?: ImageInput[]): Promise<PromptAck> {
@@ -1721,11 +1947,6 @@ export class PiBackend {
 				// 先放行 agent 再持久化（D3）：持久化失败（如 workspaces.json 损坏拒写）只丢记忆不挂会话，
 				// log.error 留痕——fail-open 与 enabled=false 整体放行的既有语义一致
 				gate.respond(requestId, answer);
-				this.permissionResolvedEmitter.emit({
-					sessionId: gate.getSessionId(),
-					requestId,
-					answered: true,
-				});
 				const entry = this.registry.get(gate.getSessionId());
 				if (entry) {
 					try {
@@ -1746,11 +1967,6 @@ export class PiBackend {
 		for (const { gate } of this.registry.list()) {
 			if (!gate.getRequest(requestId)) continue;
 			gate.respond(requestId, answer);
-			this.permissionResolvedEmitter.emit({
-				sessionId: gate.getSessionId(),
-				requestId,
-				answered: true,
-			});
 		}
 	}
 

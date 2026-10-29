@@ -26,6 +26,51 @@ const preloadCode = buildSync({
 	external: ["electron"],
 }).outputFiles[0]?.text;
 
+describe("message-control IPC", () => {
+	it("registers all five message-control methods as transparent backend mappings", async () => {
+		state.handle.mockClear();
+		const calls: Array<[string, unknown]> = [];
+		const backend = new Proxy(
+			{},
+			{
+				get:
+					(_target, name) =>
+					(...args: unknown[]) => {
+						calls.push([String(name), args[0]]);
+						return Promise.resolve({ method: String(name) });
+					},
+			},
+		);
+		registerSessionsIpc(backend as PiBackend);
+		const handlers = new Map(
+			state.handle.mock.calls.map(([channel, handler]) => [
+				channel as string,
+				handler as (event: unknown, args?: unknown) => unknown,
+			]),
+		);
+		const cases: Array<[string, string, unknown]> = [
+			["submitMessage", "session:submitMessage", { sessionId: "s", requestId: "r" }],
+			["getMessageControl", "session:getMessageControl", { sessionId: "s" }],
+			["changePendingMessage", "session:changePendingMessage", { sessionId: "s", requestId: "r" }],
+			["recoverPendingMessage", "session:recoverPendingMessage", { sessionId: "s", requestId: "r" }],
+			["stopMessageControl", "session:stopMessageControl", { sessionId: "s", requestId: "r" }],
+		];
+		for (const [method, channel, args] of cases) {
+			const handler = handlers.get(channel);
+			expect(handler, `${method} handler`).toBeTypeOf("function");
+			await handler?.({}, args);
+		}
+		expect(calls.map(([method]) => method)).toEqual(cases.map(([method]) => method));
+		expect(calls.map(([, args]) => args)).toEqual([
+			cases[0]?.[2],
+			"s",
+			cases[2]?.[2],
+			cases[3]?.[2],
+			cases[4]?.[2],
+		]);
+	});
+});
+
 describe("session:hoverPreview IPC 和真实 preload 桥接", () => {
 	it.each<SessionHoverPreviewResult>([
 		{ status: "ok", sessionId: "target", source: "current-branch-first-user-text", text: "安全首行" },

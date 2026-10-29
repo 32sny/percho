@@ -15,7 +15,7 @@ import type { SessionTranscriptState, UIMessage } from "./types";
  */
 export function appendOptimisticUserMessage(
 	state: SessionTranscriptState,
-	input: { text: string; images: ImageInput[] },
+	input: { text: string; images: ImageInput[]; controlMessageId?: string },
 ): { state: SessionTranscriptState; id: string } {
 	const id = newMessageId();
 	const message: UIMessage = {
@@ -25,6 +25,7 @@ export function appendOptimisticUserMessage(
 		images: input.images,
 		timestamp: Date.now(),
 		pending: true,
+		...(input.controlMessageId ? { controlMessageId: input.controlMessageId } : {}),
 	};
 	return { state: { ...state, messages: [...state.messages, message] }, id };
 }

@@ -21,6 +21,11 @@ export interface DraftEntry {
 	attachments: string[];
 	/** 选中引用（对话区选中内容弹菜单添加）；发送时逐条转 blockquote 段落置于最前 */
 	quotes: string[];
+	/**
+	 * 取回（recover）关联元数据：本草稿来自队列项取回编辑，重发时必须携带它更新 SDK 原实体
+	 * （受理成功才替换旧实体；stale 则刷新提示，不暗重发）。仅元数据，不参与 isEmpty 判定。
+	 */
+	recovery?: { messageId: string; expectedRevision: number };
 }
 
 /** 模块级共享空态（selector 缺省返回，引用稳定防重渲染循环） */
@@ -40,6 +45,11 @@ interface DraftStore {
 	bySession: Record<string, DraftEntry>;
 	/** 更新某会话草稿（传整个条目的变换函数）；结果全空时删除条目 */
 	updateDraft: (key: string, updater: (entry: DraftEntry) => DraftEntry) => void;
+}
+
+/** 草稿是否有用户内容（recovery 元数据不算内容） */
+export function isDraftEmpty(entry: DraftEntry): boolean {
+	return isEmpty(entry);
 }
 
 function isEmpty(entry: DraftEntry): boolean {

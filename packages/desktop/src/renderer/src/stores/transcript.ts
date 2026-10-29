@@ -1,4 +1,5 @@
 import type {
+	ControlSnapshot,
 	ExtensionDialogRequest,
 	ImageInput,
 	SessionEvent,
@@ -61,7 +62,12 @@ interface TranscriptStore {
 	/** 仅匹配 token 才结算；rollback 撤销临时忙碌，否则仅释放所有权。 */
 	settlePromptActivity: (sessionId: string, token: string | null, rollback: boolean) => void;
 	/** 发送瞬间插入乐观用户气泡（返回本地 id，供发送失败时撤回；详见 shared/transcript/pending-user.ts） */
-	appendOptimisticUser: (sessionId: string, input: { text: string; images: ImageInput[] }) => string;
+	appendOptimisticUser: (
+		sessionId: string,
+		input: { text: string; images: ImageInput[]; controlMessageId?: string },
+	) => string;
+	/** 控制快照显式装载（会话 load/重载）：传 null 清空并解钉 runtime；传快照则整体替换（旧 runtime 直接作废） */
+	setControlSnapshot: (sessionId: string, snapshot: ControlSnapshot | null) => void;
 	/** 发送失败撤回乐观气泡（已认领的不动） */
 	removeOptimisticUser: (sessionId: string, id: string) => void;
 	/** 清除完成未读标记（切到该会话/回到 chat 视图时调用） */
@@ -305,9 +311,27 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
 						// 错误卡派生自消息流本身，pending 状态不穿越回放
 						pendingLlmError: null,
 						retrying: null,
+						// 控制快照不属于消息流回放：保留现状，由 load 链随后显式替换（旧 runtime 由它清掉）
+						control: current?.control ?? null,
+						controlRuntimeId: current?.controlRuntimeId,
 						pendingPermissions: current?.pendingPermissions ?? [],
 						pendingDialogs: current?.pendingDialogs ?? [],
 						extensionPrefillSource: current?.extensionPrefillSource,
+					},
+				},
+			};
+		});
+	},
+	setControlSnapshot: (sessionId, snapshot) => {
+		set((state) => {
+			const current = state.bySession[sessionId];
+			return {
+				bySession: {
+					...state.bySession,
+					[sessionId]: {
+						...(current ?? { ...EMPTY_ENTRY }),
+						control: snapshot,
+						controlRuntimeId: snapshot?.runtimeId,
 					},
 				},
 			};

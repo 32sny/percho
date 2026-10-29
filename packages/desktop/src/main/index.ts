@@ -4,10 +4,11 @@ import "./fix-path";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createLogger, initLogging, PiBackend } from "@percho/backend";
-import { app, BrowserWindow, Menu, nativeTheme, net, protocol, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeTheme, net, protocol, screen, shell } from "electron";
 import { backgroundsDir } from "./background";
 import { registerIpc } from "./ipc";
 import { initLanObserver, type LanObserverHandle } from "./lan";
+import { createQuitConfirmationRequest, pendingMessageCount } from "./message-control-exit";
 import { attachRendererWatchdog } from "./renderer-watchdog";
 import { UiPluginManager, uiPluginsResourcesDir } from "./ui-plugins/manager";
 import { loadUiState } from "./ui-state";
@@ -19,6 +20,35 @@ const log = createLogger("main");
 let backend: PiBackend;
 let uiPluginsManager: UiPluginManager;
 let lanObserver: LanObserverHandle | undefined;
+let quitConfirmed = false;
+let quitRequest: (() => Promise<void>) | undefined;
+
+function requestQuit(): Promise<void> {
+	quitRequest ??= createQuitConfirmationRequest({
+		getSnapshots: () => (backend ? backend.getMessageControlSnapshots() : []),
+		confirm: async (count) => {
+			const { response } = await dialog.showMessageBox({
+				type: "warning",
+				title: "退出 Percho",
+				message: `仍有 ${count} 条消息尚未发送。退出后这些消息不会出现在对话历史中。`,
+				buttons: ["继续退出", "取消"],
+				defaultId: 1,
+				cancelId: 1,
+			});
+			return response === 0;
+		},
+		quit: () => {
+			quitConfirmed = true;
+			app.quit();
+		},
+	});
+	return quitRequest();
+}
+
+export function confirmQuitWithPendingMessages(confirmed: boolean): void {
+	if (confirmed) void requestQuit();
+	else quitConfirmed = false;
+}
 
 /**
  * 追加进每次会话系统提示词的桌面端段落（每次调用都付费，保持精简）。
@@ -89,7 +119,9 @@ app.whenReady().then(async () => {
 		uiState?.windowBounds ?? null,
 		screen.getAllDisplays().map((display) => display.workArea),
 	);
-	createWindow(resolveTheme(uiState?.theme), initialBounds);
+	createWindow(resolveTheme(uiState?.theme), initialBounds, () => {
+		void requestQuit();
+	});
 
 	app.on("activate", () => {
 		const [win] = BrowserWindow.getAllWindows();
@@ -100,15 +132,23 @@ app.whenReady().then(async () => {
 			win.focus();
 			return;
 		}
-		createWindow(resolveTheme(uiState?.theme), initialBounds);
+		createWindow(resolveTheme(uiState?.theme), initialBounds, () => {
+			void requestQuit();
+		});
 	});
 });
 
 app.on("window-all-closed", () => {
-	if (process.platform !== "darwin") app.quit();
+	if (process.platform !== "darwin") void requestQuit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+	const pendingCount = backend ? pendingMessageCount(backend.getMessageControlSnapshots()) : 0;
+	if (pendingCount > 0 && !quitConfirmed) {
+		event.preventDefault();
+		void requestQuit();
+		return;
+	}
 	// 先放行 close 拦截：否则 macOS 下 ⌘Q 会被当成「关窗 → 隐藏」而退不掉
 	markQuitting();
 	void lanObserver?.stop();

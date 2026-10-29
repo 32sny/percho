@@ -122,7 +122,9 @@ export function Sidebar() {
 						onRemoveProject={(cwd) => {
 							// 计数等删除真的成功再清：失败了就留着，别让「已显示多少条」比真实数据跑在前面
 							void deleteProject(cwd).then(
-								() => batching.forget(cwd),
+								(deleted) => {
+									if (deleted) batching.forget(cwd);
+								},
 								(error: unknown) => console.error("移除项目失败", error),
 							);
 						}}

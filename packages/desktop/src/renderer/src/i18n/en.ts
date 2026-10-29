@@ -2,6 +2,8 @@ import type { Messages } from "./zh";
 
 /** English language pack (mirrors zh.ts shape) */
 export const en: Messages = {
+	pendingPayloadConfirm:
+		"There are {count} unsent messages. Discarding them means they will not appear in the conversation history. Continue?",
 	common: {
 		save: "Save",
 		cancel: "Cancel",
@@ -95,6 +97,31 @@ export const en: Messages = {
 		queueTitle: "Queued",
 		queueRestore: "Take back to editor",
 		queueFull: "A message is already queued — take it back first",
+		modeMenuTitle: "Send options",
+		modeSteer: "Steer (priority insert)",
+		modeSteerDesc: "Inserted after the current reply and tool batch finish, before the next model request",
+		modeInterrupt: "Interrupt and send",
+		modeInterruptDesc: "Cancels the current task; this message starts first once it settles",
+		modeDisabledReadOnly: "Read-only session",
+		modeDisabledCompacting: "Compacting context — send after it finishes",
+		modeDisabledSlash: "Slash commands use normal send; stop the current task first",
+		slashModeBlocked: "Slash commands use normal send; stop the current task first",
+		queueStateQueued: "Queued",
+		queueStateHeld: "Held",
+		queueStateRecovering: "Recovering",
+		queueActionSteer: "Steer",
+		queueActionInterrupt: "Interrupt & send",
+		queueActionResend: "Resend",
+		queueActionRecover: "Take back",
+		queueActionDiscard: "Discard",
+		queueImages: "{count} image(s)",
+		controlStale: "Queue state changed — review and try again",
+		controlBusy: "Still processing the previous operation — try again shortly",
+		controlActionFailed: "Queue operation failed — please retry",
+		recoverDraftConflict: "Unsent draft present — send or clear it before taking back a queued message",
+		placeholderBlocked: "Stop timed out: old task still running; resend manually once it ends",
+		placeholderInterrupting: "Stopping current task…",
+		stoppingSlow: "Still stopping…",
 		removeQuote: "Remove quote",
 		permissionMode: "Permission mode",
 		permissionDefault: "Default",
@@ -302,6 +329,8 @@ export const en: Messages = {
 		delete: "Delete session",
 		deleteTitle: "Delete this session?",
 		deleteDesc: "Its transcript and session file will be deleted permanently. This cannot be undone.",
+		deleteDescPending:
+			"This session has {count} unsent message(s); unsent messages are not saved to the transcript. Deletion cannot be undone.",
 	},
 	sidebar: {
 		title: "Navigation",
@@ -796,6 +825,7 @@ export const en: Messages = {
 		uiStateSaveFailed: "Failed to save UI state",
 		trustFailed: "Failed to check project trust",
 		closeFailed: "Failed to close session",
+		pendingPayloadDiscardFailed: "Unsent messages could not be settled; deletion aborted (please retry)",
 		permissionModeFailed: "Failed to switch permission mode",
 		overflowCollapsed: "{count} more collapsed · duplicates merged",
 		sessionCreateFailed: "Failed to create session",

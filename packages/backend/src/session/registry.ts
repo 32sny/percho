@@ -4,6 +4,7 @@ import { createLogger } from "../log";
 import type { PermissionModeRef } from "../permissions/extension";
 import type { PermissionGate } from "../permissions/gate";
 import type { ExtensionDialogHost } from "./extension-dialog-host";
+import type { MessageControlAdapter, MessageControlHandle } from "./message-control";
 import { deriveSessionTimes, fallbackSessionTimes } from "./meta";
 import { emitSessionShutdown } from "./shutdown";
 
@@ -13,6 +14,10 @@ export interface RegisteredSession {
 	cwd: string;
 	/** 只读会话（subagent 产物检视）：prompt/fork/recall/setModel 等写操作全部拒绝 */
 	readOnly?: boolean;
+	/** SDK 唯一消息控制权威（主写会话启用；随 entry 清理） */
+	messageControl?: MessageControlHandle;
+	messageControlAdapter?: MessageControlAdapter;
+	unsubscribeMessageControl?: () => void;
 	/** 会话级权限确认队列（会话生命周期内唯一，随 entry 清理） */
 	gate: PermissionGate;
 	/** 扩展对话框宿主（每会话一个；GUI 停靠槽数据源，GUI-only 不进 LAN） */
@@ -31,9 +36,27 @@ export interface SessionDisposeHooks {
 
 /** Instance-only ownership: no id lookup, SDK dispose, channel registry or trace dependency. */
 export function releaseEntryResources(
-	entry: Pick<RegisteredSession, "unsubscribe" | "gate" | "dialogs">,
+	entry: Pick<
+		RegisteredSession,
+		| "unsubscribe"
+		| "gate"
+		| "dialogs"
+		| "messageControl"
+		| "messageControlAdapter"
+		| "unsubscribeMessageControl"
+	>,
 ): void {
 	const failures: unknown[] = [];
+	try {
+		entry.unsubscribeMessageControl?.();
+	} catch (error) {
+		failures.push(error);
+	}
+	try {
+		entry.messageControl?.dispose();
+	} catch (error) {
+		failures.push(error);
+	}
 	try {
 		entry.unsubscribe();
 	} catch (error) {

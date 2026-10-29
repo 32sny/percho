@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useT } from "../../i18n";
 import { useProjectsStore } from "../../stores/projects";
 import { useToastsStore } from "../../stores/toasts";
+import { useTranscriptStore } from "../../stores/transcript";
 import { useUiPreferencesStore } from "../../stores/ui-preferences";
 import { MoveSessionDialog } from "../session/MoveSessionDialog";
 import { RenamePopover } from "../session/RenamePopover";
@@ -30,6 +31,10 @@ export function useSessionMenu() {
 	const [renaming, setRenaming] = useState<{ session: SessionMeta; anchor: MenuAnchor } | null>(null);
 	const [deleting, setDeleting] = useState<SessionMeta | null>(null);
 	const [moving, setMoving] = useState<SessionMeta | null>(null);
+	// 删除确认框的待发项计数（响应式：快照更新文案即刻对齐）
+	const deletingPendingCount = useTranscriptStore((s) =>
+		deleting ? (s.bySession[deleting.sessionId]?.control?.items.length ?? 0) : 0,
+	);
 
 	const open = (session: SessionMeta, anchor: MenuAnchor) => {
 		// 只读子会话 / 找不到会话的判定在纯函数里（sidebarMenuKind，有单测）；none 就不弹菜单
@@ -68,13 +73,20 @@ export function useSessionMenu() {
 			{deleting && (
 				<ConfirmDialog
 					title={t("sessionMenu.deleteTitle")}
-					description={t("sessionMenu.deleteDesc")}
+					// 有未发送项：确认文案明确「未发送消息不会保存在对话历史」
+					description={
+						deletingPendingCount > 0
+							? t("sessionMenu.deleteDescPending", { count: deletingPendingCount })
+							: t("sessionMenu.deleteDesc")
+					}
 					confirmLabel={t("sessionMenu.delete")}
 					cancelLabel={t("common.cancel")}
 					danger
 					onConfirm={() => {
-						void deleteSession(deleting);
-						setDeleting(null);
+						const session = deleting;
+						void deleteSession(session).then((deleted) => {
+							if (deleted) setDeleting(null);
+						});
 					}}
 					onCancel={() => setDeleting(null)}
 				/>

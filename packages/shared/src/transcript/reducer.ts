@@ -274,6 +274,7 @@ export const REDUCED_EVENT_TYPES = [
 	"auto_retry_start",
 	"auto_retry_end",
 	"stream_guard_tripped",
+	"message_control_update",
 ] as const;
 
 export type ReducedEventTypeName = (typeof REDUCED_EVENT_TYPES)[number];
@@ -388,6 +389,21 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 			// 权威消息到达就**原位替换**（不追加）——气泡不闪、不重排，缩略图换成权威那版。
 			// 判据：存在 pending 用户消息，且它之后**没有再插过用户消息**（中间可能夹了 system 通知行，忽略）；
 			// 只有空闲发送才插 pending，而运行中发送走队列、队列在本次用户消息之后才 drain，所以它一定还尾着。
+			// 精确认领优先：托管发送的乐观气泡带 controlMessageId，权威 message_start 同 id 原位替换；
+			// id 不匹配的一律不认领（连续两条相同文本也是两条独立消息，绝不按文本碰）
+			if (event.controlMessageId) {
+				const byId = findLastIndex(
+					state.messages,
+					(m) => m.kind === "user" && m.pending === true && m.controlMessageId === event.controlMessageId,
+				);
+				if (byId >= 0) {
+					return {
+						...state,
+						messages: [...state.messages.slice(0, byId), message, ...state.messages.slice(byId + 1)],
+					};
+				}
+				return { ...state, messages: [...state.messages, message] };
+			}
 			const pendingIndex = findLastIndex(state.messages, (m) => m.kind === "user" && m.pending === true);
 			const claimable =
 				pendingIndex >= 0 && !state.messages.slice(pendingIndex + 1).some((m) => m.kind === "user");
@@ -627,6 +643,33 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 				runEndedAt: Date.now(),
 			});
 			return final.pendingLlmError ? commitLlmErrorCard(final, final.pendingLlmError) : final;
+		}
+		case "message_control_update": {
+			// 快照投影：runtimeId 已钉住时旧实例事件一律拒收；同实例 revision 单调（迟到的旧快照不覆盖）
+			const snap = event.snapshot;
+			if (state.controlRuntimeId && snap.runtimeId !== state.controlRuntimeId) return state;
+			if (
+				state.control &&
+				snap.runtimeId === state.control.runtimeId &&
+				snap.revision < state.control.revision
+			)
+				return state;
+			let next: SessionTranscriptState = {
+				...state,
+				control: snap,
+				controlRuntimeId: snap.runtimeId,
+			};
+			// 提交失败回执：摘掉对应乐观气泡（错误反馈由发送路径给出，不留假消息）
+			const receipt = event.receipt;
+			if (receipt?.status === "failed") {
+				next = {
+					...next,
+					messages: next.messages.filter(
+						(m) => !(m.kind === "user" && m.pending === true && m.controlMessageId === receipt.messageId),
+					),
+				};
+			}
+			return next;
 		}
 		case "queue_update":
 			// SDK 整组下发（steering 桌面端不用）；投递/清空都由 SDK 侧触发后推新数组

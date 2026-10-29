@@ -103,6 +103,8 @@ export function extensionNameFromStack(stack: string): string {
 export interface UiContextDeps {
 	/** 对话框宿主（每会话一个）；缺省 = 对话框退回契约取消值 */
 	dialogs?: ExtensionDialogHost;
+	/** 当前 SDK run 的 signal；与扩展传入 signal 合并，任一 abort 即取消 */
+	runSignal?: () => AbortSignal | undefined;
 	/** notify → 全局 Toast（缺省丢弃）；source 为 stack 启发式归因（可能为空串） */
 	onNotify?: (message: string, level: "info" | "warning" | "error", source: string) => void;
 	/** setEditorText/pasteToEditor → Composer 草稿（缺省丢弃）；source 同上 */
@@ -116,24 +118,47 @@ export interface UiContextDeps {
  * 别在 PiBackend 里重写。
  */
 export function makeUiContext(deps: UiContextDeps = {}): ExtensionUIContext {
+	const ask = async (
+		kind: "select" | "confirm" | "input" | "editor",
+		fields: Parameters<ExtensionDialogHost["ask"]>[1],
+		opts?: { signal?: AbortSignal; timeout?: number },
+	) => {
+		const runSignal = deps.runSignal?.();
+		const signals = [
+			...new Set([runSignal, opts?.signal].filter((signal): signal is AbortSignal => !!signal)),
+		];
+		const controller = signals.length ? new AbortController() : undefined;
+		const listeners = new Map<AbortSignal, () => void>();
+		for (const signal of signals) {
+			const abort = () => controller?.abort();
+			listeners.set(signal, abort);
+			if (signal.aborted) abort();
+			else signal.addEventListener("abort", abort, { once: true });
+		}
+		try {
+			return await (deps.dialogs
+				? deps.dialogs.ask(kind, fields, { ...opts, signal: controller?.signal ?? opts?.signal ?? runSignal })
+				: Promise.resolve(kind === "confirm" ? false : undefined));
+		} finally {
+			for (const [signal, listener] of listeners) signal.removeEventListener("abort", listener);
+		}
+	};
 	return {
 		// SDK 契约：select/input/editor 的 undefined = 用户取消（types.d.ts），confirm false = 否；
 		// 无宿主时一律取消，不伪造「第一项/空串」当作用户输入（D3 诚实取消）
 		select: (title, options, opts) =>
 			deps.dialogs
-				? deps.dialogs
-						.ask("select", { title, options }, opts)
-						.then((v) => (typeof v === "string" ? v : undefined))
+				? ask("select", { title, options }, opts).then((v) => (typeof v === "string" ? v : undefined))
 				: Promise.resolve(undefined),
 		confirm: (title, message, opts) =>
 			deps.dialogs
-				? deps.dialogs.ask("confirm", { title, message }, opts).then((v) => v === true)
+				? ask("confirm", { title, message }, opts).then((v) => v === true)
 				: Promise.resolve(false),
 		input: (title, placeholder, opts) =>
 			deps.dialogs
-				? deps.dialogs
-						.ask("input", placeholder ? { title, placeholder } : { title }, opts)
-						.then((v) => (typeof v === "string" ? v : undefined))
+				? ask("input", placeholder ? { title, placeholder } : { title }, opts).then((v) =>
+						typeof v === "string" ? v : undefined,
+					)
 				: Promise.resolve(undefined),
 		notify: (message, type) =>
 			deps.onNotify?.(message, type ?? "info", extensionNameFromStack(new Error().stack ?? "")),
@@ -154,9 +179,9 @@ export function makeUiContext(deps: UiContextDeps = {}): ExtensionUIContext {
 		getEditorText: () => "",
 		editor: (title, prefill) =>
 			deps.dialogs
-				? deps.dialogs
-						.ask("editor", prefill ? { title, prefill } : { title }, undefined)
-						.then((v) => (typeof v === "string" ? v : undefined))
+				? ask("editor", prefill ? { title, prefill } : { title }).then((v) =>
+						typeof v === "string" ? v : undefined,
+					)
 				: Promise.resolve(undefined),
 		addAutocompleteProvider: () => {},
 		setEditorComponent: () => {},

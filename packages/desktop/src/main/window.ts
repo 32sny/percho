@@ -112,7 +112,11 @@ export function applyChromeTheme(mode: ThemeMode): void {
 	}
 }
 
-export function createWindow(theme: "dark" | "light" = "light", bounds: Rect | null = null): BrowserWindow {
+export function createWindow(
+	theme: "dark" | "light" = "light",
+	bounds: Rect | null = null,
+	requestQuit?: () => void,
+): BrowserWindow {
 	const window = new BrowserWindow({
 		// 有持久化 bounds 就用它（已过 `sanitizeWindowBounds` 屏幕校验），否则走默认尺寸 + 系统摆放
 		...(bounds
@@ -176,8 +180,12 @@ export function createWindow(theme: "dark" | "light" = "light", bounds: Rect | n
 			window.hide();
 			return;
 		}
-		if (process.platform !== "win32") return;
-		if (!quitGuard || window.webContents.isDestroyed()) return;
+		if (requestQuit) {
+			event.preventDefault();
+			requestQuit();
+			return;
+		}
+		if (process.platform !== "win32" || !quitGuard || window.webContents.isDestroyed()) return;
 		event.preventDefault();
 		window.webContents.send(IpcChannels.QuitRequested);
 		// 兑底：渲染端弹窗上屏后会回执 `app:quitDialogShown`；超时没回执就说明渲染进程

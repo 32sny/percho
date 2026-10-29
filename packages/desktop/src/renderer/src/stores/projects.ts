@@ -5,9 +5,11 @@ import { initDailyDir, isDailyCwd } from "../lib/daily";
 import { pathLastSegment } from "../lib/path-display";
 import { isPrimaryNavigationSession } from "../lib/session-visibility";
 import { useChannelSubscriptionsStore } from "./channel-subscriptions";
+import { discardPendingPayloads } from "./pending-payloads";
 import { useSessionWorkspaceStore } from "./session-workspace";
 import { useSessionsStore } from "./sessions";
 import { useSubagentReturnStore } from "./subagent-return";
+import { pushToast } from "./toasts";
 import { useUiPreferencesStore } from "./ui-preferences";
 
 const ADDED_KEY = "pi-desktop.projects";
@@ -62,11 +64,11 @@ interface ProjectsStore {
 	setSearch: (search: string) => void;
 	addProject: () => Promise<void>;
 	/** 删除历史会话（含磁盘文件）；若该会话在顶栏打开中则一并关闭 */
-	deleteSession: (session: SessionMeta) => Promise<void>;
+	deleteSession: (session: SessionMeta) => Promise<boolean>;
 	/** 移动会话到其他项目（文件搬家 + 头部 cwd 改写）；打开中的会话关后按新 meta 重开 */
 	moveSession: (session: SessionMeta, targetCwd: string) => Promise<void>;
 	/** 删除整个项目：删除该项目下全部会话（含磁盘文件），并从已添加列表移除 */
-	deleteProject: (cwd: string) => Promise<void>;
+	deleteProject: (cwd: string) => Promise<boolean>;
 	/** 从历史会话打开并切回聊天视图；若已在内存里则直接切换。**用户入口**：真正打开成功后才记入工作区 */
 	openSession: (session: SessionMeta) => Promise<void>;
 }
@@ -152,6 +154,16 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => {
 		},
 
 		deleteSession: async (session) => {
+			const discarded = await discardPendingPayloads(session.sessionId);
+			if (discarded !== "empty" && discarded !== "ok") {
+				pushToast("warning", "toast.pendingPayloadDiscardFailed");
+				return false;
+			}
+			const sessionsState = useSessionsStore.getState();
+			if (sessionsState.sessions.some((s) => s.sessionId === session.sessionId)) {
+				const result = await sessionsState.closeSession(session.sessionId);
+				if (!result.closed) return false;
+			}
 			await getPi().deleteSession({ sessionId: session.sessionId, sessionFile: session.sessionFile });
 			// 置顶列表清理：会话没了就没人能取消置顶，留着会变成永久残留 id
 			useUiPreferencesStore.getState().unpin(session.sessionId);
@@ -165,13 +177,10 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => {
 			useSubagentReturnStore.getState().forgetChild(session.sessionId);
 			// 频道订阅快照同理（删除路径上 sessions.closeSession 不一定跑到，幂等清一次）
 			useChannelSubscriptionsStore.getState().forget(session.sessionId);
-			const sessionsState = useSessionsStore.getState();
-			if (sessionsState.sessions.some((s) => s.sessionId === session.sessionId)) {
-				await sessionsState.closeSession(session.sessionId);
-			}
 			set((state) => ({
 				allSessions: state.allSessions.filter((s) => s.sessionId !== session.sessionId),
 			}));
+			return true;
 		},
 
 		/** 移动会话到其他项目：后端文件搬家 + 头部 cwd 改写；目录快照替换该条（sessionId 不变，
@@ -195,10 +204,10 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => {
 
 		deleteProject: async (cwd) => {
 			// 内置日常空间不可删（侧栏本就不渲染删除钮，这里兜底防 IPC 重放等旁路）
-			if (isDailyCwd(cwd)) return;
+			if (isDailyCwd(cwd)) return false;
 			const { allSessions } = get();
 			for (const session of allSessions.filter((s) => s.cwd === cwd)) {
-				await get().deleteSession(session);
+				if (!(await get().deleteSession(session))) return false;
 			}
 			const added = get().addedProjects.filter((p) => p !== cwd);
 			localStorage.setItem(ADDED_KEY, JSON.stringify(added));
@@ -208,6 +217,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => {
 				const projects = deriveProjects(get());
 				set({ selectedCwd: projects[0]?.cwd ?? null, search: "" });
 			}
+			return true;
 		},
 
 		openSession: async (session) => {

@@ -1,4 +1,5 @@
 import type { AgentSessionEvent as PiAgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { MessageControlUpdateEvent } from "./message-control";
 import type { SkillInvocationDisplay } from "./skill-invocation";
 import type { SubagentRunData } from "./subagent";
 
@@ -557,13 +558,14 @@ export interface StreamGuardTrippedEvent {
 /** pi 事件 + Percho UI 事件，跨 IPC 统一转发。 */
 export type { PiAgentSessionEvent as AgentSessionEvent };
 export type SessionEvent =
-	| Exclude<PiAgentSessionEvent, { type: "turn_end" }>
+	| (Exclude<PiAgentSessionEvent, { type: "turn_end" }> & { controlMessageId?: string })
 	| (Extract<PiAgentSessionEvent, { type: "turn_end" }> & {
 			/** Percho 转发附加：失败响应的持久化 entry，供错误卡精确核验（不靠毫秒时间判唯一）。 */
 			retryEntryId?: string;
 	  })
 	| SubagentMutexEvent
-	| StreamGuardTrippedEvent;
+	| StreamGuardTrippedEvent
+	| MessageControlUpdateEvent;
 
 /** 渲染进程收到的统一事件包络 */
 export interface SessionEventEnvelope {

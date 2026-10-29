@@ -11,6 +11,7 @@ const pi = vi.hoisted(() => ({
 	getPermissionMode: vi.fn(),
 	setPermissionMode: vi.fn(),
 	markSessionHistoryReady: vi.fn(),
+	getMessageControl: vi.fn(),
 }));
 vi.mock("../api", () => ({ getPi: () => pi }));
 
@@ -74,6 +75,7 @@ beforeEach(() => {
 	pi.getPermissionMode.mockResolvedValue("default");
 	pi.setPermissionMode.mockResolvedValue(undefined);
 	pi.markSessionHistoryReady.mockResolvedValue(undefined);
+	pi.getMessageControl.mockRejectedValue(new Error("not implemented"));
 	useTranscriptStore.setState({ bySession: {} });
 	useUiPreferencesStore.setState({ sessionPermissionModes: {} });
 	useToastsStore.setState({ toasts: [] });
@@ -317,5 +319,61 @@ describe("session loader owns flights and data, not navigation", () => {
 			true,
 		);
 		expect(leaf.statements.filter(ts.isImportDeclaration)).toEqual([]);
+	});
+});
+
+describe("控制快照装载（getMessageControl 显式替换）", () => {
+	const controlSnap = (over: Record<string, unknown> = {}) => ({
+		runtimeId: "rt-new",
+		revision: 2,
+		phase: "running" as const,
+		autoDispatchPaused: false,
+		items: [],
+		...over,
+	});
+
+	it("bundle 装载钉住最新快照：同 id 重开（runtime 不同）旧快照被明确替换", async () => {
+		const f = fixture("ctrl");
+		// 旧 runtime 残留（上次实例的快照）
+		useTranscriptStore.getState().setControlSnapshot("ctrl", {
+			runtimeId: "rt-old",
+			revision: 9,
+			phase: "blocked",
+			autoDispatchPaused: true,
+			items: [],
+		});
+		pi.getMessageControl.mockResolvedValue({ ok: true, value: controlSnap() });
+		await f.loader.loadSessionBundle("ctrl");
+		const entry = useTranscriptStore.getState().bySession.ctrl;
+		expect(entry?.control?.runtimeId).toBe("rt-new");
+		expect(entry?.controlRuntimeId).toBe("rt-new");
+		// 旧 runtime 的迟到事件不接管
+		useTranscriptStore.getState().applyEvent("ctrl", {
+			type: "message_control_update",
+			snapshot: {
+				runtimeId: "rt-old",
+				revision: 10,
+				phase: "idle",
+				autoDispatchPaused: false,
+				items: [
+					{ messageId: "x", source: "user", mode: "queue", state: "queued", preview: "旧", imageCount: 0 },
+				],
+			},
+		} as never);
+		expect(useTranscriptStore.getState().bySession.ctrl?.control?.items).toEqual([]);
+	});
+
+	it("控制通道未就绪（reject/!ok）：显式清空旧快照，不串旧实例", async () => {
+		const f = fixture("ctrl-off");
+		useTranscriptStore.getState().setControlSnapshot("ctrl-off", {
+			runtimeId: "rt-old",
+			revision: 9,
+			phase: "blocked",
+			autoDispatchPaused: true,
+			items: [],
+		});
+		pi.getMessageControl.mockRejectedValue(new Error("not implemented"));
+		await f.loader.loadSessionBundle("ctrl-off");
+		expect(useTranscriptStore.getState().bySession["ctrl-off"]?.control).toBeNull();
 	});
 });
