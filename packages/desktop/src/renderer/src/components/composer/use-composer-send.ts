@@ -48,6 +48,7 @@ function newRequestId(): string {
 
 /** 控制通道是否可用（backend 未就绪时不暴露 → 整体回退 legacy prompt 路径） */
 function controlApi() {
+	// SAFETY: preload 从 CHANNEL_TABLE 成组生成控制方法；此处仅将旧桥接中可能缺失的方法视为可选。
 	const pi = getPi() as unknown as {
 		submitMessage?: (req: unknown) => Promise<ControlResult<import("@percho/shared").MessageAck>>;
 		getMessageControl?: (req: { sessionId: string }) => Promise<ControlResult<ControlSnapshot>>;
@@ -430,7 +431,8 @@ export function useComposerSend(options: UseComposerSendOptions) {
 				: useTranscriptStore.getState().appendOptimisticUser(sessionId, {
 						text: content,
 						images: wireImages,
-						controlMessageId: requestId,
+						// requestId 标识新尝试；恢复实体的 message_start 沿用原消息 ID。
+						controlMessageId: recovery?.messageId ?? requestId,
 					});
 		try {
 			const res = await api.submitMessage({ ...requestBase, requestId });

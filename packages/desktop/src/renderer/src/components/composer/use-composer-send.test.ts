@@ -479,10 +479,59 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 			imageNames: ["p.png"],
 		});
 		expect(req.payload.images).toEqual([{ data: "AAAA", mimeType: "image/png" }]);
-		// idle queue：乐观气泡带 controlMessageId 等精确认领
+		// 普通发送的乐观气泡以 requestId 精确认领。
 		const pending = entry()?.messages[0];
 		expect(pending).toMatchObject({ kind: "user", pending: true, controlMessageId: req.requestId });
 	});
+
+	it.each(["before", "after"] as const)(
+		"recovered idle queue resend is claimed by original message id when message_start arrives %s submit ACK",
+		async (order) => {
+			useTranscriptStore.getState().setControlSnapshot("s1", snap());
+			useDraftStore.getState().updateDraft("s1", () => ({
+				text: "编辑后重发",
+				images: [],
+				slashCommand: null,
+				attachments: [],
+				quotes: [],
+				recovery: { messageId: "original-message", expectedRevision: 6 },
+			}));
+			const gate = deferred<ReturnType<typeof ok>>();
+			mocks.submitMessage.mockReturnValue(gate.promise);
+			const pendingSend = useComposerSend(
+				makeOptions({ text: "编辑后重发", slashCommand: null }),
+			).handleSend();
+			await vi.waitFor(() => expect(mocks.submitMessage).toHaveBeenCalledTimes(1));
+			const requestId = mocks.submitMessage.mock.calls[0]![0].requestId;
+			expect(requestId).not.toBe("original-message");
+			expect(entry()?.messages[0]).toMatchObject({
+				kind: "user",
+				pending: true,
+				controlMessageId: "original-message",
+			});
+			const applyStart = () => {
+				useTranscriptStore.getState().applyEvent("s1", {
+					type: "message_start",
+					controlMessageId: "original-message",
+					message: { role: "user", content: [{ type: "text", text: "编辑后重发" }] },
+				} as never);
+			};
+			if (order === "before") {
+				applyStart();
+				gate.resolve(ok({ requestId, messageId: "original-message", disposition: "started" }));
+				await pendingSend;
+			} else {
+				gate.resolve(ok({ requestId, messageId: "original-message", disposition: "started" }));
+				await pendingSend;
+				applyStart();
+			}
+			const userMessages = entry()?.messages.filter((message) => message.kind === "user") ?? [];
+			expect(userMessages).toHaveLength(1);
+			expect(userMessages[0]).toMatchObject({ kind: "user", text: "编辑后重发" });
+			expect(userMessages[0]?.pending).toBeFalsy();
+			expect(userMessages.some((message) => message.pending)).toBe(false);
+		},
+	);
 
 	it("IPC pending 时保留整份草稿快照，成功回执后才清理", async () => {
 		useTranscriptStore.getState().setControlSnapshot("s1", snap());
@@ -538,6 +587,13 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 			quotes: ["new quote"],
 			recovery: { messageId: "new", expectedRevision: 9 },
 		});
+	});
+
+	it("submitMessage 拒绝时移除未认领的 optimistic 用户消息", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		mocks.submitMessage.mockResolvedValue(fail("queue_full"));
+		await useComposerSend(makeOptions({ text: "keep me", slashCommand: null })).handleSend();
+		expect(entry()?.messages.filter((message) => message.kind === "user" && message.pending)).toHaveLength(0);
 	});
 
 	it("submitMessage 拒绝保留原草稿快照", async () => {
