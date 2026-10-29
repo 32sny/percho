@@ -1,15 +1,10 @@
 import { realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { isSessionPathDescendant } from "./session-paths";
 
 function containedFile(root: string, filePath: string): boolean {
-	const normalizedRoot = resolve(root);
-	const normalized = resolve(filePath);
-	const rel = relative(normalizedRoot, normalized);
-	if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
-	return process.platform === "win32"
-		? normalized.toLowerCase().startsWith(`${normalizedRoot.toLowerCase()}${sep}`)
-		: normalized.startsWith(`${normalizedRoot}${sep}`);
+	return isSessionPathDescendant(root, filePath);
 }
 
 export function subagentSessionsRoot(agentDir: string = getAgentDir()): string {

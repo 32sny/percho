@@ -1,16 +1,21 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import * as fs from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { previewSessionFile } from "../src/session/title-preview";
 
 const env = vi.hoisted(() => ({ dir: "" }));
+vi.mock("node:fs/promises", async (original) => ({
+	...(await original<typeof import("node:fs/promises")>()),
+}));
 vi.mock("@earendil-works/pi-coding-agent", async (original) => ({
 	...(await original<typeof import("@earendil-works/pi-coding-agent")>()),
 	getAgentDir: () => env.dir,
 }));
 
 const cwd = "/project";
+const parentCwd = process.platform === "win32" ? `${cwd}\\.` : `${cwd}/.`;
 const parentId = "11111111-1111-4111-8111-111111111111";
 const childIds = Array.from(
 	{ length: 9 },
@@ -73,7 +78,9 @@ function relationEntries() {
 async function writeParent(nextEntries = entries) {
 	await writeFile(
 		parentFile,
-		[sessionHeader(parentId), ...nextEntries].map((row) => JSON.stringify(row)).join("\n") + "\n",
+		[{ ...sessionHeader(parentId), cwd: parentCwd }, ...nextEntries]
+			.map((row) => JSON.stringify(row))
+			.join("\n") + "\n",
 	);
 }
 async function writeChild(index: number) {
@@ -113,9 +120,23 @@ describe("重启后恢复悬停父关系与分页", () => {
 		expect(result.relations?.parent).toEqual({
 			sessionId: parentId,
 			sessionFile: parentFile,
-			cwd,
+			cwd: parentCwd,
 			name: "Parent title",
 		});
+		expect(result.dependencySessionIds).toEqual([parentId]);
+	});
+
+	it("父候选是越界链接时保留失效依赖但不读取链接目标", async () => {
+		const outside = join(env.dir, "outside.jsonl");
+		await writeFile(outside, await readFile(parentFile));
+		await rm(parentFile);
+		await symlink(outside, parentFile);
+		const open = vi.spyOn(fs, "open");
+		const result = await previewSessionFile(childIds[8]!, cwd, childFile);
+		expect(result.relations?.parent).toBeUndefined();
+		expect(result.dependencySessionIds).toEqual([parentId]);
+		expect(open).not.toHaveBeenCalledWith(parentFile, "r");
+		expect(open).not.toHaveBeenCalledWith(outside, "r");
 	});
 
 	it("按 0/6/越界 offset 分页并提供完整集合稳定 revision", async () => {
@@ -167,6 +188,7 @@ describe("重启后恢复悬停父关系与分页", () => {
 			id === parentId ? { cwd, manager: loadedManager as never } : undefined,
 		);
 		expect(result.relations?.parent).toBeUndefined();
+		expect(result.dependencySessionIds).toEqual([parentId]);
 		await writeParent(diskEntries);
 	});
 
@@ -186,6 +208,25 @@ describe("重启后恢复悬停父关系与分页", () => {
 		const result = await previewSessionFile(forkId, cwd, forkFile);
 		expect(result.status).toBe("ok");
 		expect(result.relations?.parent).toBeUndefined();
+		expect(result.dependencySessionIds).toEqual([parentId]);
+	});
+
+	it("不把普通 sessions 根外的恶意父路径作为缓存依赖", async () => {
+		const external = join(env.dir, "outside", `2026-01-01T00-00-00-000Z_${parentId}.jsonl`);
+		const id = childIds[0]!;
+		const file = join(env.dir, "sessions", "project", `2026-01-01T00-00-08-000Z_${id}.jsonl`);
+		await writeFile(
+			file,
+			[
+				{ ...sessionHeader(id, external), timestamp: "2026-01-01T00:00:01.000Z" },
+				{ type: "message", id: "u", parentId: null, message: { role: "user", content: "child" } },
+			]
+				.map((row) => JSON.stringify(row))
+				.join("\n") + "\n",
+		);
+		const result = await previewSessionFile(id, cwd, file);
+		expect(result.status).toBe("ok");
+		expect(result.dependencySessionIds).toBeUndefined();
 	});
 
 	it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN])("非法 offset %s 在读取前失败关闭", async (offset) => {

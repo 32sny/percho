@@ -29,6 +29,36 @@ export interface SessionHoverTarget {
 const OPEN_DELAY = 300;
 const CLOSE_DELAY = 200;
 
+export function collectChangedSessionIds<T extends { sessionId: string }>(
+	before: readonly T[],
+	after: readonly T[],
+): string[] {
+	const previous = new Map(before.map((item) => [item.sessionId, item]));
+	const next = new Map(after.map((item) => [item.sessionId, item]));
+	const changed: string[] = [];
+	for (const id of new Set([...previous.keys(), ...next.keys()])) {
+		if (previous.get(id) !== next.get(id)) changed.push(id);
+	}
+	return changed;
+}
+
+export function collectTranscriptInvalidationIds(
+	before: Record<string, { messages: unknown[]; agentActive: boolean } | undefined>,
+	after: Record<string, { messages: unknown[]; agentActive: boolean } | undefined>,
+): string[] {
+	const changed: string[] = [];
+	for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
+		const previous = before[id];
+		const next = after[id];
+		if (previous === next) continue;
+		const historyChanged =
+			previous?.messages !== next?.messages &&
+			(!next?.agentActive || previous?.messages.length !== next.messages.length);
+		if (historyChanged || (previous?.agentActive && !next?.agentActive)) changed.push(id);
+	}
+	return changed;
+}
+
 /** UI 计时状态机独立于 React：稳定快照、可测计时，不用 effect 相互写 state 来维持开关。 */
 export function createSessionHoverController({
 	canOpen = () => true,
@@ -362,22 +392,21 @@ export function SessionHoverProvider({
 			after: readonly SessionMeta[],
 			catalog: boolean,
 		) => {
-			const previous = new Map(before.map((item) => [item.sessionId, item]));
-			const next = new Map(after.map((item) => [item.sessionId, item]));
-			for (const id of sessionHoverPreview.getSessionIds()) {
-				const oldMeta = previous.get(id);
-				const newMeta = next.get(id);
-				if (oldMeta === newMeta) continue;
-				const target = controller.getTarget();
+			if (sessionHoverPreview.getSessionIds().length === 0) return;
+			const changedIds = collectChangedSessionIds(before, after);
+			if (!changedIds.length) return;
+			const target = controller.getTarget();
+			if (target && changedIds.includes(target.sessionId)) {
+				const oldMeta = before.find((item) => item.sessionId === target.sessionId);
+				const newMeta = after.find((item) => item.sessionId === target.sessionId);
 				if (
-					target?.sessionId === id &&
-					((catalog && !newMeta) ||
-						(newMeta && newMeta.cwd !== target.cwd) ||
-						(oldMeta && newMeta && oldMeta.sessionFile !== newMeta.sessionFile))
+					(catalog && !newMeta) ||
+					(newMeta && newMeta.cwd !== target.cwd) ||
+					(oldMeta && newMeta && oldMeta.sessionFile !== newMeta.sessionFile)
 				)
 					controller.dismiss();
-				sessionHoverPreview.invalidate(id);
 			}
+			sessionHoverPreview.invalidateMany(changedIds, true);
 		};
 		const offProjects = useProjectsStore.subscribe((state, previous) => {
 			if (state.loading && !previous.loading) sessionHoverPreview.invalidate();
@@ -390,17 +419,9 @@ export function SessionHoverProvider({
 			if (state.sessions !== previous.sessions) invalidateMetas(previous.sessions, state.sessions, false);
 		});
 		const offTranscript = useTranscriptStore.subscribe((state, previous) => {
-			for (const id of sessionHoverPreview.getSessionIds()) {
-				const before = previous.bySession[id];
-				const after = state.bySession[id];
-				if (before === after) continue;
-				// loadHistory（含同消息数重载/撤回）替换数组；流式 token 更新不逐字重读历史。
-				const historyChanged =
-					before?.messages !== after?.messages &&
-					(!after?.agentActive || before?.messages.length !== after.messages.length);
-				if (historyChanged || (before?.agentActive && !after?.agentActive))
-					sessionHoverPreview.invalidate(id);
-			}
+			if (sessionHoverPreview.getSessionIds().length === 0) return;
+			const changedIds = collectTranscriptInvalidationIds(previous.bySession, state.bySession);
+			if (changedIds.length) sessionHoverPreview.invalidateMany(changedIds, true);
 		});
 		return () => {
 			offProjects();

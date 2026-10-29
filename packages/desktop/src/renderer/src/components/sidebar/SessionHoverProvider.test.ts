@@ -8,7 +8,12 @@ vi.mock("../../stores/settings", () => ({ useSettingsStore: {} }));
 vi.mock("../../stores/transcript", () => ({ useTranscriptStore: {} }));
 vi.mock("./SessionHoverCard", () => ({ SessionHoverCard: () => null }));
 
-import { createSessionHoverController, type SessionHoverTarget } from "./SessionHoverProvider";
+import {
+	collectChangedSessionIds,
+	collectTranscriptInvalidationIds,
+	createSessionHoverController,
+	type SessionHoverTarget,
+} from "./SessionHoverProvider";
 
 const target = (sessionId: string): SessionHoverTarget => ({
 	sessionId,
@@ -20,6 +25,31 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
 	vi.clearAllTimers();
 	vi.useRealTimers();
+});
+
+describe("侧栏悬停缓存失效收集", () => {
+	it("metadata 集合比较并集中的 id，包括新增、移除和替换", () => {
+		const a = { sessionId: "a", name: "old" };
+		const b = { sessionId: "b", name: "same" };
+		expect(
+			collectChangedSessionIds([a, b], [{ sessionId: "a", name: "new" }, { ...b }, { sessionId: "c" }]),
+		).toEqual(["a", "b", "c"]);
+	});
+
+	it("transcript 遍历所有已加载项，历史变化/结束会传 ID，streaming token 不传", () => {
+		const stableMessages = [{}];
+		const before = {
+			parent: { messages: stableMessages, agentActive: true },
+			tokenOnly: { messages: stableMessages, agentActive: true },
+			finished: { messages: stableMessages, agentActive: true },
+		};
+		const after = {
+			parent: { messages: [{}], agentActive: false },
+			tokenOnly: { messages: stableMessages, agentActive: true },
+			finished: { messages: stableMessages, agentActive: false },
+		};
+		expect(collectTranscriptInvalidationIds(before, after)).toEqual(["parent", "finished"]);
+	});
 });
 
 describe("侧栏悬停控制器计时与目标隔离", () => {

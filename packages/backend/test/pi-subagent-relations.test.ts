@@ -13,6 +13,7 @@ import {
 	PiSubagentRelationLimitError,
 	resolvePiSubagentRelations,
 } from "../src/session/pi-subagent-relations";
+import { backendSessionPathKey } from "../src/session/session-paths";
 
 let root = "";
 const parentFile = () => join(env.dir, "sessions", "--project--", "parent.jsonl");
@@ -132,7 +133,7 @@ describe("pi-subagents persisted relation resolver", () => {
 			taskFirstLine: "Inspect module",
 			status: "unknown",
 		});
-		expect(result.validatedFiles.has(process.platform === "win32" ? file.toLowerCase() : file)).toBe(true);
+		expect(result.validatedFiles.has(backendSessionPathKey(file))).toBe(true);
 	});
 
 	it("does not read an oversized first message once the original identity has been read", async () => {

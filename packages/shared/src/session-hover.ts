@@ -2,6 +2,8 @@ import type { SessionHoverLiveRun } from "./session";
 import { formatSkillCommand, parseExpandedSkillInvocation } from "./skill-invocation";
 import type { SessionTranscriptState, StreamingState } from "./transcript/types";
 
+export const SESSION_HOVER_PAGE_SIZE = 6;
+
 const LIVE_BUDGET = 8 * 1024 * 1024;
 const TASK_BUDGET = 128 * 1024;
 

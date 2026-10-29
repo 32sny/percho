@@ -1,4 +1,8 @@
-import type { SessionHoverPreviewResult, SessionHoverRelationChild } from "@percho/shared";
+import {
+	SESSION_HOVER_PAGE_SIZE,
+	type SessionHoverPreviewResult,
+	type SessionHoverRelationChild,
+} from "@percho/shared";
 import { useLayoutEffect, useState, useSyncExternalStore } from "react";
 import {
 	type createSessionHoverPreviewCache,
@@ -8,7 +12,7 @@ import {
 	sessionHoverPreviewKey,
 } from "../../stores/session-hover-preview";
 
-const PAGE_SIZE = 6;
+const PAGE_SIZE = SESSION_HOVER_PAGE_SIZE;
 export interface SessionHoverPages {
 	sourceKey: string;
 	first: SessionHoverPreviewResult;

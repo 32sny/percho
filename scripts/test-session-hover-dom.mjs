@@ -39,8 +39,8 @@ const metaB={...meta,sessionId:'B',sessionFile:'C:/fixture/secret-b.jsonl',name:
 // 9 条假分页 fixture：按 childrenOffset 切 6 条页，固定 revision/offset/total/hidden（非真实后端）。
 const children=Array.from({length:9},(_,i)=>({sessionFile:'C:/fixture/secret-child-'+i+'.jsonl',agent:'scout',status:i===0?'running':i===1?'error':'done',taskFirstLine:'需要在窄窗口中完整换行显示并保留两行截断的任务文本'.repeat(5)}));
 const parentDto={sessionId:'P',sessionFile:'C:/fixture/secret-parent.jsonl',cwd:'C:/fixture',name:'DTO父名（应被历史标题盖住）'};
-window.requests=[]; window.navigations=[];
-window.pi = new Proxy({getSessionHoverPreview: async (request)=>{window.requests.push(request);if(request.sessionId!=='A')return {status:'empty',sessionId:request.sessionId};const offset=request.childrenOffset??0;const page=children.slice(offset,offset+6);return {status:'empty',sessionId:'A',relations:{children:page,hidden:Math.max(0,9-offset-page.length),offset,total:9,revision:'fixture-rev-1',parent:parentDto}};}}, {get:(target,key)=>target[key]??(()=>Promise.resolve())});
+window.requests=[]; window.navigations=[]; window.parentLinked=true;
+window.pi = new Proxy({getSessionHoverPreview: async (request)=>{window.requests.push(request);if(request.sessionId!=='A')return {status:'empty',sessionId:request.sessionId};const offset=request.childrenOffset??0;const page=children.slice(offset,offset+6);return {status:'empty',sessionId:'A',dependencySessionIds:['P'],relations:{children:page,hidden:Math.max(0,9-offset-page.length),offset,total:9,revision:'fixture-rev-1',parent:window.parentLinked?parentDto:undefined}};}}, {get:(target,key)=>target[key]??(()=>Promise.resolve())});
 useI18nStore.setState({language:'zh'});
 useSessionsStore.setState({sessions:[meta],activeSessionId:'OTHER',openSubagentSessionFrom:async(parent,file)=>{window.navigations.push({kind:'child',parent,file,cardOpen:!!document.querySelector('[data-session-hover-card]')});return {ok:false};},returnToParent:async(id,fallback)=>{window.navigations.push({kind:'parent',id,fallback});return true;}});
 useProjectsStore.setState({allSessions:[meta,{...meta,sessionId:'P',name:'已卸载父会话的历史标题'}]});
@@ -48,6 +48,7 @@ useTranscriptStore.setState({bySession:{A:{...emptyTranscript(),pendingPermissio
 // 冷启动：不 remember 任何关系，父入口只能来自后端验证的 parent DTO。
 useSubagentReturnStore.setState({relations:{}});
 window.returnRelationCount=()=>Object.keys(useSubagentReturnStore.getState().relations).length;
+window.updateParent=linked=>{window.parentLinked=linked;useTranscriptStore.setState(state=>({bySession:{...state.bySession,P:{...emptyTranscript(),pendingPermissions:[],pendingDialogs:[],messages:[{kind:'user',id:'parent-change',text:String(linked),timestamp:1,images:[]}]}}}))};
 useSettingsStore.setState({open:false});
 window.updateLive=()=>useTranscriptStore.setState(state=>({bySession:{...state.bySession,A:{...state.bySession.A,streaming:{...emptyStreaming(),subagentRuns:[{key:'t:0',sessionFile:'C:/fixture/secret-live.jsonl',agent:'scout',status:'running'}]}}}}));
 window.updateToken=()=>useTranscriptStore.setState(state=>({bySession:{...state.bySession,A:{...state.bySession.A,streaming:{...state.bySession.A.streaming,text:'more tokens'}}}}));
@@ -89,6 +90,13 @@ app.whenReady().then(async()=>{
   await js("document.querySelector('#after').focus();document.querySelector('#row button').focus()");
   await wait("!!document.querySelector('[data-session-hover-card] li button')");
   assert(await js("document.querySelectorAll('[data-session-hover-card] li').length===6 && document.body.textContent.includes('还有 3')"),'six rows and hidden count');
+  // 不等待 TTL、不关闭卡片：父变化使已缓存子关系失效，负结果也能恢复。
+  await js('window.updateParent(false)');
+  await wait("document.querySelectorAll('[data-session-hover-card] li').length===6 && ![...document.querySelectorAll('[data-session-hover-card] button')].some(b=>(b.getAttribute('aria-label')||'').startsWith('返回父会话'))");
+  assert(true,'parent invalidation removes cached child parent entry without waiting for TTL');
+  await js('window.updateParent(true)');
+  await wait("[...document.querySelectorAll('[data-session-hover-card] button')].some(b=>(b.getAttribute('aria-label')||'').startsWith('返回父会话'))");
+  assert(true,'negative parent dependency restores the entry on a later parent change');
   // 显示更多 → 9 行 → 收起 → 6 行；键盘 Enter 操作，焦点在卡片内合理归还、不关卡。
   await js("[...document.querySelectorAll('[data-session-hover-card] button')].find(b=>b.textContent.includes('显示更多')).focus()");
   await key('Enter');

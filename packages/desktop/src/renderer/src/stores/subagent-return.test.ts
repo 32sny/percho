@@ -252,6 +252,51 @@ describe("返回父会话", () => {
 		expect(active()).toBe("sub-1"); // 留在子页，不做猜测性跳转
 	});
 
+	it("冷父返回接受 Windows cwd/file 的大小写与分隔符等价", async () => {
+		const fallback = {
+			parentSessionId: "parent",
+			parentFile: "C:/Project/sessions/parent.jsonl",
+			cwd: "C:/Project",
+		};
+		useSessionsStore.setState({ sessions: [child], activeSessionId: "sub-1", cwd: child.cwd });
+		piMock.openSession.mockResolvedValue({
+			...parent,
+			cwd: "c:\\project\\.",
+			sessionFile: "c:\\project\\sessions\\parent.jsonl",
+		});
+		expect(await useSessionsStore.getState().returnToParent("sub-1", fallback)).toBe(true);
+		expect(active()).toBe("parent");
+	});
+
+	it("冷父返回拒绝 POSIX 大小写不同或 parent file 不同，不激活", async () => {
+		const fallback = { parentSessionId: "parent", parentFile: "/Project/parent.jsonl", cwd: "/Project" };
+		useSessionsStore.setState({ sessions: [child], activeSessionId: "sub-1", cwd: child.cwd });
+		piMock.openSession.mockResolvedValue({ ...parent, cwd: "/project", sessionFile: fallback.parentFile });
+		expect(await useSessionsStore.getState().returnToParent("sub-1", fallback)).toBe(false);
+		expect(active()).toBe("sub-1");
+
+		piMock.openSession.mockResolvedValueOnce({
+			...parent,
+			cwd: fallback.cwd,
+			sessionFile: "/Project/other.jsonl",
+		});
+		expect(await useSessionsStore.getState().returnToParent("sub-1", fallback)).toBe(false);
+		expect(active()).toBe("sub-1");
+	});
+
+	it("已加载的冷父同样核验 id、cwd 和 file；不匹配不切换", async () => {
+		const fallback = { parentSessionId: "parent", parentFile: parent.sessionFile, cwd: parent.cwd };
+		useSessionsStore.setState({
+			sessions: [{ ...parent, cwd: "/different" }, child],
+			activeSessionId: "sub-1",
+			cwd: child.cwd,
+		});
+		expect(await useSessionsStore.getState().returnToParent("sub-1", fallback)).toBe(false);
+		expect(active()).toBe("sub-1");
+		piMock.openSession.mock.calls.length = 0;
+		expect(piMock.openSession).not.toHaveBeenCalled();
+	});
+
 	it("没有内存关系时只按已验证 fallback 打开冷父；缺路径或身份/cwd 不符不跳转", async () => {
 		const fallback = {
 			parentSessionId: "parent",

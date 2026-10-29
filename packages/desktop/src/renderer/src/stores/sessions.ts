@@ -1,4 +1,10 @@
-import type { AvailableModel, PermissionMode, SessionCloseIntent, SessionMeta } from "@percho/shared";
+import {
+	type AvailableModel,
+	type PermissionMode,
+	type SessionCloseIntent,
+	type SessionMeta,
+	sameSessionPath,
+} from "@percho/shared";
 import { create } from "zustand";
 import { getPi } from "../api";
 import { selectActiveCwd } from "../lib/active-cwd";
@@ -388,6 +394,31 @@ function commitSessionState(
 
 // Host action writes use the explicit commit; Zustand's public setState is not wrapped.
 const set = commitSessionState;
+
+async function activateHistoryTarget(
+	filePath: string,
+	expected?: { sessionId: string; cwd: string; sessionFile: string },
+): Promise<OpenFromHistoryResult> {
+	const token = claimActivation();
+	noteUserIntent();
+	const meta = await ensureOpenSession(filePath);
+	if (!meta) return { ok: false };
+	if (
+		expected &&
+		(meta.sessionId !== expected.sessionId ||
+			!sameSessionPath(meta.cwd, expected.cwd) ||
+			!meta.sessionFile ||
+			!sameSessionPath(meta.sessionFile, expected.sessionFile))
+	) {
+		pushToast("warning", "toast.subagentReturnUnavailable");
+		return { ok: false };
+	}
+	if (!isLatestActivation(token)) return { ok: true, latest: false, meta, token };
+	set({ activeSessionId: meta.sessionId });
+	rememberCwd(meta.cwd);
+	return { ok: true, latest: true, meta, token };
+}
+
 export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 	sessions: [],
 	activeSessionId: null,
@@ -595,20 +626,7 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 	 *  返回 `closed=false` 表示后端拒绝（竞态：策略判定后它恰好又开始跑了/刚订阅了）。 */
 	unloadSession: (sessionId) => get().closeSession(sessionId, "gc"),
 
-	openFromHistory: async (filePath) => {
-		// 先领号再发请求：这次点击就是当前最新意图（同文件双击则第二次领号，自然胜出）
-		const token = claimActivation();
-		noteUserIntent();
-		const meta = await ensureOpenSession(filePath);
-		// 失败已由共享链报过一次；这里的提前返回同时保证不对用户的新选择做任何回滚
-		if (!meta) return { ok: false };
-		// 迟到（用户已切走）：会话确实开起来了，但**不能抢焦点** —— 调用方据此只落数据
-		if (!isLatestActivation(token)) return { ok: true, latest: false, meta, token };
-		set({ activeSessionId: meta.sessionId });
-		// 先记 cwd 再拉数据：即便随后装载失败，用户「在用哪个项目」的事实也已经成立
-		rememberCwd(meta.cwd);
-		return { ok: true, latest: true, meta, token };
-	},
+	openFromHistory: async (filePath) => activateHistoryTarget(filePath),
 
 	/**
 	 * 子代理检视打开（spec D4）：同步捕获父目标 → 走统一打开链 → **只在这次导航仍是最新意图时**建立返回关系。
@@ -652,7 +670,22 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 		const memoryTarget = useSubagentReturnStore.getState().relations[childSessionId];
 		const target = memoryTarget ?? (fallbackTarget?.cwd ? fallbackTarget : undefined);
 		if (!target) return false;
-		if (get().sessions.some((s) => s.sessionId === target.parentSessionId)) {
+		const loadedParent = get().sessions.find((s) => s.sessionId === target.parentSessionId);
+		if (loadedParent) {
+			if (memoryTarget || !fallbackTarget) {
+				get().switchSession(target.parentSessionId);
+				return true;
+			}
+			if (
+				loadedParent.sessionId !== fallbackTarget.parentSessionId ||
+				!sameSessionPath(loadedParent.cwd, fallbackTarget.cwd) ||
+				!loadedParent.sessionFile ||
+				!fallbackTarget.parentFile ||
+				!sameSessionPath(loadedParent.sessionFile, fallbackTarget.parentFile)
+			) {
+				pushToast("warning", "toast.subagentReturnUnavailable");
+				return false;
+			}
 			get().switchSession(target.parentSessionId);
 			return true;
 		}
@@ -661,18 +694,15 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 			return false;
 		}
 		if (memoryTarget || !fallbackTarget?.cwd) {
-			const result = await get().openFromHistory(target.parentFile);
+			const result = await activateHistoryTarget(target.parentFile);
 			return result.ok;
 		}
-		const token = claimActivation();
-		noteUserIntent();
-		const meta = await ensureOpenSession(target.parentFile);
-		if (!meta || meta.sessionId !== fallbackTarget.parentSessionId || meta.cwd !== fallbackTarget.cwd)
-			return false;
-		if (!isLatestActivation(token)) return false;
-		set({ activeSessionId: meta.sessionId });
-		rememberCwd(meta.cwd);
-		return true;
+		const result = await activateHistoryTarget(target.parentFile, {
+			sessionId: fallbackTarget.parentSessionId,
+			cwd: fallbackTarget.cwd,
+			sessionFile: target.parentFile,
+		});
+		return result.ok && result.latest;
 	},
 
 	forkSession: async (ref) => {

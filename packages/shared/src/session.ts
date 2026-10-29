@@ -189,27 +189,28 @@ export interface SessionHoverPreviewRequest {
 	childrenOffset?: number;
 }
 
-export type SessionHoverPreviewResult =
-	| {
-			status: "ok";
-			sessionId: string;
-			source: "current-branch-first-user-text";
-			text: string;
-			relations?: SessionHoverRelations;
-	  }
-	| { status: "empty"; sessionId: string; relations?: SessionHoverRelations }
-	| {
-			status: "unavailable";
-			sessionId: string;
-			relations?: SessionHoverRelations;
-			reason:
-				| "not_found"
-				| "identity_mismatch"
-				| "invalid_history"
-				| "read_failed"
-				| "limit_exceeded"
-				| "unsafe_projection";
-	  };
+interface SessionHoverPreviewBase {
+	sessionId: string;
+	relations?: SessionHoverRelations;
+	/** 仅用于缓存失效：含已知父候选，即使关系验证后为空；不是导航授权。 */
+	dependencySessionIds?: string[];
+}
+
+export type SessionHoverPreviewResult = SessionHoverPreviewBase &
+	(
+		| { status: "ok"; source: "current-branch-first-user-text"; text: string }
+		| { status: "empty" }
+		| {
+				status: "unavailable";
+				reason:
+					| "not_found"
+					| "identity_mismatch"
+					| "invalid_history"
+					| "read_failed"
+					| "limit_exceeded"
+					| "unsafe_projection";
+		  }
+	);
 
 export interface SessionStats {
 	/** 累计 token 用量 */

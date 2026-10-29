@@ -4,7 +4,9 @@ import {
 	projectSessionHoverAgent,
 	projectSessionHoverTask,
 	type SessionHoverRelationChild,
+	sameSessionPath,
 } from "@percho/shared";
+import { backendSessionPathKey, isSessionPathDescendant } from "./session-paths";
 import { ordinarySessionsRoot } from "./subagent-paths";
 
 const DEFAULT_MAX_FILES = 2048;
@@ -38,14 +40,7 @@ function time(value: unknown): number | undefined {
 	const parsed = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN;
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
-function pathKey(file: string): string {
-	const normalized = resolve(file);
-	return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-function within(root: string, file: string): boolean {
-	const rel = relative(root, file);
-	return !!rel && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-}
+
 function agentId(value: unknown): value is string {
 	// 0.22.0 的 ID 是截短 UUID，与另行生成的 session header UUID 不是同一 ID。
 	return typeof value === "string" && value.length <= 128 && /^[a-f\d]{8}(?:-[a-f\d]+)+$/i.test(value);
@@ -192,7 +187,7 @@ export async function resolvePiSubagentRelations(
 		return result;
 	const root = resolve(ordinarySessionsRoot());
 	const parentFile = resolve(parent.sessionFile);
-	if (!within(root, parentFile)) return result;
+	if (!isSessionPathDescendant(root, parentFile)) return result;
 	const directory = dirname(parentFile);
 	let realDirectory: string;
 	try {
@@ -204,8 +199,9 @@ export async function resolvePiSubagentRelations(
 		]);
 		if (
 			!info.isFile() ||
-			(!within(realRoot, realDir) && pathKey(realRoot) !== pathKey(realDir)) ||
-			!within(realDir, realParent)
+			(!isSessionPathDescendant(realRoot, realDir) &&
+				backendSessionPathKey(realRoot) !== backendSessionPathKey(realDir)) ||
+			!isSessionPathDescendant(realDir, realParent)
 		)
 			return result;
 		realDirectory = realDir;
@@ -224,11 +220,11 @@ export async function resolvePiSubagentRelations(
 		if (++count > maxFiles) throw new PiSubagentRelationLimitError();
 		if (!item.isFile() && !item.isSymbolicLink()) continue;
 		const file = resolve(directory, item.name);
-		if (pathKey(file) === pathKey(parentFile)) continue;
+		if (backendSessionPathKey(file) === backendSessionPathKey(parentFile)) continue;
 		let prefix: Prefix | undefined;
 		try {
 			const [realFile, info] = await Promise.all([realpath(file), stat(file)]);
-			if (!info.isFile() || !within(realDirectory, realFile)) continue;
+			if (!info.isFile() || !isSessionPathDescendant(realDirectory, realFile)) continue;
 			prefix = await readPrefix(
 				file,
 				maxPrefix,
@@ -236,10 +232,10 @@ export async function resolvePiSubagentRelations(
 				(header) =>
 					typeof header.cwd === "string" &&
 					isAbsolute(header.cwd) &&
-					pathKey(header.cwd) === pathKey(parent.cwd) &&
+					sameSessionPath(resolve(header.cwd), resolve(parent.cwd), process.platform === "win32") &&
 					typeof header.parentSession === "string" &&
 					isAbsolute(header.parentSession) &&
-					pathKey(header.parentSession) === pathKey(parentFile),
+					sameSessionPath(resolve(header.parentSession), resolve(parentFile), process.platform === "win32"),
 			);
 		} catch (error) {
 			if (error instanceof PiSubagentRelationLimitError) throw error;
@@ -277,7 +273,7 @@ export async function resolvePiSubagentRelations(
 			status: claim.status,
 			createdAt: claim.start,
 		});
-		result.validatedFiles.add(pathKey(file));
+		result.validatedFiles.add(backendSessionPathKey(file));
 	}
 	return result;
 }
