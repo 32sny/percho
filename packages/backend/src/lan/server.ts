@@ -10,6 +10,7 @@ import type {
 	LanTranscriptHistory,
 	LanTranscriptProjection,
 	PermissionRequest,
+	PromptAck,
 	SessionEvent,
 	SessionMessage,
 	SessionMeta,
@@ -120,7 +121,8 @@ export interface LanObserverBackend {
 	getPendingPermissionRequests(): PermissionRequest[];
 	/** M2 写端点前置检查（registry 直查，无磁盘 IO）。 */
 	checkSessionWritable(sessionId: string): "ok" | "not_found" | "read_only";
-	prompt(sessionId: string, text: string): Promise<void>;
+	/** 仅等待受理；HTTP 端点仍返回 { ok: true }，不透传此回执。 */
+	prompt(sessionId: string, text: string): Promise<PromptAck>;
 	abort(sessionId: string): Promise<void>;
 	respondPermission(requestId: string, answer: "allow" | "deny"): void;
 }

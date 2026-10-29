@@ -320,6 +320,11 @@ export interface ImageInput {
 	mimeType: string;
 }
 
+/** Prompt 提交后的同步受理回执；unknown 表示 SDK 未提供可判定的 preflight 结果。 */
+export interface PromptAck {
+	disposition: "handled" | "queued" | "started" | "unknown";
+}
+
 /** 斜杠命令来源 */
 export type SlashCommandSource = "builtin" | "template" | "skill" | "extension";
 

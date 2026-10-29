@@ -41,6 +41,7 @@ import type {
 	PermissionMode,
 	PermissionRequest,
 	PermissionResolved,
+	PromptAck,
 	QueuedMessages,
 	QuotaInfo,
 	SessionCloseIntent,
@@ -133,7 +134,7 @@ export const SESSION_CHANNELS = {
 		{ path: string }
 	>(),
 	/** 发送消息；images 为随消息附带的图片（base64） */
-	prompt: ch("session:prompt")<{ sessionId: string; text: string; images?: ImageInput[] }, void>(),
+	prompt: ch("session:prompt")<{ sessionId: string; text: string; images?: ImageInput[] }, PromptAck>(),
 	/** 仅重试当前末端模型失败，不新增用户消息；受理即返回，执行结果走事件流。 */
 	retryLastFailedTurn: ch("session:retryLastFailedTurn")<
 		{ sessionId: string; ref: { timestamp: number; entryId: string } },

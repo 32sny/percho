@@ -26,6 +26,8 @@ export type { ActivityEntry, SessionPhase, StreamingState, SubagentRunUi, UIMess
 export type PermissionRequest = SharedPermissionRequest;
 
 export interface SessionEntry extends SessionTranscriptState {
+	/** 内存态乐观 activity 的所有权标记，不进入 transcript / IPC。 */
+	optimisticActivityToken?: string;
 	pendingPermissions: PermissionRequest[];
 	/** 扩展对话框待应答队列（InteractionDock 渲染队首；D6 仲裁时权限优先于对话框） */
 	pendingDialogs: ExtensionDialogRequest[];
@@ -34,6 +36,16 @@ export interface SessionEntry extends SessionTranscriptState {
 }
 
 const EMPTY_ENTRY: SessionEntry = { ...emptyTranscript(), pendingPermissions: [], pendingDialogs: [] };
+let nextActivityToken = 0;
+
+function isActivityLifecycleEvent(event: SessionEvent): boolean {
+	return (
+		event.type === "agent_start" ||
+		event.type === "turn_start" ||
+		event.type === "agent_end" ||
+		event.type === "agent_settled"
+	);
+}
 
 /** 空 todo 列表稳定引用（面板 selector 缺省用，禁内联新数组） */
 export const EMPTY_TODOS: TodoItem[] = [];
@@ -44,6 +56,10 @@ interface TranscriptStore {
 	applyEvent: (sessionId: string, event: SessionEvent, opts?: { isActiveViewing?: boolean }) => void;
 	/** 乐观置 agent 运行状态（发送消息后立即置 true，失败/结束后置 false 修正） */
 	markAgentActive: (sessionId: string, active: boolean) => void;
+	/** 原子取得空闲会话的乐观忙碌所有权；真实运行中返回 null。 */
+	beginPromptActivity: (sessionId: string) => string | null;
+	/** 仅匹配 token 才结算；rollback 撤销临时忙碌，否则仅释放所有权。 */
+	settlePromptActivity: (sessionId: string, token: string | null, rollback: boolean) => void;
 	/** 发送瞬间插入乐观用户气泡（返回本地 id，供发送失败时撤回；详见 shared/transcript/pending-user.ts） */
 	appendOptimisticUser: (sessionId: string, input: { text: string; images: ImageInput[] }) => string;
 	/** 发送失败撤回乐观气泡（已认领的不动） */
@@ -83,6 +99,9 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
 					...state.bySession,
 					[sessionId]: {
 						...next,
+						optimisticActivityToken: isActivityLifecycleEvent(event)
+							? undefined
+							: current?.optimisticActivityToken,
 						unseenCompletion,
 						pendingPermissions: current?.pendingPermissions ?? [],
 						pendingDialogs: current?.pendingDialogs ?? [],
@@ -102,9 +121,44 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
 					// 乐观开工同时清未读；失败回滚 false 不算"完成"，不动未读标记
 					[sessionId]: {
 						...current,
+						optimisticActivityToken: undefined,
 						agentActive: active,
 						unseenCompletion: active ? false : current.unseenCompletion,
 					},
+				},
+			};
+		});
+	},
+	beginPromptActivity: (sessionId) => {
+		let token: string | null = null;
+		set((state) => {
+			const current = state.bySession[sessionId] ?? { ...EMPTY_ENTRY };
+			if (current.agentActive) return state;
+			token = `prompt-activity-${++nextActivityToken}`;
+			return {
+				bySession: {
+					...state.bySession,
+					[sessionId]: {
+						...current,
+						optimisticActivityToken: token,
+						agentActive: true,
+						unseenCompletion: false,
+					},
+				},
+			};
+		});
+		return token;
+	},
+	settlePromptActivity: (sessionId, token, rollback) => {
+		if (!token) return;
+		set((state) => {
+			const current = state.bySession[sessionId];
+			if (!current || current.optimisticActivityToken !== token) return state;
+			const { optimisticActivityToken: _token, ...rest } = current;
+			return {
+				bySession: {
+					...state.bySession,
+					[sessionId]: { ...rest, ...(rollback ? { agentActive: false } : {}) },
 				},
 			};
 		});

@@ -17,7 +17,123 @@ function ev(type: string, extra: Record<string, unknown> = {}): AgentSessionEven
 const canonicalSkill = (args?: string) =>
 	`<skill name="mindmap" location="/tmp/skills/mindmap/SKILL.md">\nReferences are relative to /tmp/skills/mindmap.\n\n# Mind map\n\nBody\n</skill>${args ? `\n\n${args}` : ""}`;
 
+describe("transcript prompt activity ownership", () => {
+	beforeEach(() => {
+		useTranscriptStore.setState({ bySession: {} });
+	});
+
+	function state(sessionId = "owner") {
+		return useTranscriptStore.getState().bySession[sessionId];
+	}
+
+	it("rollback only clears owned activity without changing completion, run timing, queue, or stream", () => {
+		const store = useTranscriptStore.getState();
+		store.applyEvent("owner", ev("agent_start"));
+		store.applyEvent(
+			"owner",
+			ev("message_update", {
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "stream" },
+			}),
+		);
+		store.applyEvent("owner", ev("queue_update", { steering: [], followUp: ["queued"] }));
+		store.applyEvent("owner", ev("agent_end", { willRetry: false, messages: [] }));
+		const before = state();
+		expect(before).toBeDefined();
+		if (!before) throw new Error("Missing transcript before rollback");
+		const token = useTranscriptStore.getState().beginPromptActivity("owner");
+		const during = state();
+		expect(during).toBeDefined();
+		if (!during) throw new Error("Missing transcript during rollback");
+		expect(during.agentActive).toBe(true);
+		useTranscriptStore.getState().settlePromptActivity("owner", token, true);
+		const after = state();
+		expect(after).toBeDefined();
+		if (!after) throw new Error("Missing transcript after rollback");
+		expect(after.agentActive).toBe(false);
+		expect(after.runEndedAt).toBe(before.runEndedAt);
+		expect(during.unseenCompletion).toBe(false);
+		expect(after.unseenCompletion).toBe(during.unseenCompletion);
+		expect(after.followUpQueue).toEqual(before.followUpQueue);
+		expect(after.streaming).toBe(before.streaming);
+	});
+
+	it("non-lifecycle events preserve token; markAgentActive invalidates it", () => {
+		const token = useTranscriptStore.getState().beginPromptActivity("owner");
+		useTranscriptStore.getState().applyEvent("owner", ev("queue_update", { steering: [], followUp: ["x"] }));
+		expect(state()?.optimisticActivityToken).toBe(token);
+		useTranscriptStore.getState().markAgentActive("owner", true);
+		expect(state()?.optimisticActivityToken).toBeUndefined();
+		useTranscriptStore.getState().settlePromptActivity("owner", token, true);
+		expect(state()?.agentActive).toBe(true);
+	});
+
+	it.each(["agent_start", "turn_start", "agent_end", "agent_settled"] as const)(
+		"%s independently invalidates the owned token",
+		(type) => {
+			const token = useTranscriptStore.getState().beginPromptActivity("owner");
+			useTranscriptStore.getState().applyEvent("owner", ev(type, { willRetry: false, messages: [] }));
+			expect(state()?.optimisticActivityToken).toBeUndefined();
+			useTranscriptStore.getState().settlePromptActivity("owner", token, true);
+			expect(state()?.agentActive).toBe(type === "agent_start" || type === "turn_start");
+		},
+	);
+
+	it("null and wrong tokens are no-ops", () => {
+		const token = useTranscriptStore.getState().beginPromptActivity("owner");
+		const before = state();
+		useTranscriptStore.getState().settlePromptActivity("owner", null, true);
+		useTranscriptStore.getState().settlePromptActivity("owner", "wrong", true);
+		expect(state()).toBe(before);
+		expect(state()?.agentActive).toBe(true);
+		expect(state()?.optimisticActivityToken).toBe(token);
+	});
+
+	it.each(["reset", "history"] as const)("%s creates a fresh token that cannot be reused", (method) => {
+		const store = useTranscriptStore.getState();
+		const oldToken = store.beginPromptActivity("owner");
+		if (method === "reset") store.resetSession("owner");
+		else store.loadHistory("owner", []);
+		const newToken = useTranscriptStore.getState().beginPromptActivity("owner");
+		expect(newToken).toBeTruthy();
+		expect(newToken).not.toBe(oldToken);
+		useTranscriptStore.getState().settlePromptActivity("owner", oldToken, true);
+		expect(state()?.optimisticActivityToken).toBe(newToken);
+		expect(state()?.agentActive).toBe(true);
+	});
+});
+
 describe("transcript reducer", () => {
+	it("prompt activity token 仅能结算自身且被生命周期事件作废", () => {
+		const store = useTranscriptStore.getState();
+		store.resetSession("activity-token");
+		const first = store.beginPromptActivity("activity-token");
+		expect(first).toBeTruthy();
+		expect(useTranscriptStore.getState().beginPromptActivity("activity-token")).toBeNull();
+		store.settlePromptActivity("activity-token", "wrong-token", true);
+		expect(useTranscriptStore.getState().bySession["activity-token"]?.agentActive).toBe(true);
+		store.settlePromptActivity("activity-token", first, true);
+		expect(useTranscriptStore.getState().bySession["activity-token"]?.agentActive).toBe(false);
+
+		const second = useTranscriptStore.getState().beginPromptActivity("activity-token");
+		store.applyEvent("activity-token", ev("agent_start"));
+		store.settlePromptActivity("activity-token", second, true);
+		expect(useTranscriptStore.getState().bySession["activity-token"]?.agentActive).toBe(true);
+		store.applyEvent("activity-token", ev("agent_end", { willRetry: true, messages: [] }));
+		store.settlePromptActivity("activity-token", second, true);
+		expect(useTranscriptStore.getState().bySession["activity-token"]?.agentActive).toBe(true);
+		store.resetSession("activity-token");
+	});
+
+	it("reset 后迟到 token 无权修改重建的 session entry", () => {
+		const store = useTranscriptStore.getState();
+		store.resetSession("activity-reset");
+		const token = store.beginPromptActivity("activity-reset");
+		store.resetSession("activity-reset");
+		store.applyEvent("activity-reset", ev("agent_end", { willRetry: false, messages: [] }));
+		store.settlePromptActivity("activity-reset", token, true);
+		expect(useTranscriptStore.getState().bySession["activity-reset"]?.agentActive).toBe(false);
+		store.resetSession("activity-reset");
+	});
 	it("subagent 互斥事件生成系统消息（结构化 + 同扩展去重）", () => {
 		let state = reduceEvent(emptyTranscript(), {
 			type: "subagent_mutex",

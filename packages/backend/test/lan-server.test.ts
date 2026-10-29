@@ -36,7 +36,7 @@ function backend(): LanObserverBackend {
 		getPendingPermissionRequests: () => [],
 		peekSessionMessages: async () => null,
 		checkSessionWritable: () => "ok",
-		prompt: async () => {},
+		prompt: async () => ({ disposition: "started" }),
 		abort: async () => {},
 		respondPermission: () => {},
 		onEvent: () => () => {},
@@ -411,6 +411,7 @@ describe("LanObserverServer", () => {
 			...backend(),
 			prompt: async (...args) => {
 				calls.push({ method: "prompt", args });
+				return { disposition: "handled" };
 			},
 			abort: async (...args) => {
 				calls.push({ method: "abort", args });
@@ -478,7 +479,9 @@ describe("LanObserverServer", () => {
 		servers.splice(servers.indexOf(serverRO), 1);
 
 		// 200：prompt / abort 调进 backend
-		expect((await post(`${base}/api/sessions/session-1/prompt`, { text: " 你好 " }, auth)).status).toBe(200);
+		const promptResponse = await post(`${base}/api/sessions/session-1/prompt`, { text: " 你好 " }, auth);
+		expect(promptResponse.status).toBe(200);
+		expect(JSON.parse(promptResponse.text)).toEqual({ ok: true });
 		expect((await post(`${base}/api/sessions/session-1/abort`, {}, auth)).status).toBe(200);
 		// respond：allowOnce → allow 映射；allowAlways 硬拒 403；未知 requestId 404
 		expect((await post(`${base}/api/permissions/req-1/respond`, { answer: "allowOnce" }, auth)).status).toBe(

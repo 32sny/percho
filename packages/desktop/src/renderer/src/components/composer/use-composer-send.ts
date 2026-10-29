@@ -162,8 +162,8 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		options.setImages([]);
 		options.setAttachments([]);
 		options.setQuotes([]);
-		// 乐观置工作中：agent_start 事件到达前立即显示，失败后回滚
-		useTranscriptStore.getState().markAgentActive(sessionId, true);
+		// 仅在 store 确认为 idle 时取得本次乐观忙碌状态的所有权。
+		const activityToken = useTranscriptStore.getState().beginPromptActivity(sessionId);
 		// 乐观回显用户气泡：带图发送时 SDK 在构造用户消息**之前**先做图片归一化
 		// （Photon 缩放，全屏截图 ~1s/张，见 docs/PITFALLS.md「附件图片延迟」），
 		// 那段时间气泡只能空着等——先本地插一条，权威 message_start 到达时原位认领。
@@ -176,14 +176,18 @@ export function useComposerSend(options: UseComposerSendOptions) {
 						.getState()
 						.appendOptimisticUser(sessionId, { text: content, images: sentImages });
 		try {
-			await getPi().prompt({
+			const ack = await getPi().prompt({
 				sessionId,
 				text: content,
 				images: sentImages.length > 0 ? sentImages : undefined,
 			});
+			const handled = ack?.disposition === "handled";
+			useTranscriptStore.getState().settlePromptActivity(sessionId, activityToken, handled);
+			if (handled && optimisticId)
+				useTranscriptStore.getState().removeOptimisticUser(sessionId, optimisticId);
 		} catch (err) {
 			if (optimisticId) useTranscriptStore.getState().removeOptimisticUser(sessionId, optimisticId);
-			useTranscriptStore.getState().markAgentActive(sessionId, wasActive);
+			useTranscriptStore.getState().settlePromptActivity(sessionId, activityToken, true);
 			setError(err instanceof Error ? err.message : String(err));
 			options.setImages(sentImages);
 			options.setAttachments(sentAttachments);

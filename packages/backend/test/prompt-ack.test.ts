@@ -1,6 +1,8 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import { PermissionGate } from "../src/permissions/gate";
 import { PiBackend } from "../src/pi-backend";
+import { ExtensionDialogHost } from "../src/session/extension-dialog-host";
 import type { SessionRegistry } from "../src/session/registry";
 
 interface PromptOptions {
@@ -16,6 +18,9 @@ function makeBackend(sessionId: string, prompt: PromptFn): PiBackend {
 		session: { sessionId, prompt } as unknown as AgentSession,
 		unsubscribe: () => {},
 		cwd: "/tmp",
+		gate: new PermissionGate(() => {}),
+		dialogs: new ExtensionDialogHost({ onRequest: () => {}, onResolved: () => {} }),
+		modeRef: { current: "default" },
 	});
 	return backend;
 }
@@ -33,14 +38,14 @@ describe("PiBackend.prompt 受理回执", () => {
 				return runGate; // run 永不结束也不影响返回
 			});
 
-			await expect(backend.prompt("s1", "hi")).resolves.toBeUndefined();
+			await expect(backend.prompt("s1", "hi")).resolves.toEqual({ disposition });
 			releaseRun();
 		},
 	);
 
-	it("无 preflight 直接返回（SDK if (!messages) return 保险路径）也放行", async () => {
+	it("无 preflight 正常返回时标记 unknown", async () => {
 		const backend = makeBackend("s1", async () => {});
-		await expect(backend.prompt("s1", "hi")).resolves.toBeUndefined();
+		await expect(backend.prompt("s1", "hi")).resolves.toEqual({ disposition: "unknown" });
 	});
 
 	it("preflight 前抛错：reject 传真实错误（1.0.4 被拒不再回调 preflight）", async () => {
@@ -57,7 +62,7 @@ describe("PiBackend.prompt 受理回执", () => {
 			return Promise.reject(new Error("run failed"));
 		});
 
-		await expect(backend.prompt("s1", "hi")).resolves.toBeUndefined();
+		await expect(backend.prompt("s1", "hi")).resolves.toEqual({ disposition: "started" });
 	});
 
 	it("无会话直接抛错", async () => {
