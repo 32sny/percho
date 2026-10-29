@@ -2,18 +2,22 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, get, request as requestRaw } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LanConfigService } from "../src/lan/config";
 import type { LanObserverBackend } from "../src/lan/server";
-import { LanObserverServer } from "../src/lan/server";
+import { LanObserverServer, listenWithRetry } from "../src/lan/server";
 
 const token = Buffer.from("0123456789ab").toString("base64url");
 const servers: LanObserverServer[] = [];
 const dirs: string[] = [];
 
 afterEach(async () => {
-	await Promise.all(servers.splice(0).map((server) => server.stop()));
-	await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+	try {
+		await Promise.all(servers.splice(0).map((server) => server.stop()));
+	} finally {
+		vi.restoreAllMocks();
+		await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+	}
 });
 
 function backend(): LanObserverBackend {
@@ -53,7 +57,13 @@ async function start(
 	const dir = await mkdtemp(join(tmpdir(), "percho-lan-"));
 	dirs.push(dir);
 	const config = new LanConfigService(join(dir, "lan-observer.json"));
-	await config.save({ enabled: true, port, token, remoteControl: options.remoteControl ?? false });
+	const savedConfig = await config.save({
+		enabled: true,
+		port,
+		token,
+		remoteControl: options.remoteControl ?? false,
+	});
+	if (port === 0) vi.spyOn(config, "load").mockResolvedValue({ ...savedConfig, port: 0 });
 	const server = new LanObserverServer(observer, config, {
 		pageHtml: "<h1>observer</h1>",
 		auditPath: options.auditPath,
@@ -212,19 +222,104 @@ describe("LanObserverServer", () => {
 		expect(pending.size).toBe(0);
 	});
 
-	it("retries an occupied expected port and releases its actual port on stop", async () => {
-		const blocker = createServer();
-		await new Promise<void>((resolve) => blocker.listen(0, "0.0.0.0", resolve));
-		const port = (blocker.address() as { port: number }).port;
-		const server = await start(port);
-		expect(server.status().port).toBe(port + 1);
-		await new Promise<void>((resolve) => blocker.close(() => resolve()));
-		const actualPort = server.status().port as number;
+	it("listenWithRetry increments ports after EADDRINUSE and returns the listening port", async () => {
+		const server = createServer();
+		const initialListeningListeners = server.listenerCount("listening");
+		const attemptedPorts: number[] = [];
+		const listenSpy = vi.spyOn(server, "listen").mockImplementation((...args) => {
+			attemptedPorts.push(args[0] as number);
+			queueMicrotask(() => {
+				if (attemptedPorts.length < 3) {
+					server.emit("error", Object.assign(new Error("port occupied"), { code: "EADDRINUSE" }));
+				} else {
+					server.emit("listening");
+				}
+			});
+			return server;
+		});
+		const addressSpy = vi.spyOn(server, "address").mockImplementation(() => ({
+			address: "0.0.0.0",
+			family: "IPv4",
+			port: 3046,
+		}));
+		try {
+			await expect(listenWithRetry(server, 3044)).resolves.toBe(3046);
+			expect(attemptedPorts).toEqual([3044, 3045, 3046]);
+			expect(listenSpy).toHaveBeenCalledTimes(3);
+			expect(addressSpy).toHaveBeenCalledOnce();
+			expect(server.listenerCount("error")).toBe(0);
+			expect(server.listenerCount("listening")).toBe(initialListeningListeners);
+		} finally {
+			listenSpy.mockRestore();
+			addressSpy.mockRestore();
+		}
+	});
+
+	it("listenWithRetry propagates non-EADDRINUSE errors immediately", async () => {
+		const server = createServer();
+		const initialListeningListeners = server.listenerCount("listening");
+		const listenSpy = vi.spyOn(server, "listen").mockImplementation(() => {
+			queueMicrotask(() =>
+				server.emit("error", Object.assign(new Error("permission denied"), { code: "EACCES" })),
+			);
+			return server;
+		});
+		const addressSpy = vi.spyOn(server, "address").mockImplementation(() => null);
+		try {
+			await expect(listenWithRetry(server, 3044)).rejects.toMatchObject({ code: "EACCES" });
+			expect(listenSpy).toHaveBeenCalledOnce();
+			expect(addressSpy).not.toHaveBeenCalled();
+			expect(server.listenerCount("error")).toBe(0);
+			expect(server.listenerCount("listening")).toBe(initialListeningListeners);
+		} finally {
+			listenSpy.mockRestore();
+			addressSpy.mockRestore();
+		}
+	});
+
+	it("listenWithRetry stops after 20 EADDRINUSE attempts and cleans up listeners", async () => {
+		const server = createServer();
+		const initialListeningListeners = server.listenerCount("listening");
+		const attemptedPorts: number[] = [];
+		const listenSpy = vi.spyOn(server, "listen").mockImplementation((...args) => {
+			attemptedPorts.push(args[0] as number);
+			queueMicrotask(() =>
+				server.emit("error", Object.assign(new Error("port occupied"), { code: "EADDRINUSE" })),
+			);
+			return server;
+		});
+		const addressSpy = vi.spyOn(server, "address").mockImplementation(() => null);
+		try {
+			await expect(listenWithRetry(server, 3044)).rejects.toMatchObject({ code: "EADDRINUSE" });
+			expect(attemptedPorts).toEqual(Array.from({ length: 20 }, (_, index) => 3044 + index));
+			expect(listenSpy).toHaveBeenCalledTimes(20);
+			expect(addressSpy).not.toHaveBeenCalled();
+			expect(server.listenerCount("error")).toBe(0);
+			expect(server.listenerCount("listening")).toBe(initialListeningListeners);
+		} finally {
+			listenSpy.mockRestore();
+			addressSpy.mockRestore();
+		}
+	});
+
+	it("closes the real HTTP server and reports a closed status on stop", async () => {
+		const server = await start();
+		// SAFETY: this test-only cast inspects the private real HTTP server created by start().
+		const httpServer = (server as unknown as { server: ReturnType<typeof createServer> | null }).server;
+		expect(httpServer).not.toBeNull();
+		const actualPort = server.status().port;
+		expect(actualPort).toBeGreaterThan(0);
+		expect(httpServer?.listening).toBe(true);
+		expect(httpServer?.address()).toMatchObject({ port: actualPort });
+		let closeEvents = 0;
+		httpServer?.once("close", () => closeEvents++);
+
 		await server.stop();
-		servers.splice(servers.indexOf(server), 1);
-		const replacement = createServer();
-		await new Promise<void>((resolve) => replacement.listen(actualPort, "0.0.0.0", resolve));
-		await new Promise<void>((resolve) => replacement.close(() => resolve()));
+
+		expect(httpServer?.listening).toBe(false);
+		expect(httpServer?.address()).toBeNull();
+		expect(closeEvents).toBe(1);
+		expect(server.status()).toMatchObject({ enabled: false, port: null });
 	});
 
 	it("snapshot carries sanitized transcripts, remoteControl and snapshotSeq", async () => {

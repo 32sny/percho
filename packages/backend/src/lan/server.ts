@@ -682,7 +682,7 @@ function mergeDelta(target: SessionEvent, next: SessionEvent): void {
 	}
 }
 
-async function listenWithRetry(server: Server, initialPort: number): Promise<number> {
+export async function listenWithRetry(server: Server, initialPort: number): Promise<number> {
 	let port = initialPort;
 	for (let attempt = 0; attempt < 20; attempt++, port++) {
 		try {
