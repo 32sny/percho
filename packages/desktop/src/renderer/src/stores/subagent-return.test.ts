@@ -63,6 +63,22 @@ function openParentAsActive(): void {
 	useSessionsStore.setState({ sessions: [parent], activeSessionId: "parent", cwd: "/proj" });
 }
 
+describe("只读父目标选择器", () => {
+	it("按 child id 返回关系；关系保留在父卸载后，未知 child 为 undefined", () => {
+		useSubagentReturnStore.getState().remember("sub-1", {
+			parentSessionId: "parent",
+			parentFile: parent.sessionFile,
+		});
+		useSessionsStore.setState({ sessions: [parent], activeSessionId: "parent" });
+		useSessionsStore.setState({ sessions: [], activeSessionId: null });
+		expect(useSubagentReturnStore.getState().relations["sub-1"]).toEqual({
+			parentSessionId: "parent",
+			parentFile: parent.sessionFile,
+		});
+		expect(useSubagentReturnStore.getState().relations.unknown).toBeUndefined();
+	});
+});
+
 describe("打开子代理检视页：建立返回关系", () => {
 	it("点子代理卡进入子会话：记录父目标；父会话自身没有关系（箭头只在子页）", async () => {
 		openParentAsActive();
@@ -76,6 +92,25 @@ describe("打开子代理检视页：建立返回关系", () => {
 			"sub-1": { parentSessionId: "parent", parentFile: parent.sessionFile },
 		});
 		expect(relations().parent).toBeUndefined();
+	});
+
+	it("显式指定被悬停父，不依赖当前 active；空父和自引用不记关系", async () => {
+		useSessionsStore.setState({ sessions: [parent], activeSessionId: "other", cwd: "/proj" });
+		piMock.openSession.mockResolvedValue(child);
+		const result = await useSessionsStore
+			.getState()
+			.openSubagentSessionFrom({ sessionId: "parent", sessionFile: parent.sessionFile }, childFile);
+		expect(result.ok).toBe(true);
+		expect(relations()["sub-1"]).toEqual({ parentSessionId: "parent", parentFile: parent.sessionFile });
+
+		useSubagentReturnStore.setState({ relations: {} });
+		piMock.openSession.mockResolvedValueOnce(realMeta("child-empty", "/proj", "/tmp/child-empty.jsonl"));
+		await useSessionsStore.getState().openSubagentSessionFrom({ sessionId: "" }, "/tmp/child-empty.jsonl");
+		piMock.openSession.mockResolvedValueOnce(realMeta("sub-1", "/proj", childFile));
+		await useSessionsStore
+			.getState()
+			.openSubagentSessionFrom({ sessionId: "sub-1", sessionFile: childFile }, childFile);
+		expect(relations()).toEqual({});
 	});
 
 	it("直接从历史打开子文件（无已知父关系）：不显示箭头", async () => {
@@ -217,7 +252,29 @@ describe("返回父会话", () => {
 		expect(active()).toBe("sub-1"); // 留在子页，不做猜测性跳转
 	});
 
-	it("没有关系的会话：返回动作是 no-op", async () => {
+	it("没有内存关系时只按已验证 fallback 打开冷父；缺路径或身份/cwd 不符不跳转", async () => {
+		const fallback = {
+			parentSessionId: "parent",
+			parentFile: parent.sessionFile,
+			cwd: parent.cwd,
+			name: "已保存父标题",
+		};
+		useSessionsStore.setState({ sessions: [child], activeSessionId: "sub-1", cwd: child.cwd });
+		piMock.openSession.mockResolvedValue(parent);
+		expect(await useSessionsStore.getState().returnToParent("sub-1", fallback)).toBe(true);
+		expect(piMock.openSession).toHaveBeenCalledWith({ filePath: parent.sessionFile });
+		expect(active()).toBe("parent");
+
+		useSessionsStore.setState({ sessions: [child], activeSessionId: "sub-1", cwd: child.cwd });
+		piMock.openSession.mockResolvedValueOnce(realMeta("other-parent", "/wrong"));
+		expect(await useSessionsStore.getState().returnToParent("sub-1", fallback)).toBe(false);
+		expect(active()).toBe("sub-1");
+		expect(
+			await useSessionsStore.getState().returnToParent("sub-1", { ...fallback, parentFile: undefined }),
+		).toBe(false);
+	});
+
+	it("没有关系且没有 fallback：返回动作是 no-op", async () => {
 		openParentAsActive();
 		expect(await useSessionsStore.getState().returnToParent("parent")).toBe(false);
 		expect(active()).toBe("parent");

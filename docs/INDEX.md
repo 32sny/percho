@@ -25,7 +25,7 @@
 | 跨进程 API、事件和共享类型 | shared `ipc-channels.ts`、`ipc.ts`；desktop `main/ipc/`、`preload/index.ts` |
 | 会话创建、打开、关闭、分叉、撤回、重试 | backend `pi-backend.ts` → `session/`；renderer `stores/sessions.ts` |
 | 导航、并发装载、历史就绪 | renderer `stores/session-navigation.ts`、`session-loading.ts`、`session-history.ts` |
-| 会话目录、项目、左栏分组 | renderer `stores/projects.ts`、`lib/sidebar-groups.ts`、`components/sidebar/` |
+| 会话目录、项目、左栏分组、悬停详情 | renderer `stores/projects.ts`、`lib/sidebar-groups.ts`、`components/sidebar/`；悬停卡 `components/sidebar/SessionHoverCard.tsx`（方案 `docs/PLAN-session-hover-details.md`、`docs/PLAN-session-hover-subagent-relations.md`） |
 | 会话跨项目移动、会话拖入输入栏胶囊 | backend `session/move-session.ts`、`session/transcript.ts`；renderer `components/session/MoveSessionDialog.tsx`；方案 `docs/PLAN-session-move-project.md` |
 | 顶栏胶囊、左侧轨道、工作区恢复 | renderer `stores/session-workspace*.ts`、`components/session/`；移出动作 `lib/workspace-actions.ts` |
 | 会话自动卸载、频道驻留 | renderer `lib/session-gc*.ts`、`lib/use-session-gc.ts`；backend `channel-subscriptions.ts` |

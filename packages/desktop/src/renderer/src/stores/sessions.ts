@@ -29,7 +29,7 @@ export {
 } from "./session-navigation";
 
 import { useSessionWorkspaceStore } from "./session-workspace";
-import { useSubagentReturnStore } from "./subagent-return";
+import { type SubagentReturnTarget, useSubagentReturnStore } from "./subagent-return";
 import { pushToast } from "./toasts";
 import { useTranscriptStore } from "./transcript";
 import { useUiPreferencesStore } from "./ui-preferences";
@@ -353,8 +353,15 @@ interface SessionsStore {
 	openFromHistory: (filePath: string) => Promise<OpenFromHistoryResult>;
 	/** 子代理检视打开（spec D4）：捕获父目标 + 只在最新导航意图下建立返回关系 */
 	openSubagentSession: (filePath: string) => Promise<OpenFromHistoryResult>;
+	openSubagentSessionFrom: (
+		parent: { sessionId: string; sessionFile?: string },
+		filePath: string,
+	) => Promise<OpenFromHistoryResult>;
 	/** 从子代理检视页回到父会话（父仍加载则切，已卸载则按文件重开） */
-	returnToParent: (childSessionId: string) => Promise<boolean>;
+	returnToParent: (
+		childSessionId: string,
+		fallbackTarget?: SubagentReturnTarget & { cwd: string },
+	) => Promise<boolean>;
 	/** 在指定 assistant 消息处分叉：新会话以新 tab 打开并切换过去（原会话保留原样）；成功返回新 sessionId */
 	forkSession: (ref: { entryId?: string; text?: string }) => Promise<string | undefined>;
 	/** 撤回一条用户消息：会话回退到该消息之前，文本/图片放回输入框草稿继续编辑 */
@@ -612,18 +619,28 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 	 *   同一个子会话被再点一次（比如从另一个父会话）也是更新的意图，迟到的旧提交不得覆盖它；
 	 * - 失败/迟到都不挂假记录（漏箭头只是少一个入口，不会把用户带到错的父会话）。
 	 */
-	openSubagentSession: async (filePath) => {
+	openSubagentSession: (filePath) => {
 		const { activeSessionId, sessions } = get();
-		const parent = activeSessionId && {
-			parentSessionId: activeSessionId,
-			parentFile: sessions.find((s) => s.sessionId === activeSessionId)?.sessionFile,
-		};
+		const parent = activeSessionId
+			? {
+					sessionId: activeSessionId,
+					sessionFile: sessions.find((s) => s.sessionId === activeSessionId)?.sessionFile,
+				}
+			: { sessionId: "" };
+		return get().openSubagentSessionFrom(parent, filePath);
+	},
+
+	openSubagentSessionFrom: async (parentTarget, filePath) => {
+		const parent = { sessionId: parentTarget.sessionId, sessionFile: parentTarget.sessionFile };
 		const result = await get().openFromHistory(filePath);
-		if (!parent) return result;
-		if (!result.ok || !result.latest) return result;
+		if (!parent.sessionId || !result.ok || !result.latest) return result;
+		if (parent.sessionId === result.meta.sessionId) return result;
 		// 微任务窗口守卫：从 openFromHistory 返回到这里之间，用户可能又导航（甚至再开同一个子会话）
 		if (!isLatestNavigation(result.token)) return result;
-		useSubagentReturnStore.getState().remember(result.meta.sessionId, parent);
+		useSubagentReturnStore.getState().remember(result.meta.sessionId, {
+			parentSessionId: parent.sessionId,
+			parentFile: parent.sessionFile,
+		});
 		return result;
 	},
 
@@ -631,8 +648,9 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 	 * 从子代理检视页回到父会话（spec D4）：父仍加载 → `switchSession`（不新增工作区成员、不重置实时 transcript）；
 	 * 父已被 GC 卸载 → 按 `parentFile` 重开（失败路径已 toast，留在子页不做猜测性跳转）。
 	 */
-	returnToParent: async (childSessionId) => {
-		const target = useSubagentReturnStore.getState().relations[childSessionId];
+	returnToParent: async (childSessionId, fallbackTarget) => {
+		const memoryTarget = useSubagentReturnStore.getState().relations[childSessionId];
+		const target = memoryTarget ?? (fallbackTarget?.cwd ? fallbackTarget : undefined);
 		if (!target) return false;
 		if (get().sessions.some((s) => s.sessionId === target.parentSessionId)) {
 			get().switchSession(target.parentSessionId);
@@ -642,8 +660,19 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 			pushToast("warning", "toast.subagentReturnUnavailable");
 			return false;
 		}
-		const result = await get().openFromHistory(target.parentFile);
-		return result.ok;
+		if (memoryTarget || !fallbackTarget?.cwd) {
+			const result = await get().openFromHistory(target.parentFile);
+			return result.ok;
+		}
+		const token = claimActivation();
+		noteUserIntent();
+		const meta = await ensureOpenSession(target.parentFile);
+		if (!meta || meta.sessionId !== fallbackTarget.parentSessionId || meta.cwd !== fallbackTarget.cwd)
+			return false;
+		if (!isLatestActivation(token)) return false;
+		set({ activeSessionId: meta.sessionId });
+		rememberCwd(meta.cwd);
+		return true;
 	},
 
 	forkSession: async (ref) => {

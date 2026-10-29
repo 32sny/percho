@@ -1,4 +1,4 @@
-import type { SessionMeta } from "@percho/shared";
+import { collectSessionHoverLiveRuns, type SessionMeta } from "@percho/shared";
 import {
 	createContext,
 	type KeyboardEvent as ReactKeyboardEvent,
@@ -14,7 +14,7 @@ import {
 } from "react";
 import { useT } from "../../i18n";
 import { useProjectsStore } from "../../stores/projects";
-import { sessionHoverPreview } from "../../stores/session-hover-preview";
+import { type SessionHoverPreviewTarget, sessionHoverPreview } from "../../stores/session-hover-preview";
 import { useSessionsStore } from "../../stores/sessions";
 import { useSettingsStore } from "../../stores/settings";
 import { useTranscriptStore } from "../../stores/transcript";
@@ -261,6 +261,34 @@ export function SessionHoverProvider({
 	const session = opened
 		? sessions.find((item) => item.sessionId === opened.sessionId && item.cwd === opened.cwd)
 		: undefined;
+	const messages = useTranscriptStore((state) =>
+		opened ? state.bySession[opened.sessionId]?.messages : undefined,
+	);
+	const streamingRuns = useTranscriptStore((state) =>
+		opened ? state.bySession[opened.sessionId]?.streaming?.subagentRuns : undefined,
+	);
+	const liveRuns = useMemo(
+		() =>
+			collectSessionHoverLiveRuns(
+				messages || streamingRuns
+					? { messages: messages ?? [], streaming: streamingRuns ? { subagentRuns: streamingRuns } : null }
+					: undefined,
+			),
+		[messages, streamingRuns],
+	);
+	const previewTarget = useMemo<SessionHoverPreviewTarget | null>(
+		() =>
+			opened && session && !disabled && !settingsOpen
+				? {
+						sessionId: session.sessionId,
+						cwd: session.cwd,
+						modifiedAt: session.modifiedAt,
+						messageCount: session.messageCount,
+						...(liveRuns.length ? { liveRuns } : {}),
+					}
+				: null,
+		[opened, session, disabled, settingsOpen, liveRuns],
+	);
 
 	useLayoutEffect(() => {
 		controller.setEnabled(!disabled && !settingsOpen);
@@ -268,23 +296,6 @@ export function SessionHoverProvider({
 	useLayoutEffect(() => {
 		if (opened && (!session || !isVisible(opened.element))) controller.dismiss();
 	}, [controller, opened, session]);
-
-	const { sessionId, cwd, modifiedAt, messageCount } = session ?? {};
-	useEffect(() => {
-		// 只为实际渲染的卡片请求；依赖打开代次 + 键字段，不依赖 title/status 的对象引用。
-		// 即便同一事件中「关 → 重开同一行」被 React 合并，也必须重新绑定目标。
-		sessionHoverPreview.setTarget(
-			opened &&
-				!disabled &&
-				!settingsOpen &&
-				sessionId !== undefined &&
-				cwd !== undefined &&
-				messageCount !== undefined
-				? { sessionId, cwd, modifiedAt, messageCount }
-				: null,
-		);
-		return () => sessionHoverPreview.setTarget(null);
-	}, [opened, disabled, settingsOpen, sessionId, cwd, modifiedAt, messageCount]);
 
 	useEffect(() => {
 		const dismiss = () => controller.dismiss();
@@ -459,6 +470,8 @@ export function SessionHoverProvider({
 					cardRef={cardRef}
 					anchor={opened.element}
 					session={session}
+					previewTarget={previewTarget ?? undefined}
+					onDismiss={controller.dismiss}
 					onClose={closeCard}
 					onPointerEnter={controller.enterCard}
 					onPointerLeave={controller.leaveCard}

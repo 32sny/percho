@@ -3,14 +3,21 @@ import { emptyTranscript } from "@percho/shared";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionHoverPreviewSnapshot } from "../../stores/session-hover-preview";
 import type { SessionEntry } from "../../stores/transcript";
 
 const harness = vi.hoisted(() => ({
 	language: "zh",
 	sessions: [] as SessionMeta[],
 	entries: {} as Record<string, SessionEntry>,
-	snapshot: null as SessionHoverPreviewSnapshot | null,
+	pages: {
+		preview: null as SessionHoverPreviewResult | null,
+		loadingMore: false,
+		moreError: false,
+		expanded: false,
+		loadMore: vi.fn(),
+		collapse: vi.fn(),
+	},
+	target: undefined as unknown,
 	hover: {
 		opened: null,
 		cardId: "hover-card",
@@ -42,19 +49,37 @@ vi.mock("../../i18n", async () => {
 });
 vi.mock("../../stores/sessions", () => ({
 	useSessionsStore: (
-		select: (state: { sessions: SessionMeta[]; lastUsedModel: { modelId: string } }) => unknown,
-	) => select({ sessions: harness.sessions, lastUsedModel: { modelId: "DO-NOT-BORROW-CURRENT-MODEL" } }),
+		select: (state: {
+			sessions: SessionMeta[];
+			lastUsedModel: { modelId: string };
+			openSubagentSessionFrom: unknown;
+			returnToParent: unknown;
+		}) => unknown,
+	) =>
+		select({
+			sessions: harness.sessions,
+			lastUsedModel: { modelId: "DO-NOT-BORROW-CURRENT-MODEL" },
+			openSubagentSessionFrom: vi.fn(),
+			returnToParent: vi.fn(),
+		}),
+}));
+vi.mock("../../stores/projects", () => ({
+	useProjectsStore: (select: (state: { allSessions: SessionMeta[] }) => unknown) =>
+		select({ allSessions: [] }),
+}));
+vi.mock("../../stores/subagent-return", () => ({ useParentTarget: () => undefined }));
+vi.mock("../../lib/session-page-slide", () => ({
+	withSessionSlide: async (_direction: string, fn: () => unknown) => fn(),
 }));
 vi.mock("../../stores/transcript", () => ({
 	useTranscriptStore: (select: (state: { bySession: Record<string, SessionEntry> }) => unknown) =>
 		select({ bySession: harness.entries }),
 }));
-vi.mock("../../stores/session-hover-preview", async (original) => ({
-	...(await original<typeof import("../../stores/session-hover-preview")>()),
-	sessionHoverPreview: {
-		getSnapshot: () => harness.snapshot,
-		subscribe: () => () => {},
-		setTarget: vi.fn(),
+// 分页 hook 是请求所有者；Card 只消费其返回。mock 掉 hook，分页行为在 relations 测试覆盖。
+vi.mock("./useSessionHoverPages", () => ({
+	useSessionHoverPages: (target: unknown) => {
+		harness.target = target;
+		return harness.pages;
 	},
 }));
 // SSR 检查文本/语义结构，Portal 展平仅用于序列化，不声称覆盖真实 DOM 事件传播或视觉。
@@ -64,7 +89,6 @@ vi.mock("react-dom", async (original) => ({
 }));
 vi.mock("./SessionHoverProvider", () => ({ useSessionHover: () => harness.hover }));
 
-import { sessionHoverPreviewKey } from "../../stores/session-hover-preview";
 import { SessionHoverCard } from "./SessionHoverCard";
 import { SessionRow } from "./SessionRow";
 
@@ -91,7 +115,7 @@ const entry = (patch: Partial<SessionEntry> = {}): SessionEntry => ({
 	...patch,
 });
 function render(session = meta(), result: SessionHoverPreviewResult | null = null) {
-	harness.snapshot = { key: sessionHoverPreviewKey(session), result };
+	harness.pages.preview = result;
 	return renderToStaticMarkup(
 		React.createElement(SessionHoverCard, {
 			id: "hover-card",
@@ -99,6 +123,7 @@ function render(session = meta(), result: SessionHoverPreviewResult | null = nul
 			anchor: {} as HTMLButtonElement,
 			session,
 			onClose: vi.fn(),
+			onDismiss: vi.fn(),
 			onPointerEnter: vi.fn(),
 			onPointerLeave: vi.fn(),
 			onFocus: vi.fn(),
@@ -116,6 +141,11 @@ beforeEach(() => {
 	harness.sessions = [meta()];
 	harness.entries = { A: entry() };
 	harness.hover.focusCard.mockReturnValue(false);
+	harness.pages.preview = null;
+	harness.pages.loadingMore = false;
+	harness.pages.moreError = false;
+	harness.pages.expanded = false;
+	harness.target = undefined;
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -198,7 +228,8 @@ describe("悬停卡信息与可访问结构（SSR，非视觉验收）", () => {
 
 	it("缺实时数据或不在内存，即使历史 active 为 true 也不推断结局", () => {
 		harness.entries = {};
-		expect(render()).toContain("未加载 / 无实时状态");
+		expect(render()).toContain("历史会话");
+		expect(render()).not.toContain("未加载");
 		harness.entries.A = entry({ agentActive: true });
 		harness.sessions = [];
 		expect(render()).toContain('data-session-hover-status="unloaded"');

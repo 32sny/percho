@@ -1,7 +1,14 @@
 import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import type { PiBackend } from "@percho/backend";
-import { CHANNEL_TABLE, IpcChannels, type PiApi, type SessionHoverPreviewResult } from "@percho/shared";
+import {
+	CHANNEL_TABLE,
+	IpcChannels,
+	type PiApi,
+	type SessionHoverLiveRun,
+	type SessionHoverPreviewRequest,
+	type SessionHoverPreviewResult,
+} from "@percho/shared";
 import { buildSync } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
 
@@ -56,9 +63,19 @@ describe("session:hoverPreview IPC 和真实 preload 桥接", () => {
 			},
 		});
 		if (!api) throw new Error("preload 未暴露 API");
-		const request = { sessionId: "target", cwd: "/project" };
+		const request: SessionHoverPreviewRequest = {
+			sessionId: "target",
+			cwd: "/project",
+			liveRuns: [
+				{ sessionFile: "/child.jsonl", agent: "scout", status: "running", source: "streaming" },
+			] satisfies SessionHoverLiveRun[],
+		};
 		expect(await api.getSessionHoverPreview(request)).toBe(result);
 		expect(invoke).toHaveBeenCalledWith("session:hoverPreview", request);
-		expect(getSessionHoverPreview).toHaveBeenCalledExactlyOnceWith("target", "/project");
+		expect(getSessionHoverPreview).toHaveBeenCalledExactlyOnceWith("target", "/project", request.liveRuns);
+		await handler({}, { sessionId: "target", cwd: "/project" });
+		expect(getSessionHoverPreview).toHaveBeenLastCalledWith("target", "/project");
+		await handler({}, { sessionId: "target", cwd: "/project", childrenOffset: 6 });
+		expect(getSessionHoverPreview).toHaveBeenLastCalledWith("target", "/project", undefined, 6);
 	});
 });

@@ -84,6 +84,29 @@ afterEach(() => {
 });
 
 describe("PiBackend.getSessionHoverPreview 只读窄预览", () => {
+	it("未注册会话忽略实时候选，liveRuns 独立超 8MiB 明确限额", async () => {
+		const file = join(dir, "candidate_12345678.jsonl");
+		writeFileSync(file, "{}");
+		find.mockReturnValue(undefined);
+		expect(
+			await backend.getSessionHoverPreview(ID, CWD, [
+				{ sessionFile: file, agent: "a", status: "running", source: "streaming" },
+			]),
+		).toEqual(unavailable("not_found"));
+		loaded([user("u", null, "safe")], "u");
+		expect(
+			await backend.getSessionHoverPreview(ID, CWD, [
+				{
+					sessionFile: file,
+					agent: "a",
+					task: "x".repeat(MAX_HISTORY + 1),
+					status: "running",
+					source: "streaming",
+				},
+			]),
+		).toEqual(unavailable("limit_exceeded"));
+	});
+
 	it("旧名称不改，文件内容和 mtime 不变，不 open/create/prompt/全量查找", async () => {
 		const file = history([
 			user("u", null, "旧名称之外的完整首条提问\n第二行"),

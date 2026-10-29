@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
@@ -12,10 +12,13 @@ import {
 import { isThinkingLevel, type ThinkingLevel } from "@percho/shared";
 import { makePermissionGateExtension } from "../../permissions/extension";
 import type { PermissionGate, PermissionRequestMeta } from "../../permissions/gate";
+import { subagentSessionsRoot } from "../../session/subagent-paths";
 import type { SessionTraces } from "../../session/traces";
 import { makeUiContext } from "../../session/ui-context";
 import { makeWebFetchTool } from "../webfetch";
 import type { SubagentDefinition } from "./agents";
+
+export { isSubagentSessionPath, subagentSessionsRoot } from "../../session/subagent-paths";
 
 export interface SubagentUsage {
 	input: number;
@@ -70,18 +73,6 @@ const EMPTY_USAGE: SubagentUsage = {
 	cost: 0,
 	totalTokens: { tokens: 0 },
 };
-
-/** 子会话统一根目录（与主历史列表物理隔离；openSession 据此判定只读） */
-export function subagentSessionsRoot(agentDir: string = getAgentDir()): string {
-	return join(agentDir, "sessions-subagents");
-}
-
-/** filePath 是否落在子会话目录下（规范化后做前缀判定，防 `..` 绕判） */
-export function isSubagentSessionPath(filePath: string, agentDir?: string): boolean {
-	const root = resolve(subagentSessionsRoot(agentDir));
-	const normalized = resolve(filePath);
-	return normalized === root || normalized.startsWith(root + sep);
-}
 
 function projectSlug(cwd: string): string {
 	const slug = cwd.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");

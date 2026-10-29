@@ -42,6 +42,24 @@ afterEach(() => {
 });
 
 describe("悬停预览键与 single-flight", () => {
+	it("liveRuns 路径与状态进入 key；空与 undefined 等价", () => {
+		const base = target("A");
+		const run = {
+			sessionFile: "C:/project/sessions-subagents/a.jsonl",
+			agent: "Explore",
+			status: "running" as const,
+			source: "streaming" as const,
+		};
+		expect(sessionHoverPreviewKey({ ...base, liveRuns: [] })).toBe(sessionHoverPreviewKey(base));
+		expect(sessionHoverPreviewKey({ ...base, liveRuns: [run] })).not.toBe(sessionHoverPreviewKey(base));
+		expect(
+			sessionHoverPreviewKey({ ...base, liveRuns: [{ ...run, sessionFile: "C:/project/other.jsonl" }] }),
+		).not.toBe(sessionHoverPreviewKey({ ...base, liveRuns: [run] }));
+		expect(sessionHoverPreviewKey({ ...base, liveRuns: [{ ...run, status: "done" }] })).not.toBe(
+			sessionHoverPreviewKey({ ...base, liveRuns: [run] }),
+		);
+	});
+
 	it("键包含 id、cwd、modifiedAt、messageCount，缺失值不与 0 混用", () => {
 		const base = target("A");
 		const key = sessionHoverPreviewKey(base);
@@ -60,6 +78,51 @@ describe("悬停预览键与 single-flight", () => {
 		expect(sessionHoverPreviewKey({ ...base, sessionId: "a|b", cwd: "c" })).not.toBe(
 			sessionHoverPreviewKey({ ...base, sessionId: "a", cwd: "b|c" }),
 		);
+	});
+
+	it("offset 0 与缺省 key 等价；后续页纳入 key 且只向 IPC 发送正 offset", async () => {
+		const fetch = loader();
+		const cache = createSessionHoverPreviewCache(fetch);
+		const first = target("A");
+		expect(sessionHoverPreviewKey({ ...first, childrenOffset: 0 })).toBe(sessionHoverPreviewKey(first));
+		expect(sessionHoverPreviewKey({ ...first, childrenOffset: 6 })).not.toBe(sessionHoverPreviewKey(first));
+		cache.setTarget({ ...first, childrenOffset: 6 });
+		await flush();
+		expect(fetch).toHaveBeenCalledExactlyOnceWith({ sessionId: "A", cwd: "C:/project", childrenOffset: 6 });
+	});
+
+	it("非空候选才传 IPC；空候选保持旧请求精确形状", async () => {
+		const fetch = loader();
+		const cache = createSessionHoverPreviewCache(fetch);
+		cache.setTarget(target("A", 100));
+		await flush();
+		cache.setTarget({
+			...target("B"),
+			liveRuns: [
+				{
+					sessionFile: "C:/project/sessions-subagents/b.jsonl",
+					agent: "Explore",
+					status: "running",
+					source: "streaming",
+				},
+			],
+		});
+		await flush();
+		expect(fetch.mock.calls.map(([request]) => request)).toEqual([
+			{ sessionId: "A", cwd: "C:/project" },
+			{
+				sessionId: "B",
+				cwd: "C:/project",
+				liveRuns: [
+					{
+						sessionFile: "C:/project/sessions-subagents/b.jsonl",
+						agent: "Explore",
+						status: "running",
+						source: "streaming",
+					},
+				],
+			},
+		]);
 	});
 
 	it("无打开目标时不查询；同键反复选择只发一个请求", async () => {

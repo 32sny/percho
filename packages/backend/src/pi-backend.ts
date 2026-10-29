@@ -50,6 +50,7 @@ import type {
 	QuotaInfo,
 	SessionCloseIntent,
 	SessionEvent,
+	SessionHoverLiveRun,
 	SessionHoverPreviewResult,
 	SessionMessage,
 	SessionMeta,
@@ -110,6 +111,12 @@ import { renameSessionFile } from "./session/rename";
 import { emitSessionShutdown } from "./session/shutdown";
 import { KeyedSingleFlight } from "./session/single-flight";
 import { StreamGuard } from "./session/stream-guard";
+import {
+	isOrdinarySessionPath,
+	isSubagentSessionPath,
+	validateOrdinarySessionFile,
+	validateSubagentSessionFile,
+} from "./session/subagent-paths";
 import { previewLoadedSession, previewSessionFile } from "./session/title-preview";
 import { TraceRecorder } from "./session/trace";
 import { SessionTraces } from "./session/traces";
@@ -135,7 +142,7 @@ import {
 } from "./tools/context-evaporation";
 import { collectMcpTools, makeMcpInventoryExtension } from "./tools/mcp-inventory";
 import { makeShowImageTool } from "./tools/show-image";
-import { discoverAgents, isSubagentSessionPath, makeSubagentTool } from "./tools/subagent";
+import { discoverAgents, makeSubagentTool } from "./tools/subagent";
 import { applySubagentMutex, resolveSubagentPreferBuiltin } from "./tools/subagent/mutex";
 import { makeTodoTool } from "./tools/todo";
 import { makeTodoReminderExtension } from "./tools/todo-reminder";
@@ -602,6 +609,12 @@ export class PiBackend {
 		// 读 header 拿到 sessionId（只读文件头，不构造会话）后先查 registry：
 		// 子代理产物目录下的会话文件 = 只读检视（spec §8.1：防能力静默漂移/递归绕过）。
 		// 其运行 trace 由 runner 管理，检视页不可写，故不另建 recorder（避免覆盖运行中的 recorder）。
+		if (isSubagentSessionPath(filePath) && !(await validateSubagentSessionFile(filePath))) {
+			throw new Error("Invalid subagent transcript path");
+		}
+		if (isOrdinarySessionPath(filePath) && !(await validateOrdinarySessionFile(filePath))) {
+			throw new Error("Invalid stored session path");
+		}
 		const sessionManager = SessionManager.open(filePath);
 		const existing = this.registry.get(sessionManager.getSessionId());
 		if (existing) {
@@ -1254,16 +1267,37 @@ export class PiBackend {
 	}
 
 	/** 悬停专用只读入口：精确定位，不加载/创建实例，不走全项目枚举兜底。 */
-	async getSessionHoverPreview(sessionId: string, cwd: string): Promise<SessionHoverPreviewResult> {
+	async getSessionHoverPreview(
+		sessionId: string,
+		cwd: string,
+		liveRuns?: SessionHoverLiveRun[],
+		childrenOffset = 0,
+	): Promise<SessionHoverPreviewResult> {
 		if (typeof sessionId !== "string" || !sessionId.trim() || typeof cwd !== "string" || !cwd.trim()) {
 			return { status: "unavailable", sessionId, reason: "identity_mismatch" };
 		}
+		if (!Number.isSafeInteger(childrenOffset) || childrenOffset < 0) {
+			return { status: "unavailable", sessionId, reason: "identity_mismatch" };
+		}
+		const getLoadedSession = (id: string) => {
+			const loaded = this.registry.get(id);
+			return loaded ? { cwd: loaded.cwd, manager: loaded.session.sessionManager } : undefined;
+		};
 		const entry = this.registry.get(sessionId);
-		if (entry) return previewLoadedSession(sessionId, cwd, entry.cwd, entry.session.sessionManager);
+		if (entry)
+			return previewLoadedSession(
+				sessionId,
+				cwd,
+				entry.cwd,
+				entry.session.sessionManager,
+				liveRuns,
+				childrenOffset,
+				getLoadedSession,
+			);
 		try {
 			const file = SessionManager.findById(cwd, sessionId);
 			if (!file) return { status: "unavailable", sessionId, reason: "not_found" };
-			return await previewSessionFile(sessionId, cwd, file);
+			return await previewSessionFile(sessionId, cwd, file, childrenOffset, getLoadedSession);
 		} catch {
 			return { status: "unavailable", sessionId, reason: "read_failed" };
 		}

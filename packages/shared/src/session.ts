@@ -148,9 +148,45 @@ export interface SessionMeta {
 	modifiedAt?: number;
 }
 
+export interface SessionHoverLiveRun {
+	sessionFile: string;
+	agent: string;
+	task?: string;
+	status: "running" | "done" | "error";
+	exitCode?: number;
+	source: "committed" | "streaming";
+}
+
+export interface SessionHoverRelationChild {
+	sessionId?: string;
+	sessionFile: string;
+	agent: string;
+	taskFirstLine?: string;
+	status: "running" | "done" | "error" | "unknown";
+	createdAt?: number;
+}
+
+export interface SessionHoverRelationParent {
+	sessionId: string;
+	sessionFile: string;
+	cwd: string;
+	name?: string;
+}
+
+export interface SessionHoverRelations {
+	children: SessionHoverRelationChild[];
+	hidden: number;
+	parent?: SessionHoverRelationParent;
+	offset?: number;
+	total?: number;
+	revision?: string;
+}
+
 export interface SessionHoverPreviewRequest {
 	sessionId: string;
 	cwd: string;
+	liveRuns?: SessionHoverLiveRun[];
+	childrenOffset?: number;
 }
 
 export type SessionHoverPreviewResult =
@@ -159,11 +195,13 @@ export type SessionHoverPreviewResult =
 			sessionId: string;
 			source: "current-branch-first-user-text";
 			text: string;
+			relations?: SessionHoverRelations;
 	  }
-	| { status: "empty"; sessionId: string }
+	| { status: "empty"; sessionId: string; relations?: SessionHoverRelations }
 	| {
 			status: "unavailable";
 			sessionId: string;
+			relations?: SessionHoverRelations;
 			reason:
 				| "not_found"
 				| "identity_mismatch"

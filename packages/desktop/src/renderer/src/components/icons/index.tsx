@@ -465,6 +465,26 @@ export function ArrowUpIcon({ size = 14, className }: IconProps) {
 	);
 }
 
+/** 打开/跳转指示（右上箭头，悬停卡子会话行与父会话入口） */
+export function ArrowUpRightIcon({ size = 14, className }: IconProps) {
+	return (
+		<svg
+			className={className}
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			{...strokeProps}
+			strokeWidth={1.8}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<path d="M7 17L17 7" />
+			<path d="M9 7h8v8" />
+		</svg>
+	);
+}
+
 /** 撤销/取回（回卷箭头，描边镂空） */
 export function UndoIcon({ size = 14, className }: IconProps) {
 	return (

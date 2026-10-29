@@ -1,10 +1,15 @@
-import type { SessionHoverPreviewRequest, SessionHoverPreviewResult, SessionMeta } from "@percho/shared";
+import type {
+	SessionHoverLiveRun,
+	SessionHoverPreviewRequest,
+	SessionHoverPreviewResult,
+	SessionMeta,
+} from "@percho/shared";
 import { getPi } from "../api";
 
 export type SessionHoverPreviewTarget = Pick<
 	SessionMeta,
 	"sessionId" | "cwd" | "modifiedAt" | "messageCount"
->;
+> & { liveRuns?: SessionHoverLiveRun[]; childrenOffset?: number };
 export interface SessionHoverPreviewSnapshot {
 	readonly key: string;
 	/** null = 当前目标等待/读取中；失败也使用 shared 的窄 DTO，不另造 IPC 结果类型。 */
@@ -20,7 +25,24 @@ const SUCCESS_TTL = 30_000;
 const FAILURE_TTL = 5_000;
 
 export function sessionHoverPreviewKey(meta: SessionHoverPreviewTarget): string {
-	return JSON.stringify([meta.sessionId, meta.cwd, meta.modifiedAt ?? null, meta.messageCount ?? null]);
+	const runs = meta.liveRuns?.length
+		? meta.liveRuns.map((run) => [
+				run.sessionFile,
+				run.agent,
+				run.task ?? null,
+				run.status,
+				run.exitCode ?? null,
+				run.source,
+			])
+		: null;
+	return JSON.stringify([
+		meta.sessionId,
+		meta.cwd,
+		meta.modifiedAt ?? null,
+		meta.messageCount ?? null,
+		runs,
+		meta.childrenOffset && meta.childrenOffset > 0 ? meta.childrenOffset : null,
+	]);
 }
 
 /**
@@ -93,7 +115,14 @@ export function createSessionHoverPreviewCache(fetchPreview: FetchPreview) {
 		void (async () => {
 			let result: SessionHoverPreviewResult;
 			try {
-				result = await fetchPreview({ sessionId: job.meta.sessionId, cwd: job.meta.cwd });
+				result = await fetchPreview({
+					sessionId: job.meta.sessionId,
+					cwd: job.meta.cwd,
+					...(job.meta.liveRuns?.length ? { liveRuns: job.meta.liveRuns } : {}),
+					...(job.meta.childrenOffset && job.meta.childrenOffset > 0
+						? { childrenOffset: job.meta.childrenOffset }
+						: {}),
+				});
 				if (result.sessionId !== job.meta.sessionId) {
 					result = { status: "unavailable", sessionId: job.meta.sessionId, reason: "identity_mismatch" };
 				} else if (result.status === "ok" && result.source !== "current-branch-first-user-text") {
@@ -123,13 +152,13 @@ export function createSessionHoverPreviewCache(fetchPreview: FetchPreview) {
 			reconcile();
 		},
 		/** 删除/移动/撤回/重载：保留在途占位直至真正结束，不能伪取消后突破一个在途的预算。 */
-		invalidate(sessionId?: string): void {
+		invalidate(sessionId?: string, refresh = true): void {
 			for (const [key, entry] of entries) {
 				if (sessionId === undefined || entry.sessionId === sessionId) entries.delete(key);
 			}
 			if (flight && (sessionId === undefined || flight.meta.sessionId === sessionId))
 				flight.invalidated = true;
-			reconcile();
+			if (refresh) reconcile();
 		},
 		/** 生命周期订阅只检查有缓存/请求的 id，最多 100 缓存 + 在途/当前目标，不遍历整份历史。 */
 		getSessionIds(): string[] {

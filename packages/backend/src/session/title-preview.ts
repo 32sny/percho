@@ -1,14 +1,25 @@
+import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
-	formatSkillCommand,
-	parseExpandedSkillInvocation,
+	extractSubagentRuns,
+	projectSessionHoverAgent,
+	projectSessionHoverTask,
+	type SessionHoverLiveRun,
 	type SessionHoverPreviewResult,
+	type SessionHoverRelationChild,
+	type SessionHoverRelationParent,
+	safeUserFirstLine,
 } from "@percho/shared";
+import { PiSubagentRelationLimitError, resolvePiSubagentRelations } from "./pi-subagent-relations";
+import { validateOrdinarySessionFile, validateSubagentSessionFile } from "./subagent-paths";
+
+export { safeUserFirstLine } from "@percho/shared";
 
 const HISTORY_BYTES = 8 * 1024 * 1024;
 const FIRST_LINE_BYTES = 128 * 1024;
+const MAX_RELATIONS = 6;
 type Reason = Extract<SessionHoverPreviewResult, { status: "unavailable" }>["reason"];
 const ENTRY_TYPES = new Set([
 	"message",
@@ -38,38 +49,8 @@ function object(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** 命名和预览共用的安全投影；不限制普通命名长度，也不返回原始 Skill 正文。 */
-export function safeUserFirstLine(
-	content: unknown,
-): { status: "ok"; text: string } | { status: "empty" | "unsafe_projection" | "invalid_history" } {
-	let text: string;
-	if (typeof content === "string") text = content;
-	else if (Array.isArray(content)) {
-		const texts: string[] = [];
-		for (const part of content) {
-			if (!object(part) || typeof part.type !== "string") return { status: "invalid_history" };
-			if (part.type !== "text") continue;
-			if (typeof part.text !== "string") return { status: "invalid_history" };
-			texts.push(part.text);
-		}
-		text = texts.join(" ");
-	} else return { status: "invalid_history" };
-	const invocation = parseExpandedSkillInvocation(text);
-	// 不把不完整、带前导空白或嵌套的 Skill 包装退化成普通正文。
-	const skillMarker = /<\/?skill\b/i;
-	if (
-		(!invocation && (skillMarker.test(text) || /^\s*References are relative to /i.test(text))) ||
-		(invocation && (skillMarker.test(invocation.name) || skillMarker.test(invocation.args ?? "")))
-	) {
-		return { status: "unsafe_projection" };
-	}
-	const projected = invocation ? formatSkillCommand(invocation) : text;
-	const firstLine = (projected.trim().split("\n", 1)[0] ?? "").trim();
-	return firstLine ? { status: "ok", text: firstLine } : { status: "empty" };
-}
-
 /** 以 JSONL 的 UTF-8 体积衡量内存快照；在序列化/复制大字符串之前中止。 */
-function checkMemoryBudget(values: readonly unknown[]): void {
+function checkMemoryBudget(values: readonly unknown[], jsonl = true): void {
 	let remaining = HISTORY_BYTES;
 	const ancestors = new Set<object>();
 	function spend(bytes: number): void {
@@ -131,7 +112,7 @@ function checkMemoryBudget(values: readonly unknown[]): void {
 	}
 	for (const value of values) {
 		visit(value, 0);
-		spend(1); // JSONL 换行
+		if (jsonl) spend(1); // JSONL 换行；实时候选按独立 JSON 数组计量
 	}
 }
 
@@ -148,12 +129,131 @@ interface TreeEntry extends Record<string, unknown> {
 	type: string;
 }
 
-/** 与 messages.ts 一样从 leaf 沿 parentId 回溯；额外拒绝歧义/坏树，不使用 SDK 无防环 getBranch。 */
-function previewEntries(
-	sessionId: string,
-	entries: readonly unknown[],
-	leaf: string | null,
-): SessionHoverPreviewResult {
+/** 同路径保留最新派工，排序认分支出现顺序而不是不可靠的时间戳。 */
+function pathKey(file: string): string {
+	const normalized = resolve(file);
+	return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function liveStatus(
+	run: SessionHoverLiveRun,
+	previous?: SessionHoverRelationChild,
+): SessionHoverRelationChild["status"] {
+	if (run.status === "running") return "running";
+	if (run.exitCode !== undefined) return run.exitCode === 0 ? "done" : "error";
+	if (run.status === "error") return "error";
+	return previous?.status ?? "unknown";
+}
+
+function mergeLiveRelations(
+	history: SessionHoverRelationChild[],
+	runs: SessionHoverLiveRun[],
+): SessionHoverRelationChild[] {
+	if (!Array.isArray(runs)) fail("limit_exceeded");
+	// 先有界遍历，不能先 JSON.stringify 无界的 IPC 输入再量体积。
+	try {
+		checkMemoryBudget([runs], false);
+	} catch {
+		fail("limit_exceeded");
+	}
+	for (const run of runs) {
+		if (
+			!object(run) ||
+			typeof run.sessionFile !== "string" ||
+			typeof run.agent !== "string" ||
+			(run.task !== undefined && typeof run.task !== "string") ||
+			(run.exitCode !== undefined && (typeof run.exitCode !== "number" || !Number.isFinite(run.exitCode))) ||
+			(run.status !== "running" && run.status !== "done" && run.status !== "error") ||
+			(run.source !== "committed" && run.source !== "streaming")
+		)
+			fail("limit_exceeded");
+	}
+	const byPath = new Map<string, SessionHoverRelationChild>();
+	for (const child of history) {
+		const key = pathKey(child.sessionFile);
+		byPath.delete(key);
+		byPath.set(key, child);
+	}
+	// committed 只覆盖当前分支已有行；不能靠旧 transcript 复活撤回的派工。
+	for (const run of runs) {
+		if (run.source !== "committed" || !isAbsolute(run.sessionFile)) continue;
+		const key = pathKey(run.sessionFile);
+		const previous = byPath.get(key);
+		if (previous) byPath.set(key, { ...previous, status: liveStatus(run, previous) });
+	}
+	const streaming = new Map<string, SessionHoverRelationChild>();
+	for (const run of runs) {
+		if (run.source !== "streaming" || !isAbsolute(run.sessionFile)) continue;
+		const key = pathKey(run.sessionFile);
+		const previous = streaming.get(key) ?? byPath.get(key);
+		const taskFirstLine = projectSessionHoverTask(run.task, run.sessionFile);
+		const idMatch = /_([0-9a-fA-F-]{8,})\.jsonl$/i.exec(run.sessionFile);
+		byPath.delete(key);
+		streaming.delete(key);
+		streaming.set(key, {
+			...previous,
+			sessionFile: run.sessionFile,
+			...(idMatch?.[1] ? { sessionId: idMatch[1] } : {}),
+			agent: projectSessionHoverAgent(run.agent, run.sessionFile),
+			taskFirstLine,
+			status: liveStatus(run, previous),
+		});
+	}
+	return [...streaming.values()].reverse().concat([...byPath.values()].reverse());
+}
+
+async function withRelations(
+	result: SessionHoverPreviewResult,
+	items: SessionHoverRelationChild[],
+	verifiedPluginFiles: ReadonlySet<string>,
+	offset: number,
+	parent?: SessionHoverRelationParent,
+): Promise<SessionHoverPreviewResult> {
+	const valid: SessionHoverRelationChild[] = [];
+	for (let i = 0; i < items.length; i += 16) {
+		const batch = await Promise.all(
+			items.slice(i, i + 16).map(async (item) => {
+				const file = verifiedPluginFiles.has(pathKey(item.sessionFile))
+					? await validateOrdinarySessionFile(item.sessionFile)
+					: await validateSubagentSessionFile(item.sessionFile);
+				return file ? { ...item, sessionFile: file } : undefined;
+			}),
+		);
+		for (const item of batch) if (item) valid.push(item);
+	}
+	if (!valid.length && !parent) return result;
+	const hash = createHash("sha256");
+	for (const item of valid) {
+		hash.update(
+			JSON.stringify([
+				item.sessionId ?? null,
+				item.sessionFile,
+				item.agent,
+				item.taskFirstLine ?? null,
+				item.status,
+				item.createdAt ?? null,
+			]),
+		);
+		hash.update("\n");
+	}
+	const revision = hash.digest("hex");
+	const children = valid.slice(offset, offset + MAX_RELATIONS);
+	return {
+		...result,
+		relations: {
+			children,
+			hidden: Math.max(0, valid.length - offset - children.length),
+			offset,
+			total: valid.length,
+			revision,
+			...(parent ? { parent } : {}),
+		},
+	};
+}
+
+/** 与 messages.ts 一样从 leaf 沿 parentId 回溯；拒绝坏树，不使用 SDK 无防环 getBranch。 */
+
+function validatedBranch(entries: readonly unknown[], leaf: string | null): TreeEntry[] {
 	const byId = new Map<string, TreeEntry>();
 	for (const raw of entries) {
 		if (
@@ -208,18 +308,92 @@ function previewEntries(
 		branch.push(entry);
 		cursor = entry.parentId;
 	}
-	for (let i = branch.length - 1; i >= 0; i--) {
-		const entry = branch[i];
-		if (entry?.type !== "message") continue;
+	return branch.reverse();
+}
+
+async function previewEntries(
+	sessionId: string,
+	branch: readonly TreeEntry[],
+	liveRuns: SessionHoverLiveRun[] = [],
+	scanParent?: { cwd: string; sessionFile?: string },
+	offset = 0,
+	relationParent?: SessionHoverRelationParent,
+): Promise<SessionHoverPreviewResult> {
+	let plugin: Awaited<ReturnType<typeof resolvePiSubagentRelations>> = {
+		byEntryId: new Map(),
+		validatedFiles: new Set(),
+	};
+	if (scanParent) {
+		try {
+			plugin = await resolvePiSubagentRelations(branch, scanParent);
+		} catch (error) {
+			fail(error instanceof PiSubagentRelationLimitError ? "limit_exceeded" : "read_failed");
+		}
+	}
+	const children: SessionHoverRelationChild[] = [];
+	for (const entry of branch) {
+		if (entry.type !== "message" || !object(entry.message) || entry.message.role !== "toolResult") continue;
+		const pluginChild = plugin.byEntryId.get(entry.id);
+		if (pluginChild) {
+			children.push(pluginChild);
+			continue;
+		}
+		let runs: ReturnType<typeof extractSubagentRuns>;
+		try {
+			runs = extractSubagentRuns(entry.message.details);
+		} catch {
+			continue; // 第三方 details 局部损坏，不破坏其它条目和首条提问
+		}
+		for (const run of runs ?? []) {
+			if (!run.sessionFile) continue;
+			const idMatch = /_([0-9a-fA-F-]{8,})\.jsonl$/i.exec(run.sessionFile);
+			const createdAt =
+				typeof entry.timestamp === "number"
+					? entry.timestamp
+					: typeof entry.timestamp === "string"
+						? Date.parse(entry.timestamp)
+						: NaN;
+			const taskFirstLine = projectSessionHoverTask(run.task, run.sessionFile);
+			children.push({
+				sessionFile: run.sessionFile,
+				...(idMatch?.[1] ? { sessionId: idMatch[1] } : {}),
+				agent: projectSessionHoverAgent(run.agent, run.sessionFile),
+				...(taskFirstLine !== undefined ? { taskFirstLine } : {}),
+				status:
+					run.exitCode == null || !Number.isFinite(run.exitCode)
+						? "unknown"
+						: run.exitCode === 0
+							? "done"
+							: "error",
+				...(Number.isFinite(createdAt) ? { createdAt } : {}),
+			});
+		}
+	}
+	let preview: SessionHoverPreviewResult = { status: "empty", sessionId };
+	for (const entry of branch) {
+		if (entry.type !== "message") continue;
 		if (!object(entry.message) || typeof entry.message.role !== "string") fail("invalid_history");
 		if (entry.message.role !== "user") continue;
 		const line = safeUserFirstLine(entry.message.content);
 		if (line.status === "empty") continue;
-		if (line.status !== "ok") fail(line.status);
-		if (Buffer.byteLength(line.text, "utf8") > FIRST_LINE_BYTES) fail("limit_exceeded");
-		return { status: "ok", sessionId, source: "current-branch-first-user-text", text: line.text };
+		if (line.status !== "ok") {
+			preview = { status: "unavailable", sessionId, reason: line.status };
+			break;
+		}
+		if (Buffer.byteLength(line.text, "utf8") > FIRST_LINE_BYTES) {
+			preview = { status: "unavailable", sessionId, reason: "limit_exceeded" };
+			break;
+		}
+		preview = { status: "ok", sessionId, source: "current-branch-first-user-text", text: line.text };
+		break;
 	}
-	return { status: "empty", sessionId };
+	return withRelations(
+		preview,
+		mergeLiveRelations(children, liveRuns),
+		plugin.validatedFiles,
+		offset,
+		relationParent,
+	);
 }
 
 function resultForFailure(sessionId: string, error: unknown, fallback: Reason): SessionHoverPreviewResult {
@@ -231,25 +405,138 @@ function resultForFailure(sessionId: string, error: unknown, fallback: Reason): 
 }
 
 /** 内存路径读取 entries + 当前 leaf；不使用压缩上下文，不产生写入或模型/扩展调用。 */
-export function previewLoadedSession(
+export async function previewLoadedSession(
 	sessionId: string,
 	cwd: string,
 	registeredCwd: string,
-	manager: Pick<SessionManager, "getHeader" | "getEntries" | "getLeafId">,
-): SessionHoverPreviewResult {
+	manager: Pick<SessionManager, "getHeader" | "getEntries" | "getLeafId"> &
+		Partial<Pick<SessionManager, "getSessionFile">>,
+	liveRuns: SessionHoverLiveRun[] = [],
+	offset = 0,
+	getLoadedSession?: (
+		id: string,
+	) =>
+		| {
+				cwd: string;
+				manager: Pick<SessionManager, "getHeader" | "getEntries" | "getLeafId"> &
+					Partial<Pick<SessionManager, "getSessionFile">>;
+		  }
+		| undefined,
+): Promise<SessionHoverPreviewResult> {
 	try {
+		if (!Number.isSafeInteger(offset) || offset < 0) fail("identity_mismatch");
 		if (resolve(registeredCwd) !== resolve(cwd)) fail("identity_mismatch");
 		const header = manager.getHeader();
 		verifyIdentity(header, sessionId, cwd);
 		const entries = manager.getEntries();
 		checkMemoryBudget([header, ...entries]);
-		return previewEntries(sessionId, entries, manager.getLeafId());
+		const branch = validatedBranch(entries, manager.getLeafId());
+		const sessionFile = manager.getSessionFile?.();
+		const parent = await resolveParent(header, sessionId, cwd, sessionFile, getLoadedSession);
+		return await previewEntries(
+			sessionId,
+			branch,
+			liveRuns,
+			{
+				cwd,
+				sessionFile,
+			},
+			offset,
+			parent,
+		);
 	} catch (error) {
 		return resultForFailure(sessionId, error, "invalid_history");
 	}
 }
 
 /** 最多读取 8MiB + 一个判定超限字节；即使 stat 后文件增长也不会无界读取。 */
+function fileMatchesId(file: string, id: string): boolean {
+	const name = basename(file).replace(/\.jsonl$/i, "");
+	const separator = name.lastIndexOf("_");
+	return separator >= 0 && name.slice(separator + 1) === id;
+}
+
+function parseHistory(content: string): unknown[] {
+	try {
+		return content
+			.split("\n")
+			.filter((line) => line.trim())
+			.map((line) => JSON.parse(line));
+	} catch {
+		return fail("invalid_history");
+	}
+}
+
+async function resolveParent(
+	childHeader: unknown,
+	childId: string,
+	childCwd: string,
+	childFile: string | undefined,
+	getLoadedSession?: (
+		id: string,
+	) =>
+		| {
+				cwd: string;
+				manager: Pick<SessionManager, "getHeader" | "getEntries" | "getLeafId"> &
+					Partial<Pick<SessionManager, "getSessionFile">>;
+		  }
+		| undefined,
+): Promise<SessionHoverRelationParent | undefined> {
+	if (!object(childHeader) || typeof childHeader.parentSession !== "string" || !childFile) return undefined;
+	try {
+		if (!(await validateOrdinarySessionFile(childFile)) || !fileMatchesId(childFile, childId))
+			return undefined;
+		const parentFile = childHeader.parentSession;
+		if (!(await validateOrdinarySessionFile(parentFile)) || pathKey(parentFile) === pathKey(childFile))
+			return undefined;
+		const parentId = basename(parentFile)
+			.replace(/\.jsonl$/i, "")
+			.split("_")
+			.at(-1);
+		if (!parentId || !/^[0-9a-f-]{8,}$/i.test(parentId) || parentId === childId) return undefined;
+		const loaded = getLoadedSession?.(parentId);
+		let header: unknown;
+		let entries: readonly unknown[];
+		let leaf: string | null;
+		if (loaded) {
+			const loadedHeader = loaded.manager.getHeader();
+			if (
+				resolve(loaded.cwd) !== resolve(childCwd) ||
+				!fileMatchesId(loaded.manager.getSessionFile?.() ?? "", parentId) ||
+				pathKey(loaded.manager.getSessionFile?.() ?? "") !== pathKey(parentFile)
+			)
+				return undefined;
+			header = loadedHeader;
+			entries = loaded.manager.getEntries();
+			leaf = loaded.manager.getLeafId();
+			checkMemoryBudget([header, ...entries]);
+		} else {
+			const parsed = parseHistory(await readBounded(parentFile));
+			header = parsed[0];
+			entries = parsed.slice(1);
+			const last = entries.at(-1);
+			leaf = object(last) && typeof last.id === "string" ? last.id : null;
+		}
+		verifyIdentity(header, parentId, childCwd);
+		const branch = validatedBranch(entries, leaf);
+		const relations = await resolvePiSubagentRelations(branch, { cwd: childCwd, sessionFile: parentFile });
+		if (relations.validatedFiles.size > 2048) return undefined;
+		const childPath = pathKey(childFile);
+		const relation = [...relations.byEntryId.values()].find(
+			(item) => item.sessionId === childId && pathKey(item.sessionFile) === childPath,
+		);
+		if (!relation) return undefined;
+		let latestName: unknown;
+		for (const entry of branch) {
+			if (entry.type === "session_info") latestName = entry.name;
+		}
+		const name = projectSessionHoverTask(latestName, parentFile);
+		return { sessionId: parentId, sessionFile: parentFile, cwd: childCwd, ...(name ? { name } : {}) };
+	} catch {
+		return undefined;
+	}
+}
+
 async function readBounded(file: string): Promise<string> {
 	const handle = await open(file, "r");
 	try {
@@ -279,24 +566,28 @@ export async function previewSessionFile(
 	sessionId: string,
 	cwd: string,
 	file: string,
+	offset = 0,
+	getLoadedSession?: (
+		id: string,
+	) =>
+		| {
+				cwd: string;
+				manager: Pick<SessionManager, "getHeader" | "getEntries" | "getLeafId"> &
+					Partial<Pick<SessionManager, "getSessionFile">>;
+		  }
+		| undefined,
 ): Promise<SessionHoverPreviewResult> {
 	try {
+		if (!Number.isSafeInteger(offset) || offset < 0) fail("identity_mismatch");
 		const content = await readBounded(file);
-		let entries: unknown[];
-		try {
-			// SDK parseSessionEntries 仅 JSON.parse 并忽略坏行；此入口必须拒绝坏行，且不迁移。
-			entries = content
-				.split("\n")
-				.filter((line) => line.trim())
-				.map((line) => JSON.parse(line));
-		} catch {
-			return fail("invalid_history");
-		}
+		const entries = parseHistory(content);
 		verifyIdentity(entries[0], sessionId, cwd);
 		const body = entries.slice(1);
 		const last = body.at(-1);
 		const leaf = object(last) && typeof last.id === "string" ? last.id : null;
-		return previewEntries(sessionId, body, leaf);
+		const branch = validatedBranch(body, leaf);
+		const parent = await resolveParent(entries[0], sessionId, cwd, file, getLoadedSession);
+		return await previewEntries(sessionId, branch, [], { cwd, sessionFile: file }, offset, parent);
 	} catch (error) {
 		return resultForFailure(sessionId, error, "read_failed");
 	}

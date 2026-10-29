@@ -10,6 +10,7 @@ export * from "./mcp";
 export * from "./model-visibility";
 export * from "./packages";
 export * from "./session";
+export * from "./session-hover";
 export * from "./settings";
 export * from "./sidebar";
 export * from "./skill-invocation";
