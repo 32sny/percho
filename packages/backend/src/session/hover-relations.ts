@@ -27,6 +27,7 @@ import {
 	validateOrdinarySessionFile,
 	validateSubagentSessionFile,
 } from "./subagent-paths";
+import { collectRelationRecords } from "./subagent-relation-records";
 
 function liveStatus(
 	run: SessionHoverLiveRun,
@@ -133,10 +134,15 @@ export async function resolveHoverParent(
 		const parentHistory = loaded
 			? readLoadedHoverHistory(parentId, history.cwd, loaded.cwd, loaded.manager)
 			: await readFileHoverHistory(parentId, history.cwd, parentFile);
-		const relations = await resolvePiSubagentRelations(parentHistory.branch, {
-			cwd: parentHistory.cwd,
-			sessionFile: parentFile,
-		});
+		const relations = await resolvePiSubagentRelations(
+			parentHistory.branch,
+			{
+				cwd: parentHistory.cwd,
+				sessionFile: parentFile,
+			},
+			{},
+			collectRelationRecords(parentHistory.branch, parentHistory.sessionId, parentFile),
+		);
 		const found = [...relations.byEntryId.values()].some(
 			(item) => item.sessionId === history.sessionId && pathKey(item.sessionFile) === pathKey(childFile),
 		);
@@ -165,21 +171,70 @@ export async function projectHoverRelations(
 	offset: number,
 	parent?: SessionHoverRelationParent,
 ): Promise<SessionHoverRelations | undefined> {
+	const safeRecords = collectRelationRecords(history.branch, history.sessionId, history.sessionFile);
 	let plugin: Awaited<ReturnType<typeof resolvePiSubagentRelations>>;
 	try {
-		plugin = await resolvePiSubagentRelations(history.branch, {
-			cwd: history.cwd,
-			sessionFile: history.sessionFile,
-		});
+		plugin = await resolvePiSubagentRelations(
+			history.branch,
+			{
+				cwd: history.cwd,
+				sessionFile: history.sessionFile,
+			},
+			{},
+			safeRecords.map(({ entryId, record }) => ({ entryId, record })),
+		);
 	} catch (error) {
 		return fail(error instanceof PiSubagentRelationLimitError ? "limit_exceeded" : "read_failed");
 	}
-	const children: SessionHoverRelationChild[] = [];
+	const children: Array<{
+		child: SessionHoverRelationChild;
+		order: number;
+		finishedAt: number;
+		toolCallId: string;
+	}> = [];
+	for (const { entryId, record, anchorIndex } of safeRecords) {
+		if (record.toolName === "Agent") {
+			const child = plugin.byEntryId.get(entryId);
+			if (child)
+				children.push({
+					child,
+					order: anchorIndex,
+					finishedAt: record.finishedAt,
+					toolCallId: record.toolCallId,
+				});
+		}
+	}
+	for (const { record, anchorIndex } of safeRecords) {
+		if (record.toolName === "subagent") {
+			for (const run of record.runs ?? []) {
+				const idMatch = /_([0-9a-fA-F-]{8,})\.jsonl$/i.exec(run.sessionFile);
+				const taskFirstLine = projectSessionHoverTask(run.taskFirstLine, run.sessionFile);
+				children.push({
+					child: {
+						sessionFile: run.sessionFile,
+						...(idMatch?.[1] ? { sessionId: idMatch[1] } : {}),
+						agent: projectSessionHoverAgent(run.agent, run.sessionFile),
+						...(taskFirstLine !== undefined ? { taskFirstLine } : {}),
+						status: run.exitCode === undefined ? "unknown" : run.exitCode === 0 ? "done" : "error",
+						createdAt: record.startedAt,
+					},
+					order: anchorIndex,
+					finishedAt: record.finishedAt,
+					toolCallId: record.toolCallId,
+				});
+			}
+		}
+	}
 	for (const entry of history.branch) {
 		if (entry.type !== "message" || !object(entry.message) || entry.message.role !== "toolResult") continue;
 		const pluginChild = plugin.byEntryId.get(entry.id);
 		if (pluginChild) {
-			children.push(pluginChild);
+			children.push({
+				child: pluginChild,
+				order: history.branch.indexOf(entry),
+				finishedAt: Number(entry.timestamp) || 0,
+				toolCallId: entry.id,
+			});
 			continue;
 		}
 		let runs: ReturnType<typeof extractSubagentRuns>;
@@ -199,21 +254,32 @@ export async function projectHoverRelations(
 						: NaN;
 			const taskFirstLine = projectSessionHoverTask(run.task, run.sessionFile);
 			children.push({
-				sessionFile: run.sessionFile,
-				...(idMatch?.[1] ? { sessionId: idMatch[1] } : {}),
-				agent: projectSessionHoverAgent(run.agent, run.sessionFile),
-				...(taskFirstLine !== undefined ? { taskFirstLine } : {}),
-				status:
-					run.exitCode == null || !Number.isFinite(run.exitCode)
-						? "unknown"
-						: run.exitCode === 0
-							? "done"
-							: "error",
-				...(Number.isFinite(createdAt) ? { createdAt } : {}),
+				child: {
+					sessionFile: run.sessionFile,
+					...(idMatch?.[1] ? { sessionId: idMatch[1] } : {}),
+					agent: projectSessionHoverAgent(run.agent, run.sessionFile),
+					...(taskFirstLine !== undefined ? { taskFirstLine } : {}),
+					status:
+						run.exitCode == null || !Number.isFinite(run.exitCode)
+							? "unknown"
+							: run.exitCode === 0
+								? "done"
+								: "error",
+					...(Number.isFinite(createdAt) ? { createdAt } : {}),
+				},
+				order: history.branch.indexOf(entry),
+				finishedAt: Number.isFinite(createdAt) ? createdAt : 0,
+				toolCallId: entry.id,
 			});
 		}
 	}
-	const merged = mergeLiveRelations(children, liveRuns);
+	children.sort(
+		(a, b) => a.order - b.order || a.finishedAt - b.finishedAt || a.toolCallId.localeCompare(b.toolCallId),
+	);
+	const merged = mergeLiveRelations(
+		children.map(({ child }) => child),
+		liveRuns,
+	);
 	const valid: SessionHoverRelationChild[] = [];
 	for (let i = 0; i < merged.length; i += 16) {
 		const batch = await Promise.all(

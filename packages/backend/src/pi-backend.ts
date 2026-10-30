@@ -162,6 +162,7 @@ import { collectMcpTools, makeMcpInventoryExtension } from "./tools/mcp-inventor
 import { makeShowImageTool } from "./tools/show-image";
 import { discoverAgents, makeSubagentTool } from "./tools/subagent";
 import { applySubagentMutex, resolveSubagentPreferBuiltin } from "./tools/subagent/mutex";
+import { makeSubagentRelationsExtension } from "./tools/subagent-relations";
 import { makeTodoTool } from "./tools/todo";
 import { makeTodoReminderExtension } from "./tools/todo-reminder";
 import { makeWebFetchTool } from "./tools/webfetch";
@@ -466,6 +467,7 @@ export class PiBackend {
 			}),
 		);
 		// todo-reminder 最后：compaction 后恢复注入的任务列表不被上游折叠
+		factories.push(makeSubagentRelationsExtension());
 		factories.push(makeTodoReminderExtension());
 		// MCP 运行态聚合（spec §4.8.1）：三个时机聚合 `mcp__<server>__<tool>`，集合变化才发事件给面板
 		factories.push(makeMcpInventoryExtension((servers) => this.emitMcpServersChanged(servers)));

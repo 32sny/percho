@@ -8,6 +8,7 @@ import {
 } from "@percho/shared";
 import { backendSessionPathKey, isSessionPathDescendant } from "./session-paths";
 import { ordinarySessionsRoot } from "./subagent-paths";
+import type { RelationRecordV1 } from "./subagent-relation-records";
 
 const DEFAULT_MAX_FILES = 2048;
 const DEFAULT_PREFIX = 128 * 1024;
@@ -51,7 +52,10 @@ function terminalStatus(value: unknown): "done" | "error" | undefined {
 	return undefined;
 }
 
-function extractClaims(branch: readonly Entry[]): Claim[] {
+function extractClaims(
+	branch: readonly Entry[],
+	nested: readonly { entryId: string; record: RelationRecordV1 }[] = [],
+): Claim[] {
 	const calls = new Map<string, { type: string; start: number }>();
 	const claims = new Map<string, Claim>();
 	const conflictingIds = new Set<string>();
@@ -113,6 +117,28 @@ function extractClaims(branch: readonly Entry[]): Claim[] {
 				status: terminalStatus(d.status) ?? "unknown",
 			});
 		}
+	}
+	for (const { entryId, record } of nested) {
+		if (
+			record.toolName !== "Agent" ||
+			!record.claim ||
+			!agentId(record.claim.agentId) ||
+			record.claim.subagentType.length > 4096 ||
+			record.claim.description.length > 4096
+		)
+			continue;
+		const claim: Claim = {
+			entryId,
+			agentId: record.claim.agentId,
+			type: record.claim.subagentType,
+			task: record.claim.description,
+			start: record.startedAt,
+			end: record.finishedAt,
+			status: terminalStatus(record.claim.status) ?? "unknown",
+		};
+		const previous = claims.get(claim.agentId);
+		if (previous && previous.type !== claim.type) conflictingIds.add(claim.agentId);
+		claims.set(claim.agentId, claim);
 	}
 	const valid = [...claims.values()].filter((c) => !conflictingIds.has(c.agentId));
 	const prefixes = new Map<string, number>();
@@ -180,9 +206,10 @@ export async function resolvePiSubagentRelations(
 	branch: readonly Record<string, unknown>[],
 	parent: { sessionFile?: string; cwd: string },
 	limits: { maxFiles?: number; maxPrefixBytes?: number; maxTotalBytes?: number } = {},
+	nested: readonly { entryId: string; record: RelationRecordV1 }[] = [],
 ): Promise<PiSubagentResolution> {
 	const result: PiSubagentResolution = { byEntryId: new Map(), validatedFiles: new Set() };
-	const claims = extractClaims(branch);
+	const claims = extractClaims(branch, nested);
 	if (!claims.length || !parent.sessionFile || !isAbsolute(parent.sessionFile) || !isAbsolute(parent.cwd))
 		return result;
 	const root = resolve(ordinarySessionsRoot());

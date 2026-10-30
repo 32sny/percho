@@ -297,6 +297,45 @@ describe("悬停关系的当前分支、安全投影与统一计数", () => {
 		expect((await memory(entries)).relations?.children.some((c) => c.sessionFile === childFile)).toBe(false);
 	});
 
+	it("只展示锚定当前分支的版本化嵌套关系并沿用内置路径验证", async () => {
+		const file = await child("nested-record");
+		const anchor = {
+			type: "message",
+			id: "root-assistant",
+			parentId: "user",
+			timestamp: 10,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "outer-call", name: "codemode", arguments: {} }],
+			},
+		};
+		const relation = {
+			type: "custom",
+			id: "relation-entry",
+			parentId: "root-assistant",
+			customType: "percho.subagent-relation.v1",
+			data: {
+				version: 1,
+				origin: "runtime",
+				parentSessionId: ID,
+				parentSessionFile: join(env.dir, "sessions", "--project--", "parent.jsonl"),
+				anchorEntryId: "root-assistant",
+				rootToolCallId: "outer-call",
+				toolCallId: "outer-call/1",
+				parentToolCallId: "outer-call",
+				toolName: "subagent",
+				startedAt: 11,
+				finishedAt: 20,
+				runs: [{ agent: "Explore", taskFirstLine: "nested task", sessionFile: file, exitCode: 0 }],
+			},
+		};
+		const result = await memory([user(), anchor, relation]);
+		expect(result.relations?.children).toMatchObject([
+			{ sessionFile: file, agent: "Explore", taskFirstLine: "nested task", status: "done" },
+		]);
+		expect((await memory([user(), relation])).relations).toBeUndefined();
+	});
+
 	it("普通sessions路径的外部链接在SDK打开前被拒绝，不放宽内置白名单", async () => {
 		const { symlink } = await import("node:fs/promises");
 		const directory = join(env.dir, "sessions", "--project--");
