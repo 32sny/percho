@@ -12,6 +12,7 @@ import { useSessionsStore } from "../../stores/sessions";
 import { useSettingsStore } from "../../stores/settings";
 import { pushToast } from "../../stores/toasts";
 import { useTranscriptStore } from "../../stores/transcript";
+import { type CompactionSendPolicy, resolveCompactionSendPolicy } from "./compaction-gate";
 import { buildQuoteBlock } from "./quote";
 import { buildSendUiError } from "./send-error";
 import { createSendGuard } from "./send-guard";
@@ -24,7 +25,11 @@ export interface UseComposerSendOptions {
 	quotes: string[];
 	slashCommand: string | null;
 	followUpQueue: string[];
-	/** 压缩进行中（禁发：SDK 拒绝压缩中的 prompt） */
+	/**
+	 * 压缩进行中（会话事件态 `transcript.compacting` 的渲染投影）。
+	 * 仅作**可见指示/渲染期兜底**：发不发得出去由压缩策略按发送时刻的快照判定，
+	 * 不能拿这个旧布尔值一刀切禁发（见 compaction-gate.ts）。
+	 */
 	compacting: boolean;
 	/** 当前模型是否支持图片输入（fail-open：未知按支持）；false 且草稿有图时拦截发送 */
 	imagesSupported: boolean;
@@ -73,6 +78,21 @@ function controlApi() {
 	return pi as Required<typeof pi>;
 }
 
+/**
+ * 控制 API 是否完整可用：preload 按 `CHANNEL_TABLE` 成组生成，缺任意一个即视为旧 host，
+ * 此时无法安全放行 auto 压缩下的提交（fail closed）。
+ */
+function controlApiComplete(api: ReturnType<typeof controlApi>): boolean {
+	return (
+		api != null &&
+		typeof api.submitMessage === "function" &&
+		typeof api.getMessageControl === "function" &&
+		typeof api.stopMessageControl === "function" &&
+		typeof api.changePendingMessage === "function" &&
+		typeof api.recoverPendingMessage === "function"
+	);
+}
+
 /** 当前会话已采纳的控制快照（无 = 未启用/未加载） */
 function currentControl(sessionId: string): ControlSnapshot | null {
 	return useTranscriptStore.getState().bySession[sessionId]?.control ?? null;
@@ -105,6 +125,15 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	 * 不得暗自 generate 新 id 造成同一条消息发两次；内容变了就是新消息（新 id）。
 	 */
 	const pendingTx = useRef<{ requestId: string; fingerprint: string } | null>(null);
+	/**
+	 * 渲染期压缩策略：只用于 UI 可用性（发送方式菜单是否禁用）。
+	 * 真正的发送门禁在 `handleSend` 里按**发送时刻**的快照重算（见那里的注释）。
+	 */
+	const compactionPolicy: CompactionSendPolicy = resolveCompactionSendPolicy({
+		transcriptCompacting: options.compacting,
+		control: options.activeSessionId ? currentControl(options.activeSessionId) : null,
+		controlReady: controlApiComplete(controlApi()),
+	});
 
 	/** 统一信封：发送失败也走 UiError（内联条 + 与消息流错误卡同语言）；传 null 清除 */
 	const setError = (message: string | null) => setErrorState(message ? buildSendUiError(message) : null);
@@ -440,10 +469,28 @@ export function useComposerSend(options: UseComposerSendOptions) {
 				pendingTx.current = null;
 				if (optimisticId) useTranscriptStore.getState().removeOptimisticUser(sessionId, optimisticId);
 				useTranscriptStore.getState().settlePromptActivity(sessionId, activityToken, true);
+				const code = res.error.code;
+				if (code === "preflight_failed") {
+					// 准备失败与 failed receipt 共用同一纯投影（稳定卡身份 + 精确摘气泡 + 快照同步）。
+					// 必须先投影再考虑钉快照：若先 setControlSnapshot，会把响应里的旧 runtime 当权威，
+					// 随后失败投影就只能被判 stale，错误卡永远出不来。
+					const outcome = res.error.snapshot
+						? useTranscriptStore.getState().applyControlSendFailure(sessionId, {
+								snapshot: res.error.snapshot,
+								// 原请求身份：恢复实体用原 messageId，否则就是本次 requestId，不生成新 id
+								messageId: recovery?.messageId ?? requestId,
+								requestId,
+								error: res.error.message,
+							})
+						: "unmatched";
+					// handled/stale 都不再给内联重复提示；stale 只表示响应来自旧状态，
+					// 当前快照早已被事件/load 更新为权威，主动刷新只会让迟到的旧响应覆盖新 revision/runtime。
+					if (outcome === "unmatched") setError(res.error.message);
+					return;
+				}
 				// 拒绝回执自带最新快照时直接钉住（revision 前进，旧事件不回流）
 				if (res.error.snapshot)
 					useTranscriptStore.getState().setControlSnapshot(sessionId, res.error.snapshot);
-				const code = res.error.code;
 				if (code === "stale_revision" || code === "stale_runtime") {
 					// 恢复实体已被外部更新：刷新快照并提示，绝不暗自重发
 					await refreshControl(api, sessionId);
@@ -483,8 +530,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	};
 
 	const handleSend = async (mode: MessageMode = "queue") => {
-		const { text, images, attachments, quotes, slashCommand, followUpQueue, compacting, agentActive } =
-			options;
+		const { text, images, attachments, quotes, slashCommand, followUpQueue, agentActive } = options;
 		// 引用胶囊逐条转 blockquote 段落；@ 引用胶囊拼回文本。引用置最前（先给上下文），正文在后
 		const quoteBlock = buildQuoteBlock(quotes);
 		const atText = attachments.map((p) => `@${p}`).join(" ");
@@ -494,8 +540,17 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			.join("\n\n");
 		// 运行中（streaming）不拦截：prompt 走 followUp 排队；仅防双击重发（sending）
 		if ((!content && images.length === 0) || sending) return;
-		// 压缩中禁发：SDK 拒绝压缩中的 prompt，提前拦截保住草稿
-		if (compacting) {
+		// 压缩门禁：手动压缩拒绝一切提交（保草稿）；自动压缩且控制通道完整时放行 queue/steer/interrupt。
+		// 必须按发送时刻的事件态 + 最新快照重算，不能信任渲染闭包里的旧 compacting（防「渲染后已结束」被卡）。
+		const sendSessionId = options.activeSessionId;
+		const sendCompaction = resolveCompactionSendPolicy({
+			transcriptCompacting: sendSessionId
+				? (useTranscriptStore.getState().bySession[sendSessionId]?.compacting ?? false)
+				: false,
+			control: sendSessionId ? currentControl(sendSessionId) : null,
+			controlReady: controlApiComplete(controlApi()),
+		});
+		if (sendCompaction.blocked) {
 			showFeedback(t("composer.compacting"), "warn");
 			return;
 		}
@@ -711,6 +766,8 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		setError,
 		feedback,
 		showFeedback,
+		/** 渲染期压缩策略（发送门禁与 UI 菜单共用同一规则，真源见 compaction-gate.ts） */
+		compactionPolicy,
 		ensureSession,
 		runSlashCommand,
 		handleSend,

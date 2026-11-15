@@ -99,11 +99,14 @@ describe("restoreSessionWorkspace（冷启动恢复）", () => {
 		expect(piMock.saveUiState).not.toHaveBeenCalled();
 	});
 
-	it("失效项裁剪并落盘修复快照：已删成员、0 消息会话（只有计划路径）都剔除", async () => {
+	it("失效项裁剪并落盘修复快照：已删成员、未加载的 0 消息会话（只有计划路径）都剔除", async () => {
 		const FILE_EMPTY = "/sessions/empty.jsonl";
 		piMock.loadUiState.mockResolvedValue({
 			sessionWorkspace: { files: [FILE_GONE, FILE_A, FILE_EMPTY], activeFile: FILE_A },
 		});
+		// FILE_EMPTY 语义：磁盘没有文件、backend registry 里也没有这个实例（进程重启后的残留路径）→
+		// 目录投影里不存在 = 不可恢复。⚠️ 仍在 registry 的未落盘会话由 backend 目录合并带 active 虚拟 path 返回，
+		// 走下面的「active 未落盘会话」用例，不在这里被裁掉。
 		piMock.listAllSessions.mockResolvedValue([meta("a", FILE_A)]);
 		piMock.openSession.mockResolvedValue(meta("a", FILE_A));
 
@@ -258,6 +261,29 @@ describe("restoreSessionWorkspace（冷启动恢复）", () => {
 		await restoreSessionWorkspace();
 
 		expect(piMock.loadUiState).not.toHaveBeenCalled();
+	});
+
+	it("目录返回 active 未落盘会话（虚拟 path）：恢复成员并打开它（reload 后接回同一 runtime）", async () => {
+		const FILE_LIVE = "/sessions/live.jsonl";
+		piMock.loadUiState.mockResolvedValue({
+			sessionWorkspace: { files: [FILE_LIVE], activeFile: FILE_LIVE },
+		});
+		// backend 目录合并了 registry 真实 meta：首条消息未落盘（messageCount 0、磁盘无文件），但实例活着。
+		// 这正是「首发失败 held」会话在 renderer reload 后的形态：目录里有它，才能恢复入口。
+		const liveMeta = meta("live", FILE_LIVE, { active: true, messageCount: 0 });
+		piMock.listAllSessions.mockResolvedValue([liveMeta]);
+		piMock.openSession.mockResolvedValue(liveMeta);
+
+		await restoreSessionWorkspace();
+
+		// 不得因为「0 消息/未落盘」把它当失效项裁掉
+		expect(useSessionWorkspaceStore.getState().members.map((m) => m.file)).toEqual([FILE_LIVE]);
+		expect(useSessionWorkspaceStore.getState().activeFile).toBe(FILE_LIVE);
+		// 打开走同一 open pipeline：backend 按规范化 sessionFile 接回原实例（不新建会话）
+		expect(piMock.openSession).toHaveBeenCalledTimes(1);
+		expect(piMock.openSession).toHaveBeenCalledWith({ filePath: FILE_LIVE });
+		expect(useSessionsStore.getState().activeSessionId).toBe("live");
+		expect(useSessionsStore.getState().sessions.map((s) => s.sessionId)).toEqual(["live"]);
 	});
 
 	it("恢复打开失败（文件已不在磁盘）：不 panic、不改工作区，交由按需打开报错", async () => {

@@ -1930,3 +1930,106 @@ describe("message control 投影（message_control_update / controlMessageId）"
 		expect(REDUCED_EVENT_TYPES).toContain("message_control_update");
 	});
 });
+
+describe("控制投递失败反馈（store 投影：receipt 与 preflight_failed 共用）", () => {
+	const heldSnapshot = (over: Record<string, unknown> = {}) =>
+		({
+			runtimeId: "rt1",
+			revision: 5,
+			phase: "running",
+			autoDispatchPaused: true,
+			items: [
+				{
+					messageId: "m-1",
+					source: "user",
+					mode: "queue",
+					state: "held",
+					preview: "hi",
+					imageCount: 0,
+				},
+			],
+			...over,
+		}) as never;
+
+	const failedReceipt = (snapshot: unknown, error: string) =>
+		({
+			type: "message_control_update",
+			snapshot,
+			receipt: { messageId: "m-1", requestId: "req-1", status: "failed", error },
+		}) as never;
+
+	const cards = (sessionId = "s1") =>
+		(useTranscriptStore.getState().bySession[sessionId]?.messages ?? []).filter((m) => m.kind === "error");
+
+	beforeEach(() => {
+		useTranscriptStore.setState({ bySession: {} });
+	});
+
+	it("响应投影先到：产卡并摘气泡；随后 failed 回执（revision 前进）不追加第二张", () => {
+		const store = useTranscriptStore.getState();
+		store.appendOptimisticUser("s1", { text: "hi", images: [], controlMessageId: "m-1" });
+		const outcome = store.applyControlSendFailure("s1", {
+			snapshot: heldSnapshot(),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+		});
+		expect(outcome).toBe("handled");
+		expect(cards()).toHaveLength(1);
+		const users = useTranscriptStore
+			.getState()
+			.bySession.s1?.messages.filter((m) => m.kind === "user" && m.pending);
+		expect(users).toHaveLength(0);
+		store.applyEvent("s1", failedReceipt(heldSnapshot({ revision: 6 }), "401: Invalid API key"));
+		expect(cards()).toHaveLength(1);
+		expect(useTranscriptStore.getState().bySession.s1?.control?.revision).toBe(6);
+	});
+
+	it("failed 回执先到：后到的响应快照更旧 → stale，不追加卡也不改快照", () => {
+		const store = useTranscriptStore.getState();
+		store.appendOptimisticUser("s1", { text: "hi", images: [], controlMessageId: "m-1" });
+		store.applyEvent("s1", failedReceipt(heldSnapshot({ revision: 6 }), "401: Invalid API key"));
+		expect(cards()).toHaveLength(1);
+		const outcome = store.applyControlSendFailure("s1", {
+			snapshot: heldSnapshot({ revision: 5 }),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+		});
+		expect(outcome).toBe("stale");
+		expect(cards()).toHaveLength(1);
+		expect(useTranscriptStore.getState().bySession.s1?.control?.revision).toBe(6);
+	});
+
+	it("旧 runtime 的响应快照 → stale：不产卡、不覆盖新 runtime、不动气泡", () => {
+		const store = useTranscriptStore.getState();
+		store.setControlSnapshot("s1", heldSnapshot({ runtimeId: "rt2", revision: 9 }) as never);
+		store.appendOptimisticUser("s1", { text: "hi", images: [], controlMessageId: "m-1" });
+		const outcome = store.applyControlSendFailure("s1", {
+			snapshot: heldSnapshot({ runtimeId: "rt1", revision: 10 }),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+		});
+		expect(outcome).toBe("stale");
+		expect(cards()).toHaveLength(0);
+		expect(useTranscriptStore.getState().bySession.s1?.control?.runtimeId).toBe("rt2");
+		expect(
+			useTranscriptStore.getState().bySession.s1?.messages.filter((m) => m.kind === "user" && m.pending),
+		).toHaveLength(1);
+	});
+
+	it("无法关联（快照无 held 用户实体）→ unmatched：无卡、无第二张、快照仍同步", () => {
+		const store = useTranscriptStore.getState();
+		store.appendOptimisticUser("s1", { text: "hi", images: [], controlMessageId: "m-1" });
+		const outcome = store.applyControlSendFailure("s1", {
+			snapshot: heldSnapshot({ revision: 7, items: [] }),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+		});
+		expect(outcome).toBe("unmatched");
+		expect(cards()).toHaveLength(0);
+		expect(useTranscriptStore.getState().bySession.s1?.control?.revision).toBe(7);
+	});
+});

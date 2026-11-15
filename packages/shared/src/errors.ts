@@ -155,3 +155,31 @@ export function buildStreamGuardUiError(verdict: string, now: number = Date.now(
 		timestamp: now,
 	};
 }
+
+/**
+ * 发送路径失败 → UiError（Composer 内联条 + 控制投递失败卡共用）。
+ * 发送拒绝（无模型/无 key/会话只读/会话不存在/压缩中）与 LLM 运行错误不同源：
+ * - 只读会话 → 专有标题（发送动作根本不该发生）；
+ * - 其余复用 classifyLlmError 的模式表（auth/网络等的 hint 建议措辞正好适用），
+ *   未命中（纯本地拒绝）则兜底「发送失败」，detail 保留原始 message 原文。
+ * 纯函数放 shared：Composer 内联条与控制投递失败卡共用同一套标题/详情（§19.8）。
+ */
+export function buildSendUiError(message: string, now: number = Date.now()): UiError {
+	const lower = message.toLowerCase();
+	if (lower.includes("read-only")) {
+		return {
+			severity: "error",
+			source: "session",
+			titleKey: "error.title.sendReadOnly",
+			detail: truncateDetail(message),
+			actions: ["copyDetail"],
+			timestamp: now,
+		};
+	}
+	const cls = classifyLlmError(message);
+	const base = buildLlmUiError(message, now);
+	return {
+		...base,
+		titleKey: cls.titleKey === "error.title.llmGeneric" ? "error.title.sendFailed" : cls.titleKey,
+	};
+}

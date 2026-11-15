@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -126,6 +126,7 @@ import {
 	SessionRegistry,
 } from "./session/registry";
 import { renameSessionFile } from "./session/rename";
+import { backendSessionPathKey } from "./session/session-paths";
 import { emitSessionShutdown } from "./session/shutdown";
 import { KeyedSingleFlight } from "./session/single-flight";
 import { StreamGuard } from "./session/stream-guard";
@@ -134,6 +135,7 @@ import {
 	isSubagentSessionPath,
 	validateOrdinarySessionFile,
 	validateSubagentSessionFile,
+	validateUnpersistedOrdinarySessionPlan,
 } from "./session/subagent-paths";
 import { previewLoadedSession, previewSessionFile } from "./session/title-preview";
 import { TraceRecorder } from "./session/trace";
@@ -185,6 +187,81 @@ function sessionInfoToMeta(
 		createdAt: info.created.getTime(),
 		modifiedAt: info.modified.getTime(),
 	};
+}
+
+/**
+ * 磁盘目录 ∪ 当前 registry 真实 meta（live 优先）：
+ *
+ * 会话在首条 user 消息落盘之前只有计划路径（SDK `_hasConversation` 门控），首发失败/未发言的
+ * 会话只活在 registry 里。renderer reload 后 `listAllSessions` 必须把它们算进目录，否则
+ * 左栏/胶囊/工作区失去入口（目录里没有 = 界面认为它不存在）。
+ *
+ * 去重双键（任一命中即视为同一条）：sessionId 与**规范化** sessionFile
+ * （`backendSessionPathKey`：resolve + 平台词法，Windows 大小写/斜杠别名不重复）。
+ * live 版本优先：运行态字段（active/messageCount/name/readOnly…）以 registry 为准；
+ * 磁盘项位置保持不变——同一 ID/文件的 live 版本**在原位替换**磁盘 meta（不挪到末尾，
+ * 目录顺序不被活跃状态打乱），只有磁盘上完全没有的 live 项才补在末尾。
+ */
+function mergeLiveSessionMetas(disk: readonly SessionMeta[], live: readonly SessionMeta[]): SessionMeta[] {
+	const liveById = new Map(live.map((meta) => [meta.sessionId, meta]));
+	const liveByFileKey = new Map<string, SessionMeta>();
+	for (const meta of live) {
+		if (meta.sessionFile) liveByFileKey.set(backendSessionPathKey(meta.sessionFile), meta);
+	}
+	const merged: SessionMeta[] = [];
+	const emittedIds = new Set<string>();
+	const emittedFileKeys = new Set<string>();
+	const emittedLive = new Set<SessionMeta>();
+	const emit = (meta: SessionMeta) => {
+		emittedIds.add(meta.sessionId);
+		if (meta.sessionFile) emittedFileKeys.add(backendSessionPathKey(meta.sessionFile));
+		merged.push(meta);
+	};
+	for (const meta of disk) {
+		const fileKey = meta.sessionFile ? backendSessionPathKey(meta.sessionFile) : undefined;
+		if (emittedIds.has(meta.sessionId) || (fileKey && emittedFileKeys.has(fileKey))) continue;
+		// 同一会话的 live 版本（按 ID 或规范化文件键命中）在原磁盘位置替换，双键都记为已发
+		const liveMeta = liveById.get(meta.sessionId) ?? (fileKey ? liveByFileKey.get(fileKey) : undefined);
+		if (liveMeta) emittedLive.add(liveMeta);
+		if (fileKey) emittedFileKeys.add(fileKey);
+		emit(liveMeta ?? meta);
+	}
+	for (const meta of live) {
+		if (emittedLive.has(meta)) continue;
+		const fileKey = meta.sessionFile ? backendSessionPathKey(meta.sessionFile) : undefined;
+		if (emittedIds.has(meta.sessionId) || (fileKey && emittedFileKeys.has(fileKey))) continue;
+		emit(meta);
+	}
+	return merged;
+}
+
+/**
+ * 真正「还没写过盘」的 SDK 事实：持久化开关仍开、flush 标志仍为 false、内存条目里没有
+ * user/assistant 消息（`_hasConversation` 门控）。
+ *
+ * 不能用「文件不存在」反推未落盘：已落盘后被删的会话 flushed 已为 true，必须拒绝重接。
+ * SDK 版本在 package.json 精确锁定；内部字段缺失时按不可辨别处理（保守拒绝）。
+ */
+function isUnflushedNewSession(sessionManager: SessionManager): boolean {
+	const probe = sessionManager as unknown as {
+		isPersisted?: () => boolean;
+		flushed?: boolean;
+		_hasConversation?: () => boolean;
+	};
+	if (probe.isPersisted?.() !== true) return false;
+	if (probe.flushed !== false) return false;
+	try {
+		if (typeof probe._hasConversation === "function") return probe._hasConversation() === false;
+		// 退化判据：内存条目里确实没有 conversation（有 conversation 则必然已 flush）
+		return !sessionManager
+			.getEntries()
+			.some(
+				(entry) =>
+					entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"),
+			);
+	} catch {
+		return false;
+	}
 }
 
 export interface PiBackendOptions {
@@ -631,7 +708,63 @@ export class PiBackend {
 		return this.openFlights.run(key, () => this.openSessionOnce(key));
 	}
 
+	/**
+	 * 已加载实例按**规范化 sessionFile 精确匹配**（词法键，不做 IO、不猜身份）：
+	 * 只用于「这条路径就是当前 registry 实例的文件」这种确定性事实，
+	 * 不按 sessionId/文件名反推（外部同名文件不得借 UUID 命中内存会话）。
+	 */
+	private registeredSessionByFile(filePath: string): RegisteredSession | undefined {
+		const key = backendSessionPathKey(filePath);
+		for (const entry of this.registry.list()) {
+			const file = entry.session.sessionFile;
+			if (file && backendSessionPathKey(file) === key) return entry;
+		}
+		return undefined;
+	}
+
+	/**
+	 * registry 文件命中后的路径可信判定（命中只说明「这条词法路径是当前实例的计划文件」）：
+	 * - 文件（含悬空链接）存在：必须继续 ordinary/subagent 的真实路径校验（realpath + 根包含）；
+	 * - 文件确实不存在：只允许真正未落盘、普通可写、且父目录真实路径仍在普通会话根内的实例重接；
+	 * - 子代理产物/只读会话/已落盘后被删一律不接回。
+	 */
+	private async isTrustedLiveSessionPath(filePath: string, entry: RegisteredSession): Promise<boolean> {
+		if (isSubagentSessionPath(filePath)) {
+			// 子代理产物先有文件；缺失/逃逸都不得接回（不升权、不写入）
+			return (await validateSubagentSessionFile(filePath)) !== undefined;
+		}
+		if (!isOrdinarySessionPath(filePath)) return false;
+		let pathEntryExists = false;
+		try {
+			lstatSync(filePath);
+			pathEntryExists = true;
+		} catch {
+			pathEntryExists = false;
+		}
+		// 文件/悬空链接存在：按真实路径校验（根外 symlink 不得借注册匹配放行）
+		if (pathEntryExists) return (await validateOrdinarySessionFile(filePath)) !== undefined;
+		if (entry.readOnly) return false;
+		if (!isUnflushedNewSession(entry.session.sessionManager)) return false;
+		return (await validateUnpersistedOrdinarySessionPlan(filePath)) !== undefined;
+	}
+
 	private async openSessionOnce(filePath: string): Promise<SessionMeta> {
+		// 未落盘会话（首条 user 消息之前只有计划路径）在 renderer reload 后必须还能接回同一实例。
+		// 但「注册匹配」不等于磁盘路径可信：命中后先做 isTrustedLiveSessionPath 判定，
+		// 不可信时落回下面的既有校验统一拒绝（受控根内 symlink 逃逸/已删文件不会被短接放行）。
+		const reattached = this.registeredSessionByFile(filePath);
+		if (reattached) {
+			if (await this.isTrustedLiveSessionPath(filePath, reattached)) {
+				log.info("session open reattached to live instance", reattached.session.sessionId, {
+					file: filePath,
+				});
+				return this.registry.toMeta(reattached);
+			}
+			// 受控根外的路径不属于本机制承诺面：文件已不存在时不能凭 registry 复活（只有存在文件才落回既有 open）
+			if (!isSubagentSessionPath(filePath) && !isOrdinarySessionPath(filePath) && !existsSync(filePath)) {
+				throw new Error("Invalid stored session path");
+			}
+		}
 		// 读 header 拿到 sessionId（只读文件头，不构造会话）后先查 registry：
 		// 子代理产物目录下的会话文件 = 只读检视（spec §8.1：防能力静默漂移/递归绕过）。
 		// 其运行 trace 由 runner 管理，检视页不可写，故不另建 recorder（避免覆盖运行中的 recorder）。
@@ -788,10 +921,10 @@ export class PiBackend {
 			.map((info) => sessionInfoToMeta(info, { cwdFallback: target, active: false }));
 	}
 
-	/** 跨全部项目目录枚举会话（项目管理页用，含活跃会话） */
+	/** 跨全部项目目录枚举会话（项目管理页用）：磁盘历史 ∪ 本进程经手过的会话（含未落盘的 empty/held） */
 	async listAllSessions(): Promise<SessionMeta[]> {
 		const activeIds = this.activeSessionIds();
-		return (await SessionManager.listAll())
+		const disk = (await SessionManager.listAll())
 			.filter((info) => info.cwd)
 			.map((info) =>
 				sessionInfoToMeta(info, {
@@ -801,6 +934,12 @@ export class PiBackend {
 					readOnly: isSubagentSessionPath(info.path) || undefined,
 				}),
 			);
+		// live meta 原样带 readOnly（不升权）：合并只负责去重，不重算权限
+		const live = this.registry
+			.list()
+			.map((entry) => this.registry.toMeta(entry))
+			.filter((meta) => meta.sessionFile);
+		return mergeLiveSessionMetas(disk, live);
 	}
 
 	private activeSessionIds(): Set<string> {
@@ -842,7 +981,8 @@ export class PiBackend {
 	 * 关会话（默认**用户主动关**）：agent 还在跑（含等审批）时拒绝——run 中途把后端会话 dispose 会直接掐断本轮，
 	 * 内存策略（自动卸载）靠这道兵底兼固（策略层已保护，这里是最后一道门）。
 	 * 自动卸载走同一个方法：行为与主动关基本一致，只是调用点分开（renderer 侧 `unloadSession`，intent="gc"），
-	 * 且 intent="gc" 时多一道频道订阅守卫（订阅场景下卸了就收不到唤醒——这是显式订阅语义，见 spec §6.2）。
+	 * 且 intent="gc" 时多一道频道订阅守卫（订阅场景下卸了就收不到唤醒——这是显式订阅语义，见 spec §6.2），
+	 * 并在任何 await 之前同步持有 SDK 空闲租约（关闭期间不得再被提交，见 `tryAcquireIdleLease` 分支）。
 	 */
 	async closeSession(sessionId: string, intent: SessionCloseIntent = "user"): Promise<{ closed: boolean }> {
 		const entry = this.registry.get(sessionId);
@@ -858,6 +998,22 @@ export class PiBackend {
 			log.info("closeSession ignored: channel subscriptions", sessionId);
 			return { closed: false };
 		}
+		if (intent === "gc") {
+			// 预检和处置合并不能锁住 SDK：shutdown 的 await 期间仍可能接收新输入。
+			// 同步领取空闲租约并持有到处置结束；预热或其他在途操作持有执行权时延后 GC。
+			const lease = entry.session.tryAcquireIdleLease();
+			if (!lease) {
+				log.info("closeSession ignored: session is not idle", sessionId);
+				return { closed: false };
+			}
+			try {
+				await this.disposeSession(entry);
+			} finally {
+				lease.release();
+			}
+			return { closed: true };
+		}
+		// 显式关（user/缺省，含 delete 路径）不取租约：用户意图优先，行为保持。
 		await this.disposeSession(entry);
 		return { closed: true };
 	}

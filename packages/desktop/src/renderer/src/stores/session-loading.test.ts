@@ -172,6 +172,22 @@ describe("session loader owns flights and data, not navigation", () => {
 		});
 		expect(useToastsStore.getState().toasts).toHaveLength(1);
 	});
+	it("active 未落盘会话重开：空历史照常落地，不当作失败（reload 后接回同一 runtime）", async () => {
+		// 首发失败 held 会话在 renderer reload 后的形态：目录里有 active 虚拟 path、磁盘无文件、0 消息。
+		// backend 按规范化 sessionFile 接回原实例后，这里不能把「空历史」当打开失败（否则用户仍看不到入口）。
+		const f = fixture("held-live");
+		pi.openSession.mockResolvedValue(meta("held-live"));
+		pi.getSessionMessages.mockResolvedValue([]);
+
+		const landed = await f.loader.ensureOpenSession("/held-live.jsonl");
+
+		expect(landed?.sessionId).toBe("held-live");
+		expect(f.landMeta).toHaveBeenCalledOnce();
+		expect(useToastsStore.getState().toasts).toEqual([]);
+		expect(useTranscriptStore.getState().bySession["held-live"]?.messages).toEqual([]);
+		expect(isHistoryReady("held-live")).toBe(true);
+		expect(pi.markSessionHistoryReady).toHaveBeenCalledOnce();
+	});
 	it("loadBundle:false also checks identity after synchronous landMeta invalidation", async () => {
 		const f = fixture("land-forget");
 		pi.openSession.mockResolvedValue(meta("land-forget"));

@@ -109,7 +109,10 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	const followUpQueue = transcript.followUpQueue;
-	/** 压缩进行中：禁发（SDK 拒绝压缩中的 prompt；提前拦截保住草稿，warn 提示代替报错丢文本） */
+	/**
+	 * 压缩进行中（会话事件态）：驱动占位符等**可见指示**。
+	 * 不再单独据此禁发——手动压缩/kind 未知才拦截，自动压缩允许排队，见 `send.compactionPolicy`。
+	 */
 	const compacting = transcript.compacting;
 	/** 输入框有内容：streaming 中按钮从停止切回发送（入队后文本清空自动切回停止） */
 	const hasContent =
@@ -194,9 +197,10 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 	const controlItems = control?.items ?? [];
 	/** 模式菜单一次性开关（不记默认；Esc 只关菜单不取消） */
 	const [modeMenuOpen, setModeMenuOpen] = useState(false);
+	// 压缩只阻塞「手动/未知」；自动压缩允许排队→菜单保持可用（与发送门禁同一规则，见 compaction-gate.ts）
 	const modeDisabledReason: MessageKey | null = readOnly
 		? "composer.modeDisabledReadOnly"
-		: compacting
+		: send.compactionPolicy.blocked
 			? "composer.modeDisabledCompacting"
 			: slashCommand
 				? "composer.modeDisabledSlash"
