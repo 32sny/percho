@@ -60,6 +60,8 @@ jobs:
       - name: Desktop tests (maxWorkers=2)
         run: npm exec -w @percho/desktop -- vitest run --maxWorkers=2
       - run: npm run build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
       - uses: actions/cache@v4
         with:
           path: |
@@ -121,6 +123,8 @@ jobs:
       - name: Test actual NSIS hooks and read-only PowerShell collector
         run: node scripts/check-windows-update-diagnostics.mjs
       - run: npm run build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
       - name: Compile production Windows installer (no publish)
         working-directory: packages/desktop
         run: npx electron-builder --win nsis --x64 --publish never
