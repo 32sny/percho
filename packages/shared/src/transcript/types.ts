@@ -179,7 +179,8 @@ export interface SessionTranscriptState {
 	unseenCompletion: boolean;
 	/** 运行中排队的 followUp 消息文本（SDK queue_update 事件整组替换；agent 完成自动投递后清空） */
 	followUpQueue: string[];
-	/** 上下文压缩进行中（compaction_start/end 驱动；期间禁发——SDK 拒绝压缩中的 prompt，前端提前拦截保草稿） */
+	/** 上下文压缩进行中（compaction_start/end 驱动）。是否拦发送由发送域的压缩策略判定：
+	 *  manual 压缩拒绝一切提交，auto 压缩在控制通道完整时允许 queue/steer/interrupt（前端提前拦截保草稿） */
 	compacting: boolean;
 	/** todo 工具维护的任务列表（跨 turn 存活；compaction 后由 loadTodos 从 backend 恢复） */
 	todos: TodoItem[];

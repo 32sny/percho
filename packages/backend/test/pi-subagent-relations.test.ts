@@ -136,6 +136,32 @@ describe("pi-subagents persisted relation resolver", () => {
 		expect(result.validatedFiles.has(backendSessionPathKey(file))).toBe(true);
 	});
 
+	it("accepts a nested relation claim only through the same real directory and initial-name checks", async () => {
+		const parent = await setup();
+		const agentId = "12345678-abcd-4321";
+		const id = "01a185ae-90f3-7273-8ab0-c49d3e766e14";
+		const file = await createChild(id, { name: `Explore#${agentId.slice(0, 8)}` });
+		const record = {
+			version: 1 as const,
+			origin: "runtime" as const,
+			parentSessionId: "parent",
+			parentSessionFile: parent.sessionFile!,
+			anchorEntryId: "root",
+			rootToolCallId: "outer",
+			toolCallId: "outer/1",
+			parentToolCallId: "outer",
+			toolName: "Agent" as const,
+			startedAt: 1735689601000,
+			finishedAt: 1735689603000,
+			claim: { agentId, subagentType: "Explore", description: "Nested task", status: "completed" },
+		};
+		const ok = await resolvePiSubagentRelations([], parent, {}, [{ entryId: "relation", record }]);
+		expect(ok.byEntryId.get("relation")?.sessionFile).toBe(file);
+		await writeFile(file, childText(id, { name: "Forged ordinary session" }));
+		const rejected = await resolvePiSubagentRelations([], parent, {}, [{ entryId: "relation", record }]);
+		expect(rejected.byEntryId.size).toBe(0);
+	});
+
 	it("does not read an oversized first message once the original identity has been read", async () => {
 		const parent = await setup();
 		const id = "01234567-abcd-4321";
@@ -207,7 +233,8 @@ describe("pi-subagents persisted relation resolver", () => {
 			receipt("a2", a, { description: "Latest task" }, 6000),
 		);
 		const result = await resolvePiSubagentRelations(entries, parent);
-		expect([...result.byEntryId.keys()]).toEqual(["result-a2", "result-b1"]);
+		// Map 按 entryId 查询；文件系统的目录枚举顺序没有跨平台保证。
+		expect([...result.byEntryId.keys()].sort()).toEqual(["result-a2", "result-b1"]);
 		expect(result.byEntryId.get("result-a2")).toMatchObject({
 			sessionFile: fa,
 			taskFirstLine: "Latest task",

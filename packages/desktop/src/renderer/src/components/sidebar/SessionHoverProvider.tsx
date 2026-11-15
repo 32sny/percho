@@ -42,9 +42,15 @@ export function collectChangedSessionIds<T extends { sessionId: string }>(
 	return changed;
 }
 
+type HoverTranscriptState = {
+	messages: unknown[];
+	agentActive: boolean;
+	streaming?: { subagentRuns?: readonly unknown[] } | null;
+};
+
 export function collectTranscriptInvalidationIds(
-	before: Record<string, { messages: unknown[]; agentActive: boolean } | undefined>,
-	after: Record<string, { messages: unknown[]; agentActive: boolean } | undefined>,
+	before: Record<string, HoverTranscriptState | undefined>,
+	after: Record<string, HoverTranscriptState | undefined>,
 ): string[] {
 	const changed: string[] = [];
 	for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
@@ -54,7 +60,10 @@ export function collectTranscriptInvalidationIds(
 		const historyChanged =
 			previous?.messages !== next?.messages &&
 			(!next?.agentActive || previous?.messages.length !== next.messages.length);
-		if (historyChanged || (previous?.agentActive && !next?.agentActive)) changed.push(id);
+		// Nested end events persist relations before the outer toolResult changes messages.
+		// Watch subagent snapshots, not text/token deltas, so an already-open empty card refreshes.
+		const relationsChanged = previous?.streaming?.subagentRuns !== next?.streaming?.subagentRuns;
+		if (historyChanged || relationsChanged || (previous?.agentActive && !next?.agentActive)) changed.push(id);
 	}
 	return changed;
 }

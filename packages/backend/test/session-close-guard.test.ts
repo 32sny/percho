@@ -45,6 +45,8 @@ function makeBackend(
 			dispose,
 			sessionFile,
 			sessionManager: { getSessionDir: () => root, getSessionFile: () => sessionFile },
+			// 生产路径直接调用（非可选）：stub 必须能给出空闲租约，否则 intent="gc" 一律拒绝
+			tryAcquireIdleLease: () => ({ release: () => {} }),
 		} as unknown as AgentSession,
 		unsubscribe: () => {},
 		cwd: root,

@@ -1,6 +1,6 @@
 # pi SDK 集成
 
-适用于 SDK 接入、升级和生命周期/上下文问题。以下反直觉行为按当前钉住的 **1.0.4** 整理，升级时必须重核，不当作永久 API 保证。生产适配边界见 [架构](architecture.md)。
+适用于 SDK 接入、升级和生命周期/上下文问题。以下反直觉行为按当前钉住的 **1.5.1** 整理（2026-11-15 随 P1 切换，固定上游 v0.6.8=`87476fa`；1.0.4 时代条目以 P1 重核为准，见 [升级计划§19](PLAN-sdk-1.5.1-upgrade.md)），升级时必须重核，不当作永久 API 保证。生产适配边界见 [架构](architecture.md)。
 
 ## 接入与资源所有权
 
@@ -22,6 +22,7 @@
 ## 持久化、上下文与回放
 
 - **`sessionFile` 是计划路径，不是已落盘证明**。SDK 可在创建时分配路径，首条会话消息后才写文件；判断磁盘存在性需实际检查。零消息会话可以在内存中合法改名，也可能不在磁盘 listSessions 结果里。
+- **1.5.1 本地适配补充（2026-11-14）**：backend `listAllSessions` 合并仍在 registry 的会话，避免首发失败的 held/recovering 项在 renderer 重载后失去入口。`openSession` 仅在精确匹配已注册实例且路径可信时重接同一 runtime：存在文件继续 realpath 校验；缺失文件仅允许普通、可写、从未 flush 的会话计划且父目录受控。判定用到当前 SDK `isPersisted()` / `flushed` / `_hasConversation()`，后两项为私有实现，升级必重核。回归见 `test/session-live-catalog.test.ts`，涵盖真实 symlink/junction 和已落盘后删除；此机制不是崩溃或进程重启恢复。
 - UI 完整历史从 SessionManager 当前分支读取，不能读已压缩的 `session.messages`；todo 等历史工具结果也不能从压缩上下文恢复。
 - compaction entry 可按分支顺序回放，但不保存触发原因和压缩后估值，历史 UI 不伪造这些字段。
 - 请求上下文由 SDK projection 重建，手写 `agent.state.messages` 不构成可靠修改；撤回中绕过 `navigateTree` 的路径需要 `session.refreshContext()`，保持公开投影一致。
@@ -38,9 +39,13 @@
 
 ## SDK 升级清单
 
+> 💡 **【核心结论 / 决策要点】** 本节是升级要点速查；完整的阶段门、分片测试、命令模板与切换判定见 [SDK 升级迁移与验收手册](SDK-UPGRADE-PLAYBOOK.md)（沉淀自 1.0.4 → 1.4.0 → 1.5.1 实践）。
+
 1. 核对依赖实际解析版本：`PI_PACKAGE_DIR` 可影响 SDK 导出的 VERSION，不能据它判断 node_modules 的版本；参考 `scripts/smoke-sdk-1.0.mts` 的 `import.meta.resolve` 检查。
 2. 阅读目标版本类型与实现，重点核对扩展生命周期、工具优先级、上下文/压缩形状和持久化时机；typecheck 通过不代表行为未变。
 3. 核对 `patches/`：当前 SDK 补丁提供 `retryLastFailedTurn`。升级先查官方是否已有等价入口，再评估补丁，不能悄悄丢掉能力。
 4. 手动重试复用 SDK 原恢复生命周期，不重发用户任务，也不只调用底层 continue；验证失败响应身份、busy 状态与 live/replay 的定位一致性。
 5. 跑 `smoke-sdk-1.0.mts`（升级后按实际版本更新口径）、全量 typecheck/test，以及相关专项冒烟；含真实网络/凭证的脚本先读文件头，不自动拿用户凭证执行。
 6. 构建并核对随包 SDK 资源、preload 与原生依赖，见 [构建发布](build-release.md)。
+
+> ✅ **【2026-11-15 更新：GC宿主租约竞态已确证修复（升级计划§19.14）】** 此前记录的竞态已定向复现并最小修复：`closeSession` 仅 `intent="gc"` 在首个 await 前同步 `tryAcquireIdleLease()`——无租约返回 `{closed:false}`，有则 `try { await disposeSession } finally { lease.release() }`；`user`/`delete` 路径不取租约、行为不变。独立PASS：目标65/65、backend1102/1102、desktop1412/1412、3套strict/typecheck/lint过。边界：`cacheWarming:"idle"` 预热 pending 期间 GC 会被延后（`closed:false`），off 后可 GC；30分钟空闲安全上限的持续重排仅源码静态确认，非长时实测；旧 G1/G6 候选与包不含此修复，后续候选需重冻结并经 GitHub fresh CI 取证。

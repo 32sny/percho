@@ -1,4 +1,6 @@
 import type {
+	ControlSendFailure,
+	ControlSendFailureOutcome,
 	ControlSnapshot,
 	ExtensionDialogRequest,
 	ImageInput,
@@ -10,6 +12,7 @@ import {
 	type ActivityEntry,
 	appendOptimisticUserMessage,
 	emptyTranscript,
+	projectControlSendFailure,
 	reduceEvent,
 	removeOptimisticUserMessage,
 	type SessionPhase,
@@ -68,6 +71,11 @@ interface TranscriptStore {
 	) => string;
 	/** 控制快照显式装载（会话 load/重载）：传 null 清空并解钉 runtime；传快照则整体替换（旧 runtime 直接作废） */
 	setControlSnapshot: (sessionId: string, snapshot: ControlSnapshot | null) => void;
+	/**
+	 * 控制投递失败投影（failed receipt / preflight_failed 响应共用）：返回已处理/旧状态/无法关联。
+	 * 校验 runtime/revision，同步快照、精确摘乐观气泡，并按稳定卡 id 产卡/更新卡。
+	 */
+	applyControlSendFailure: (sessionId: string, failure: ControlSendFailure) => ControlSendFailureOutcome;
 	/** 发送失败撤回乐观气泡（已认领的不动） */
 	removeOptimisticUser: (sessionId: string, id: string) => void;
 	/** 清除完成未读标记（切到该会话/回到 chat 视图时调用） */
@@ -336,6 +344,24 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
 				},
 			};
 		});
+	},
+	applyControlSendFailure: (sessionId, failure) => {
+		let outcome: ControlSendFailureOutcome = "unmatched";
+		set((state) => {
+			const current = state.bySession[sessionId];
+			const prev = current ?? emptyTranscript();
+			const projection = projectControlSendFailure(prev, failure);
+			outcome = projection.outcome;
+			// stale：不建 entry、不改任何状态（旧 runtime/revision 不得覆盖新状态）
+			if (projection.state === prev) return state;
+			return {
+				bySession: {
+					...state.bySession,
+					[sessionId]: { ...(current ?? { ...EMPTY_ENTRY }), ...projection.state },
+				},
+			};
+		});
+		return outcome;
 	},
 	setFollowUpQueue: (sessionId, queue) => {
 		set((state) => {

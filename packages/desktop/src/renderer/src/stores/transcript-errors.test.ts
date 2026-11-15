@@ -1,5 +1,12 @@
-import type { AgentSessionEvent, SessionMessage } from "@percho/shared";
-import { emptyTranscript, messagesToUIMessages, reduceEvent } from "@percho/shared";
+import type { AgentSessionEvent, ControlSnapshot, SessionMessage } from "@percho/shared";
+import {
+	appendOptimisticUserMessage,
+	controlSendErrorCardId,
+	emptyTranscript,
+	messagesToUIMessages,
+	projectControlSendFailure,
+	reduceEvent,
+} from "@percho/shared";
 import { describe, expect, it } from "vitest";
 
 type Event = AgentSessionEvent;
@@ -10,7 +17,7 @@ const turnEnd = (stopReason: string, errorMessage?: string): Event =>
 		toolResults: [],
 	}) as unknown as Event;
 const agentEnd = (willRetry: boolean): Event => ({ type: "agent_end", messages: [], willRetry });
-const settled: Event = { type: "agent_settled" };
+const settled: Event = { type: "agent_settled", aborted: false };
 const guard: Event = { type: "stream_guard_tripped", verdict: "trip_whitespace" } as unknown as Event;
 
 const errorCards = (s: ReturnType<typeof emptyTranscript>) => s.messages.filter((m) => m.kind === "error");
@@ -166,6 +173,248 @@ describe("reducer — stream_guard_tripped", () => {
 		// 后续 agent_end(willRetry=false) 不再落 LLM 卡
 		s = reduceEvent(s, agentEnd(false));
 		expect(errorCards(s)).toHaveLength(1);
+	});
+});
+
+describe("reducer — 控制投递失败投影（receipt / preflight_failed 共用）", () => {
+	const heldSnapshot = (over: Record<string, unknown> = {}): ControlSnapshot =>
+		({
+			runtimeId: "rt1",
+			revision: 5,
+			phase: "running",
+			autoDispatchPaused: true,
+			items: [
+				{
+					messageId: "m-1",
+					source: "user",
+					mode: "queue",
+					state: "held",
+					preview: "hi",
+					imageCount: 0,
+				},
+			],
+			...over,
+		}) as ControlSnapshot;
+
+	const failedReceipt = (
+		snapshot: ControlSnapshot,
+		error: string,
+		messageId = "m-1",
+		requestId = "req-1",
+	): Event =>
+		({
+			type: "message_control_update",
+			snapshot,
+			receipt: { messageId, requestId, status: "failed", error },
+		}) as unknown as Event;
+
+	const withPendingBubble = (controlMessageId = "m-1") =>
+		appendOptimisticUserMessage(emptyTranscript(), {
+			text: "hi",
+			images: [],
+			controlMessageId,
+		}).state;
+
+	const pendingUsers = (s: ReturnType<typeof emptyTranscript>) =>
+		s.messages.filter((m) => m.kind === "user" && m.pending === true);
+
+	it("响应投影：held 用户实体 + 具体错误 → 一张卡（稳定 ID，无 retry/compact）", () => {
+		const proj = projectControlSendFailure(withPendingBubble(), {
+			snapshot: heldSnapshot(),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+			now: 1234,
+		});
+		expect(proj.outcome).toBe("handled");
+		expect(pendingUsers(proj.state)).toHaveLength(0);
+		const cards = errorCards(proj.state);
+		expect(cards).toHaveLength(1);
+		const card = cards[0];
+		if (card?.kind !== "error") return;
+		expect(card.id).toBe(controlSendErrorCardId("rt1", "m-1", "req-1"));
+		expect(card.error).toMatchObject({
+			severity: "error",
+			source: "llm",
+			titleKey: "error.title.llmAuth",
+			detail: "401: Invalid API key",
+			timestamp: 1234,
+		});
+		// 复用原分类的 openSettings，但绝不带 retry/compact（恢复走 QueueBar）
+		expect(card.error.actions).toEqual(["openSettings", "copyDetail"]);
+		expect(card.error.retryTarget).toBeUndefined();
+		// 快照同步（held 实体保留，不改成 consumed/committed）
+		expect(proj.state.control).toEqual(heldSnapshot());
+		expect(proj.state.controlRuntimeId).toBe("rt1");
+	});
+
+	it("只移除对应 controlMessageId 的未认领气泡，其他 pending/已认领消息不动", () => {
+		let s = appendOptimisticUserMessage(emptyTranscript(), {
+			text: "other",
+			images: [],
+			controlMessageId: "other",
+		}).state;
+		s = appendOptimisticUserMessage(s, {
+			text: "claimed",
+			images: [],
+			controlMessageId: "m-1",
+		}).state;
+		s = {
+			...s,
+			messages: s.messages.map((m) =>
+				m.kind === "user" && m.controlMessageId === "m-1" ? { ...m, pending: false } : m,
+			),
+		};
+		s = appendOptimisticUserMessage(s, {
+			text: "hi",
+			images: [],
+			controlMessageId: "m-1",
+		}).state;
+		const proj = projectControlSendFailure(s, {
+			snapshot: heldSnapshot(),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+		});
+		expect(proj.outcome).toBe("handled");
+		const texts = proj.state.messages.filter((m) => m.kind === "user").map((m) => m.text);
+		expect(texts).toEqual(["other", "claimed"]);
+		expect(pendingUsers(proj.state)).toHaveLength(1);
+	});
+
+	it("回执先到：响应后到（更旧 revision）为 stale，不追加卡也不改状态", () => {
+		let s = reduceEvent(withPendingBubble(), failedReceipt(heldSnapshot(), "401: Invalid API key"));
+		expect(errorCards(s)).toHaveLength(1);
+		const proj = projectControlSendFailure(s, {
+			snapshot: heldSnapshot({ revision: 4 }),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+		});
+		expect(proj.outcome).toBe("stale");
+		expect(proj.state).toBe(s);
+		// 同回执重复（revision 前进）不追加第二张
+		s = reduceEvent(s, failedReceipt(heldSnapshot({ revision: 6 }), "401: Invalid API key"));
+		expect(errorCards(s)).toHaveLength(1);
+		expect(s.control?.revision).toBe(6);
+	});
+
+	it("响应先到产卡，随后 receipt 同 ID 不追加（双向去重）", () => {
+		const proj = projectControlSendFailure(withPendingBubble(), {
+			snapshot: heldSnapshot(),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "429: rate limit",
+		});
+		expect(proj.outcome).toBe("handled");
+		const s = reduceEvent(proj.state, failedReceipt(heldSnapshot({ revision: 6 }), "429: rate limit"));
+		const cards = errorCards(s);
+		expect(cards).toHaveLength(1);
+		expect(cards[0]?.id).toBe(controlSendErrorCardId("rt1", "m-1", "req-1"));
+	});
+
+	it("同 ID 后续具体错误更新原卡；泛化 Host paused 不覆盖具体原因", () => {
+		let s = reduceEvent(withPendingBubble(), failedReceipt(heldSnapshot(), "401: Invalid API key"));
+		s = reduceEvent(s, failedReceipt(heldSnapshot({ revision: 6 }), "Host paused: threshold"));
+		let cards = errorCards(s);
+		expect(cards).toHaveLength(1);
+		if (cards[0]?.kind !== "error") return;
+		expect(cards[0].error.detail).toBe("401: Invalid API key");
+		expect(cards[0].error.titleKey).toBe("error.title.llmAuth");
+		// 后续具体错误可以更新（detail 与分类都换新）
+		s = reduceEvent(s, failedReceipt(heldSnapshot({ revision: 7 }), "ETIMEDOUT while preparing"));
+		cards = errorCards(s);
+		expect(cards).toHaveLength(1);
+		if (cards[0]?.kind !== "error") return;
+		expect(cards[0].error.detail).toBe("ETIMEDOUT while preparing");
+		expect(cards[0].error.titleKey).toBe("error.title.llmNetwork");
+		expect(cards[0].id).toBe(controlSendErrorCardId("rt1", "m-1", "req-1"));
+	});
+
+	it("兜底 Host paused 先落卡，后续具体错误覆盖兜底", () => {
+		let s = reduceEvent(withPendingBubble(), failedReceipt(heldSnapshot(), "Host paused: threshold"));
+		let cards = errorCards(s);
+		expect(cards).toHaveLength(1);
+		if (cards[0]?.kind !== "error") return;
+		expect(cards[0].error.titleKey).toBe("error.title.sendFailed");
+		s = reduceEvent(s, failedReceipt(heldSnapshot({ revision: 6 }), "401: Invalid API key"));
+		cards = errorCards(s);
+		expect(cards).toHaveLength(1);
+		if (cards[0]?.kind !== "error") return;
+		expect(cards[0].error.detail).toBe("401: Invalid API key");
+		expect(cards[0].error.titleKey).toBe("error.title.llmAuth");
+	});
+
+	it.each(["Message preparation was cancelled", "Host paused: awaiting-user"])(
+		"精确文案 %s 不产卡，但仍同步快照并移除乐观气泡",
+		(error) => {
+			const s = reduceEvent(withPendingBubble(), failedReceipt(heldSnapshot({ revision: 8 }), error));
+			expect(errorCards(s)).toHaveLength(0);
+			expect(pendingUsers(s)).toHaveLength(0);
+			expect(s.control?.revision).toBe(8);
+			expect(s.controlRuntimeId).toBe("rt1");
+		},
+	);
+
+	it("含 cancelled 字样但非精确取消文案仍产卡（不宽匹配）", () => {
+		const message = "Message preparation was cancelled: provider returned 500";
+		const s = reduceEvent(withPendingBubble(), failedReceipt(heldSnapshot(), message));
+		const cards = errorCards(s);
+		expect(cards).toHaveLength(1);
+		if (cards[0]?.kind !== "error") return;
+		expect(cards[0].error.detail).toBe(message);
+	});
+
+	it("扩展来源的实体不产卡（unmatched），不把扩展失败报成用户发送失败", () => {
+		const proj = projectControlSendFailure(withPendingBubble("ext-1"), {
+			snapshot: heldSnapshot({
+				items: [
+					{
+						messageId: "ext-1",
+						source: "extension",
+						mode: "queue",
+						state: "held",
+						preview: "ext",
+						imageCount: 0,
+					},
+				],
+			}),
+			messageId: "ext-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+		});
+		expect(proj.outcome).toBe("unmatched");
+		expect(errorCards(proj.state)).toHaveLength(0);
+		expect(proj.state.control?.revision).toBe(5);
+	});
+
+	it("快照无对应 held 用户实体 → unmatched，无卡但同步快照并摘精确气泡", () => {
+		const proj = projectControlSendFailure(withPendingBubble(), {
+			snapshot: heldSnapshot({ revision: 9, items: [] }),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+		});
+		expect(proj.outcome).toBe("unmatched");
+		expect(errorCards(proj.state)).toHaveLength(0);
+		expect(pendingUsers(proj.state)).toHaveLength(0);
+		expect(proj.state.control?.revision).toBe(9);
+	});
+
+	it("旧 runtime 快照 → stale：不覆盖已钉 runtime、不动消息", () => {
+		const pinned = {
+			...withPendingBubble(),
+			control: heldSnapshot({ runtimeId: "rt2", revision: 1 }),
+			controlRuntimeId: "rt2",
+		};
+		const proj = projectControlSendFailure(pinned, {
+			snapshot: heldSnapshot({ runtimeId: "rt1", revision: 9 }),
+			messageId: "m-1",
+			requestId: "req-1",
+			error: "401: Invalid API key",
+		});
+		expect(proj.outcome).toBe("stale");
+		expect(proj.state).toBe(pinned);
 	});
 });
 

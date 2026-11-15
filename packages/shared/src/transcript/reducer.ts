@@ -4,6 +4,7 @@ import { parseExpandedSkillInvocation } from "../skill-invocation";
 import { extractSubagentRuns } from "../subagent";
 import { applySubagentNotification, parseSubagentNotification } from "../subagent-notification";
 import { extractTodos, TODO_TOOL_NAME } from "../todo";
+import { projectControlSendFailure } from "./control-errors";
 import {
 	emptyStreaming,
 	extractEditPatch,
@@ -645,6 +646,16 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 			return final.pendingLlmError ? commitLlmErrorCard(final, final.pendingLlmError) : final;
 		}
 		case "message_control_update": {
+			// 失败回执：与 preflight_failed 响应共用同一纯投影（稳定卡身份、精确摘气泡、快照同步）
+			const receipt = event.receipt;
+			if (receipt?.status === "failed") {
+				return projectControlSendFailure(state, {
+					snapshot: event.snapshot,
+					messageId: receipt.messageId,
+					requestId: receipt.requestId,
+					error: receipt.error,
+				}).state;
+			}
 			// 快照投影：runtimeId 已钉住时旧实例事件一律拒收；同实例 revision 单调（迟到的旧快照不覆盖）
 			const snap = event.snapshot;
 			if (state.controlRuntimeId && snap.runtimeId !== state.controlRuntimeId) return state;
@@ -654,22 +665,11 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 				snap.revision < state.control.revision
 			)
 				return state;
-			let next: SessionTranscriptState = {
+			return {
 				...state,
 				control: snap,
 				controlRuntimeId: snap.runtimeId,
 			};
-			// 提交失败回执：摘掉对应乐观气泡（错误反馈由发送路径给出，不留假消息）
-			const receipt = event.receipt;
-			if (receipt?.status === "failed") {
-				next = {
-					...next,
-					messages: next.messages.filter(
-						(m) => !(m.kind === "user" && m.pending === true && m.controlMessageId === receipt.messageId),
-					),
-				};
-			}
-			return next;
 		}
 		case "queue_update":
 			// SDK 整组下发（steering 桌面端不用）；投递/清空都由 SDK 侧触发后推新数组

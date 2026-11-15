@@ -221,6 +221,8 @@ describe("PiBackend 接线（stub session 注入私有 registry，同 session-cl
 				dispose: () => {},
 				sessionFile: join(root, `${sessionId}.jsonl`),
 				sessionManager: { getSessionDir: () => root, getSessionFile: () => join(root, `${sessionId}.jsonl`) },
+				// 生产路径直接调用（非可选）：GC 需要空闲租约，stub 给出可取可用的一枚
+				tryAcquireIdleLease: () => ({ release: () => {} }),
 			} as unknown as AgentSession,
 			unsubscribe: () => {},
 			cwd: root,

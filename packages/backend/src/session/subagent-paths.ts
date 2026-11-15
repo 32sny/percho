@@ -1,5 +1,5 @@
 import { realpath, stat } from "node:fs/promises";
-import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isSessionPathDescendant } from "./session-paths";
 
@@ -66,4 +66,32 @@ export function validateOrdinarySessionFile(
 	return validateSessionFile(filePath, ordinarySessionsRoot(agentDir), (file) =>
 		isOrdinarySessionPath(file, agentDir),
 	);
+}
+
+/**
+ * 未落盘计划路径的安全校验：文件还不存在时，**父目录的真实路径**仍必须落在普通会话根内。
+ *
+ * 只负责「这条计划路径落在受控根内、且父目录没有被 symlink/junction 换出根外」；
+ * 文件是否真的未落盘由调用方按 SDK 持久化事实判定（不能仅凭不存在反推）。
+ */
+export async function validateUnpersistedOrdinarySessionPlan(
+	filePath: string,
+	agentDir?: string,
+): Promise<string | undefined> {
+	const rootPath = ordinarySessionsRoot(agentDir);
+	if (
+		!filePath ||
+		!isAbsolute(filePath) ||
+		extname(filePath).toLowerCase() !== ".jsonl" ||
+		!isOrdinarySessionPath(filePath, agentDir)
+	)
+		return undefined;
+	try {
+		const [realRoot, realParent] = await Promise.all([realpath(rootPath), realpath(dirname(filePath))]);
+		const rel = relative(realRoot, realParent);
+		if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
+		return resolve(filePath);
+	} catch {
+		return undefined;
+	}
 }

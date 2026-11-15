@@ -1,3 +1,4 @@
+import { emptyTranscript, reduceEvent } from "@percho/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // 只运行真实 UI 状态机；当前项目没有 DOM 测试运行器，不以此代替 Electron 焦点/视觉验收。
@@ -34,6 +35,42 @@ describe("侧栏悬停缓存失效收集", () => {
 		expect(
 			collectChangedSessionIds([a, b], [{ sessionId: "a", name: "new" }, { ...b }, { sessionId: "c" }]),
 		).toEqual(["a", "b", "c"]);
+	});
+
+	it("真实 reducer 的嵌套 Agent 完成会更新快照并触发失效", () => {
+		const before = reduceEvent(emptyTranscript(), { type: "agent_start" });
+		const after = reduceEvent(before, {
+			type: "tool_execution_end",
+			toolCallId: "codemode/1",
+			parentToolCallId: "codemode",
+			toolName: "Agent",
+			isError: false,
+			result: {
+				content: [],
+				details: {
+					subagentType: "Explore",
+					description: "inspect",
+					status: "completed",
+					agentId: "12345678-abcd",
+				},
+			},
+		});
+		expect(after.messages).toBe(before.messages);
+		expect(after.agentActive).toBe(true);
+		expect(after.streaming?.subagentRuns).not.toBe(before.streaming?.subagentRuns);
+		expect(collectTranscriptInvalidationIds({ parent: before }, { parent: after })).toEqual(["parent"]);
+	});
+
+	it("嵌套完成的子代理快照刷新空关系缓存，不因普通文本流刷新", () => {
+		const messages: unknown[] = [];
+		const runs: unknown[] = [];
+		const before = { parent: { messages, agentActive: true, streaming: { subagentRuns: runs } } };
+		const tokens = { parent: { ...before.parent, streaming: { subagentRuns: runs, text: "more tokens" } } };
+		expect(collectTranscriptInvalidationIds(before, tokens)).toEqual([]);
+		const completed = {
+			parent: { ...before.parent, streaming: { subagentRuns: [{ agent: "scout", status: "done" }] } },
+		};
+		expect(collectTranscriptInvalidationIds(before, completed)).toEqual(["parent"]);
 	});
 
 	it("transcript 遍历所有已加载项，历史变化/结束会传 ID，streaming token 不传", () => {

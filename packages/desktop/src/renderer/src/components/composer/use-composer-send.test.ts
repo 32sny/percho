@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
 	activeSessionId: "s1",
 	// 托管控制通道：control=false 时 getPi 不暴露这些方法（走 legacy prompt 路径）
 	control: false,
+	// 控制 API 不完整（模拟旧 host 只桥了部分方法）：列出的方法不暴露
+	controlOmit: [] as string[],
 	submitMessage: vi.fn(),
 	getMessageControl: vi.fn(),
 	stopMessageControl: vi.fn(),
@@ -45,13 +47,15 @@ vi.mock("../../api", () => ({
 		clearQueue: mocks.clearQueue,
 		abort: mocks.abort,
 		...(mocks.control
-			? {
-					submitMessage: mocks.submitMessage,
-					getMessageControl: mocks.getMessageControl,
-					stopMessageControl: mocks.stopMessageControl,
-					changePendingMessage: mocks.changePendingMessage,
-					recoverPendingMessage: mocks.recoverPendingMessage,
-				}
+			? Object.fromEntries(
+					Object.entries({
+						submitMessage: mocks.submitMessage,
+						getMessageControl: mocks.getMessageControl,
+						stopMessageControl: mocks.stopMessageControl,
+						changePendingMessage: mocks.changePendingMessage,
+						recoverPendingMessage: mocks.recoverPendingMessage,
+					}).filter(([key]) => !mocks.controlOmit.includes(key)),
+				)
 			: {}),
 	}),
 }));
@@ -62,7 +66,7 @@ vi.mock("../../stores/sessions", () => ({
 vi.mock("../../stores/settings", () => ({ useSettingsStore: { getState: () => ({ openWith: vi.fn() }) } }));
 vi.mock("../../stores/toasts", () => ({ pushToast: mocks.toast }));
 
-import { buildChatRows, isAgentWorking, type PromptAck } from "@percho/shared";
+import { buildChatRows, controlSendErrorCardId, isAgentWorking, type PromptAck } from "@percho/shared";
 import { useDraftStore } from "../../stores/drafts";
 import { useTranscriptStore } from "../../stores/transcript";
 import { useComposerSend } from "./use-composer-send";
@@ -128,6 +132,7 @@ describe("useComposerSend prompt acknowledgement", () => {
 		useTranscriptStore.setState({ bySession: {} });
 		useDraftStore.setState({ bySession: {} });
 		mocks.control = false;
+		mocks.controlOmit.length = 0;
 		mocks.states.length = 0;
 		mocks.prompt.mockReset().mockResolvedValue({ disposition: "handled" });
 		mocks.toast.mockReset();
@@ -436,6 +441,7 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 		useDraftStore.setState({ bySession: {} });
 		mocks.states.length = 0;
 		mocks.control = true;
+		mocks.controlOmit.length = 0;
 		mocks.prompt.mockReset();
 		mocks.toast.mockReset();
 		mocks.submitMessage
@@ -904,5 +910,438 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 		expect(okResult).toBe(false);
 		expect(mocks.recoverPendingMessage).not.toHaveBeenCalled();
 		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.recoverDraftConflict");
+	});
+});
+
+describe("useComposerSend 压缩语义（manual 保守拒绝 / auto 放行三态）", () => {
+	const snap = (over: Record<string, unknown> = {}) => ({
+		runtimeId: "rt1",
+		revision: 7,
+		phase: "idle" as const,
+		autoDispatchPaused: false,
+		items: [],
+		...over,
+	});
+	const ok = <T>(value: T) => ({ ok: true as const, value });
+	const fail = (code: string, message = code) => ({
+		ok: false as const,
+		error: { code, message },
+	});
+	const draftOf = (text: string) => ({
+		text,
+		images: [],
+		slashCommand: null,
+		attachments: [],
+		quotes: [],
+	});
+
+	beforeEach(() => {
+		useTranscriptStore.setState({ bySession: {} });
+		useDraftStore.setState({ bySession: {} });
+		mocks.states.length = 0;
+		mocks.control = true;
+		mocks.controlOmit.length = 0;
+		mocks.prompt.mockReset();
+		mocks.toast.mockReset();
+		mocks.submitMessage
+			.mockReset()
+			.mockResolvedValue(ok({ requestId: "x", messageId: "x", disposition: "queued" }));
+		mocks.getMessageControl.mockReset().mockResolvedValue(ok(snap()));
+		mocks.stopMessageControl
+			.mockReset()
+			.mockResolvedValue(ok({ operationId: "op1", snapshot: snap({ phase: "interrupting" }) }));
+		mocks.changePendingMessage.mockReset().mockResolvedValue(ok({ snapshot: snap({ revision: 8 }) }));
+		mocks.recoverPendingMessage.mockReset();
+	});
+
+	it.each([
+		["queue", false],
+		["steer", false],
+		["interrupt", false],
+		["queue", true],
+		["steer", true],
+		["interrupt", true],
+	] as const)(
+		"manual 压缩中 %s（渲染侧 compacting=%s）一律拒绝，草稿无损",
+		async (mode, optionCompacting) => {
+			useTranscriptStore
+				.getState()
+				.setControlSnapshot("s1", snap({ phase: "compacting", compactionKind: "manual" }));
+			const draft = draftOf("手动压缩中的草稿");
+			useDraftStore.getState().updateDraft("s1", () => draft);
+			const options = makeOptions({
+				text: "手动压缩中的草稿",
+				slashCommand: null,
+				compacting: optionCompacting,
+			});
+			await useComposerSend(options).handleSend(mode);
+			expect(mocks.submitMessage).not.toHaveBeenCalled();
+			expect(mocks.prompt).not.toHaveBeenCalled();
+			expect(options.setText).not.toHaveBeenCalled();
+			expect(useDraftStore.getState().bySession.s1).toEqual(draft);
+			expect(mocks.states[2]?.at(-1)).toEqual({ message: "composer.compacting", tone: "warn" });
+		},
+	);
+
+	it.each(["queue", "steer", "interrupt"] as const)(
+		"auto 压缩中 %s 允许提交（API 完整 + 快照 compactionKind=auto），受理后清草稿",
+		async (mode) => {
+			useTranscriptStore.getState().applyEvent("s1", { type: "agent_start" } as never);
+			useTranscriptStore
+				.getState()
+				.setControlSnapshot("s1", snap({ phase: "compacting", compactionKind: "auto" }));
+			useDraftStore.getState().updateDraft("s1", () => draftOf("自动压缩中的草稿"));
+			const options = makeOptions({
+				text: "自动压缩中的草稿",
+				slashCommand: null,
+				compacting: true,
+				agentActive: true,
+			});
+			await useComposerSend(options).handleSend(mode);
+			expect(mocks.submitMessage).toHaveBeenCalledTimes(1);
+			const req = mocks.submitMessage.mock.calls[0]![0];
+			expect(req.mode).toBe(mode);
+			expect(req.payload.text).toBe("自动压缩中的草稿");
+			expect(useDraftStore.getState().bySession.s1).toBeUndefined();
+			// 放行不等于静默成功：没有 warn 反馈，但仍保留可见压缩指示由 UI 呈现
+			expect(mocks.states[2]?.at(-1)).toBeNull();
+		},
+	);
+
+	it("auto 压缩中被后端拒绝时草稿原样保留（不因放行而预先清理）", async () => {
+		useTranscriptStore
+			.getState()
+			.setControlSnapshot("s1", snap({ phase: "compacting", compactionKind: "auto" }));
+		useDraftStore.getState().updateDraft("s1", () => draftOf("被拒的草稿"));
+		mocks.submitMessage.mockResolvedValue(fail("queue_full"));
+		await useComposerSend(
+			makeOptions({ text: "被拒的草稿", slashCommand: null, compacting: true }),
+		).handleSend();
+		expect(mocks.submitMessage).toHaveBeenCalledTimes(1);
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "被拒的草稿" });
+	});
+
+	it.each([
+		["compactionKind 缺失", () => {}],
+		[
+			"控制 API 不完整（缺 stop/recover）",
+			() => {
+				mocks.controlOmit = ["stopMessageControl", "recoverPendingMessage"];
+			},
+		],
+	] as const)("auto 压缩但 %s：保守拒绝，不猜 auto", async (_label, arrange) => {
+		arrange();
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "compacting" }));
+		useDraftStore.getState().updateDraft("s1", () => draftOf("保守拒绝的草稿"));
+		const options = makeOptions({ text: "保守拒绝的草稿", slashCommand: null, compacting: true });
+		await useComposerSend(options).handleSend();
+		expect(mocks.submitMessage).not.toHaveBeenCalled();
+		expect(mocks.prompt).not.toHaveBeenCalled();
+		expect(options.setText).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "保守拒绝的草稿" });
+	});
+
+	it("legacy（无控制 API）压缩中仍拒绝，不落到 prompt", async () => {
+		mocks.control = false;
+		// 真实 legacy 场景：事件态确实在压缩，但宿主没有控制通道可证明是 auto
+		useTranscriptStore.getState().applyEvent("s1", {
+			type: "compaction_start",
+			reason: "auto",
+		} as never);
+		useDraftStore.getState().updateDraft("s1", () => draftOf("旧宿主的草稿"));
+		const options = makeOptions({ text: "旧宿主的草稿", slashCommand: null, compacting: true });
+		await useComposerSend(options).handleSend();
+		expect(mocks.prompt).not.toHaveBeenCalled();
+		expect(options.setText).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "旧宿主的草稿" });
+	});
+
+	it("渲染闭包还认为压缩中、但发送时快照已 idle：照常发送（不卡过期状态）", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		const options = makeOptions({ text: "压缩已结束", slashCommand: null, compacting: true });
+		await useComposerSend(options).handleSend();
+		expect(mocks.submitMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it("渲染闭包未被重渲染（compacting=false）、store 事件态压缩中且无快照：保守拒绝", async () => {
+		useTranscriptStore.getState().applyEvent("s1", {
+			type: "compaction_start",
+			reason: "auto",
+		} as never);
+		useDraftStore.getState().updateDraft("s1", () => draftOf("事件态压缩中"));
+		const options = makeOptions({ text: "事件态压缩中", slashCommand: null, compacting: false });
+		await useComposerSend(options).handleSend();
+		expect(mocks.submitMessage).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "事件态压缩中" });
+	});
+});
+
+describe("useComposerSend 投递失败反馈（receipt / preflight_failed 共用投影）", () => {
+	const controlSnapshot = (over: Record<string, unknown> = {}) => ({
+		runtimeId: "rt1",
+		revision: 5,
+		phase: "running" as const,
+		autoDispatchPaused: false,
+		items: [],
+		...over,
+	});
+	const heldItem = (messageId: string) => ({
+		messageId,
+		source: "user" as const,
+		mode: "queue" as const,
+		state: "held" as const,
+		preview: "hi",
+		imageCount: 0,
+	});
+	const ok = <T>(value: T) => ({ ok: true as const, value });
+	const failWithSnapshot = (code: string, message: string, snapshot: unknown) => ({
+		ok: false as const,
+		error: { code, message, snapshot },
+	});
+	const draftOf = (text: string) => ({
+		text,
+		images: [],
+		slashCommand: null,
+		attachments: [],
+		quotes: [],
+	});
+	const cards = () =>
+		(useTranscriptStore.getState().bySession.s1?.messages ?? []).filter((m) => m.kind === "error");
+
+	beforeEach(() => {
+		useTranscriptStore.setState({ bySession: {} });
+		useDraftStore.setState({ bySession: {} });
+		mocks.states.length = 0;
+		mocks.control = true;
+		mocks.controlOmit.length = 0;
+		mocks.activeSessionId = "s1";
+		mocks.prompt.mockReset();
+		mocks.toast.mockReset();
+		mocks.submitMessage.mockReset();
+		mocks.getMessageControl.mockReset().mockResolvedValue(ok(controlSnapshot()));
+		mocks.changePendingMessage.mockReset().mockResolvedValue(ok({ snapshot: controlSnapshot() }));
+		mocks.recoverPendingMessage.mockReset();
+	});
+
+	it("preflight_failed 响应先到：一张卡（无 retry/compact）、摘精确气泡、不设内联、草稿保留", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", controlSnapshot({ phase: "idle" }) as never);
+		const draft = draftOf("会失败的草稿");
+		useDraftStore.getState().updateDraft("s1", () => draft);
+		let submittedId = "";
+		mocks.submitMessage.mockImplementation(async (req: { requestId: string }) => {
+			submittedId = req.requestId;
+			return failWithSnapshot(
+				"preflight_failed",
+				"401: Invalid API key",
+				controlSnapshot({ revision: 6, items: [heldItem(req.requestId)] }),
+			);
+		});
+		const options = makeOptions({ text: "会失败的草稿", slashCommand: null });
+		await useComposerSend(options).handleSend();
+		const entry = useTranscriptStore.getState().bySession.s1;
+		expect(entry?.messages.filter((m) => m.kind === "user" && m.pending)).toHaveLength(0);
+		const found = cards();
+		expect(found).toHaveLength(1);
+		const card = found[0];
+		if (card?.kind !== "error") return;
+		expect(card.id).toBe(controlSendErrorCardId("rt1", submittedId, submittedId));
+		expect(card.error).toMatchObject({
+			source: "llm",
+			titleKey: "error.title.llmAuth",
+			detail: "401: Invalid API key",
+		});
+		expect(card.error.actions).toEqual(["openSettings", "copyDetail"]);
+		expect(card.error.actions).not.toContain("retry");
+		expect(card.error.actions).not.toContain("compact");
+		// 已处理：不再走内联错误条
+		expect(mocks.states[1]?.at(-1)).toBeNull();
+		expect(useDraftStore.getState().bySession.s1).toMatchObject(draft);
+		expect(options.setText).not.toHaveBeenCalled();
+	});
+
+	it("failed 回执先到、preflight_failed 响应后到（更旧 revision）：只一张卡、无内联重复、保留当前快照不刷新", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", controlSnapshot({ phase: "idle" }) as never);
+		let submittedId = "";
+		const gate = deferred<ReturnType<typeof failWithSnapshot>>();
+		mocks.submitMessage.mockImplementation((req: { requestId: string }) => {
+			submittedId = req.requestId;
+			return gate.promise;
+		});
+		const pending = useComposerSend(makeOptions({ text: "顺序", slashCommand: null })).handleSend();
+		await vi.waitFor(() => expect(mocks.submitMessage).toHaveBeenCalledTimes(1));
+		useTranscriptStore.getState().applyEvent("s1", {
+			type: "message_control_update",
+			snapshot: controlSnapshot({ revision: 6, items: [heldItem(submittedId)] }),
+			receipt: {
+				messageId: submittedId,
+				requestId: submittedId,
+				status: "failed",
+				error: "401: Invalid API key",
+			},
+		} as never);
+		expect(cards()).toHaveLength(1);
+		gate.resolve(
+			failWithSnapshot(
+				"preflight_failed",
+				"401: Invalid API key",
+				controlSnapshot({ revision: 5, items: [heldItem(submittedId)] }),
+			),
+		);
+		await pending;
+		expect(cards()).toHaveLength(1);
+		expect(mocks.states[1]?.at(-1)).toBeNull();
+		// stale 只忽略：当前快照（revision 6）已是权威，不刷新也不回钉旧快照
+		expect(mocks.getMessageControl).not.toHaveBeenCalled();
+		expect(useTranscriptStore.getState().bySession.s1?.control?.revision).toBe(6);
+	});
+
+	it.each([
+		{
+			label: "刷新在途时同 runtime 事件已推进到 rt1:7",
+			advance: () => {
+				useTranscriptStore.getState().applyEvent("s1", {
+					type: "message_control_update",
+					snapshot: controlSnapshot({ revision: 7 }),
+				} as never);
+			},
+			expected: { runtimeId: "rt1", revision: 7 },
+		},
+		{
+			label: "刷新在途时已显式 load 新 runtime rt2:1",
+			advance: () => {
+				useTranscriptStore
+					.getState()
+					.setControlSnapshot("s1", controlSnapshot({ runtimeId: "rt2", revision: 1 }) as never);
+			},
+			expected: { runtimeId: "rt2", revision: 1 },
+		},
+	])(
+		"preflight_failed 迟到响应判 stale：不发起刷新，迟到刷新不得覆盖新权威（$label）",
+		async ({ advance, expected }) => {
+			useTranscriptStore.getState().setControlSnapshot("s1", controlSnapshot({ phase: "idle" }) as never);
+			let submittedId = "";
+			const submitGate = deferred<ReturnType<typeof failWithSnapshot>>();
+			mocks.submitMessage.mockImplementation((req: { requestId: string }) => {
+				submittedId = req.requestId;
+				return submitGate.promise;
+			});
+			const pending = useComposerSend(makeOptions({ text: "迟到", slashCommand: null })).handleSend();
+			await vi.waitFor(() => expect(mocks.submitMessage).toHaveBeenCalledTimes(1));
+			// 当前权威：failed 回执已把快照推进到 rt1:6 并产卡
+			useTranscriptStore.getState().applyEvent("s1", {
+				type: "message_control_update",
+				snapshot: controlSnapshot({ revision: 6, items: [heldItem(submittedId)] }),
+				receipt: {
+					messageId: submittedId,
+					requestId: submittedId,
+					status: "failed",
+					error: "401: Invalid API key",
+				},
+			} as never);
+			expect(cards()).toHaveLength(1);
+			expect(useTranscriptStore.getState().bySession.s1?.control?.revision).toBe(6);
+			// 刷新若被错误发起会挂在这里：迟到的 rt1:6 响应由本用例决定何时放行
+			const lateRefresh = deferred<{ ok: true; value: unknown }>();
+			mocks.getMessageControl.mockImplementation(() => lateRefresh.promise);
+			submitGate.resolve(
+				failWithSnapshot(
+					"preflight_failed",
+					"401: Invalid API key",
+					controlSnapshot({ revision: 5, items: [heldItem(submittedId)] }),
+				),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			// 刷新仍在途：新权威先到（事件推进 / 显式 load 新 runtime）
+			advance();
+			// 放行迟到的旧 rt1:6 响应
+			lateRefresh.resolve(ok(controlSnapshot({ revision: 6 })));
+			await pending;
+			// 旧响应被静默忽略：没有新增刷新，也没有把旧 rt1:6 钉回去
+			expect(mocks.getMessageControl).not.toHaveBeenCalled();
+			expect(useTranscriptStore.getState().bySession.s1?.control).toMatchObject(expected);
+			expect(cards()).toHaveLength(1);
+			if (expected.runtimeId === "rt2") {
+				// 新 runtime 未被旧快照解钉：后续 rt2 事件照常接收
+				useTranscriptStore.getState().applyEvent("s1", {
+					type: "message_control_update",
+					snapshot: controlSnapshot({ runtimeId: "rt2", revision: 2 }),
+				} as never);
+				expect(useTranscriptStore.getState().bySession.s1?.control).toMatchObject({
+					runtimeId: "rt2",
+					revision: 2,
+				});
+			}
+		},
+	);
+
+	it("queued ACK 后释放同步锁并清草稿；随后失败回执产卡且不覆盖等待期间的新编辑", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", controlSnapshot({ phase: "idle" }) as never);
+		useDraftStore.getState().updateDraft("s1", () => draftOf("第一句"));
+		mocks.submitMessage.mockResolvedValue(ok({ requestId: "r1", messageId: "r1", disposition: "queued" }));
+		const options = makeOptions({ text: "第一句", slashCommand: null });
+		const send = useComposerSend(options);
+		await send.handleSend();
+		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
+		expect(options.setText).toHaveBeenCalledWith("");
+		// ACK 已释放锁：新内容可立即再提交
+		await send.handleSend();
+		expect(mocks.submitMessage).toHaveBeenCalledTimes(2);
+		const [firstId, secondId] = mocks.submitMessage.mock.calls.map(
+			(c) => (c[0] as { requestId: string }).requestId,
+		);
+		expect(secondId).not.toBe(firstId);
+		// 等待期间用户新编辑
+		useDraftStore.getState().updateDraft("s1", () => draftOf("第二句"));
+		useTranscriptStore.getState().applyEvent("s1", {
+			type: "message_control_update",
+			snapshot: controlSnapshot({ revision: 6, items: [heldItem(firstId as string)] }),
+			receipt: {
+				messageId: firstId,
+				requestId: firstId,
+				status: "failed",
+				error: "Host paused: threshold",
+			},
+		} as never);
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "第二句" });
+		expect(cards()).toHaveLength(1);
+		// 精确删除：只摘第一条请求的气泡，第二条请求的仍等 message_start
+		const pendingUsers = useTranscriptStore
+			.getState()
+			.bySession.s1?.messages.filter((m) => m.kind === "user" && m.pending);
+		expect(pendingUsers).toHaveLength(1);
+		expect(pendingUsers?.[0]).toMatchObject({ controlMessageId: secondId });
+	});
+
+	it("preflight_failed 精确取消文案：不产卡、不内联，仍摘气泡并保草稿", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", controlSnapshot({ phase: "idle" }) as never);
+		useDraftStore.getState().updateDraft("s1", () => draftOf("取消的草稿"));
+		mocks.submitMessage.mockImplementation(async (req: { requestId: string }) =>
+			failWithSnapshot(
+				"preflight_failed",
+				"Message preparation was cancelled",
+				controlSnapshot({ revision: 6, items: [heldItem(req.requestId)] }),
+			),
+		);
+		const options = makeOptions({ text: "取消的草稿", slashCommand: null });
+		await useComposerSend(options).handleSend();
+		expect(cards()).toHaveLength(0);
+		expect(mocks.states[1]?.at(-1)).toBeNull();
+		expect(
+			useTranscriptStore.getState().bySession.s1?.messages.filter((m) => m.kind === "user" && m.pending),
+		).toHaveLength(0);
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "取消的草稿" });
+		expect(useTranscriptStore.getState().bySession.s1?.control?.revision).toBe(6);
+	});
+
+	it("preflight_failed 无法关联（快照无 held 实体）：无卡，保留现有内联兜底", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", controlSnapshot({ phase: "idle" }) as never);
+		mocks.submitMessage.mockResolvedValue(
+			failWithSnapshot("preflight_failed", "No such entity", controlSnapshot({ revision: 6, items: [] })),
+		);
+		await useComposerSend(makeOptions({ text: "无法关联", slashCommand: null })).handleSend();
+		expect(cards()).toHaveLength(0);
+		const inline = mocks.states[1]?.at(-1) as { titleKey?: string } | null;
+		expect(inline?.titleKey).toBe("error.title.sendFailed");
+		expect(useTranscriptStore.getState().bySession.s1?.control?.revision).toBe(6);
 	});
 });

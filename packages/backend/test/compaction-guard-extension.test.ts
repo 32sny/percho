@@ -20,7 +20,9 @@ import type { CompactionGuardObservation } from "../src/tools/compaction-guard/t
  *
  * 造历史的约定（便于逐轮断言，`i` = 轮序号）：
  * - 思考正文含 `THINKING-BODY-SECRET-i`；toolResult 中段含 `TOOLRESULT-MIDDLE-i-xxxx…`（头 5 行 / 尾 3 行保留、中段会被截）。
- * - 所以：**降级轮**的 `THINKING-BODY-SECRET-i` 与 `TOOLRESULT-MIDDLE-i` 必须消失；**保护区内**轮则原样保留。
+ * - SDK 1.4 不序列化 thinking；这里验证它不进入摘要，不据此推断守卫的 thinking 降级生效。
+ * - 降级轮的 `TOOLRESULT-MIDDLE-i` 必须消失；保护轮保留中段标记，但仍受 SDK 的 2000 字符截断。
+ * - 守卫对 thinking 块的改写由 `compaction-bound.test.ts` 单独覆盖。
  */
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -307,9 +309,11 @@ describe("A4 / A6① 摘要请求真的变小（思考正文消失 · toolResult
 			expect(bound?.degradedMessages ?? 0).toBeGreaterThan(0);
 			expect(bound?.estimatedAfter ?? Number.POSITIVE_INFINITY).toBeLessThan(bound?.estimatedBefore ?? 0);
 
-			// A6①：钩子替换 messagesToSummarize 后，SDK 默认摘要器读到的就是替换后的内容
-			expect(prompt).toContain("[思考已省略"); // 老轮思考 → 占位
-			expect(prompt).not.toContain(`${SECRET_THINKING}-1`); // 第 1 轮思考正文消失
+			// SDK 1.4 序列化不输出 thinking，包含守卫写入 thinking 块的占位符。
+			expect(prompt).not.toContain("[思考已省略");
+			expect(prompt).not.toContain(SECRET_THINKING);
+			expect(prompt).not.toContain("[Assistant thinking]");
+			expect(prompt).toContain("我先看看第"); // 可见正文仍送入摘要
 			expect(prompt).toContain("…（已省略"); // toolResult 被截并标注
 			expect(prompt).not.toContain(`${SECRET_MIDDLE}-1-`); // 第 1 轮 toolResult 中段消失
 			expect(prompt).toMatch(new RegExp(`${SECRET_MIDDLE}-\\d+-x`)); // 保护区内某轮原样保留
@@ -356,7 +360,12 @@ describe("A5 三条触发路径都过钩子（reason 可见）", () => {
 		try {
 			await session.compact();
 			expect(observations.some((o) => o.phase === "bound" && o.reason === "manual")).toBe(true);
-			expect(summarizationPrompts(captures)).toContain("[思考已省略");
+			const prompt = summarizationPrompts(captures);
+			expect(prompt).toContain("我先看看第");
+			expect(prompt).toContain("…（已省略");
+			expect(prompt).not.toContain(`${SECRET_MIDDLE}-1-`);
+			expect(prompt).not.toContain(SECRET_THINKING);
+			expect(prompt).not.toContain("[Assistant thinking]");
 		} finally {
 			session.dispose();
 		}
@@ -398,7 +407,12 @@ describe("A5 三条触发路径都过钩子（reason 可见）", () => {
 		try {
 			await session.prompt("再问一句");
 			expect(observations.some((o) => o.phase === "bound" && o.reason === "overflow")).toBe(true);
-			expect(summarizationPrompts(captures)).toContain("[思考已省略");
+			const prompt = summarizationPrompts(captures);
+			expect(prompt).toContain("我先看看第");
+			expect(prompt).toContain("…（已省略");
+			expect(prompt).not.toContain(`${SECRET_MIDDLE}-1-`);
+			expect(prompt).not.toContain(SECRET_THINKING);
+			expect(prompt).not.toContain("[Assistant thinking]");
 		} finally {
 			session.dispose();
 		}
@@ -450,7 +464,7 @@ describe("D7/D7b 契约：默认行为、逃生舱、与蒸发开关完全解耦
 		}
 	});
 
-	it("逃生舱 compactionGuard.enabled=false：钩子不介入（摘要输入保持原样）", async () => {
+	it("逃生舱 compactionGuard.enabled=false：钩子不裁剪正文，thinking 仍由 SDK 省略", async () => {
 		const { session, observations, captures } = await setup({
 			contextWindow: 20_000,
 			sdkCompaction: { reserveTokens: 2000 },
@@ -461,7 +475,15 @@ describe("D7/D7b 契约：默认行为、逃生舱、与蒸发开关完全解耦
 			await session.compact();
 			expect(observations.some((o) => o.phase === "bound")).toBe(false);
 			const prompt = summarizationPrompts(captures);
-			expect(prompt).toContain(`${SECRET_THINKING}-1`); // 思考正文还在（没降级）
+			expect(prompt).toContain("我先看看第 1 轮");
+			// SDK 1.4 自身最多序列化 2000 字符；关闭守卫不取消 SDK 的截断。
+			const originalToolResult = `HEAD-1\nline2-1\nline3-1\nline4-1\nline5-1\n${SECRET_MIDDLE}-1-${"x".repeat(3000)}\nTAIL1-1\nTAIL2-1\nTAIL3-1`;
+			expect(prompt).toContain(
+				`[Tool result]: ${originalToolResult.slice(0, 2000)}\n\n[... ${originalToolResult.length - 2000} more characters truncated]`,
+			);
+			expect(prompt).not.toContain("…（已省略"); // 本地守卫的裁剪标记不存在
+			expect(prompt).not.toContain(SECRET_THINKING); // SDK 自身仍省略 thinking
+			expect(prompt).not.toContain("[Assistant thinking]");
 			expect(prompt).not.toContain("[思考已省略");
 		} finally {
 			session.dispose();
@@ -504,13 +526,13 @@ describe("A6②（修订）compaction.enabled=false：SDK 全自动路径（含�
 	 *
 	 * 另一条被这里证实的事实：error 终止的 assistant 消息**不参与 usage 口径**
 	 * （`getAssistantUsage()` 会跳过 aborted/error），此时 `getContextUsage().tokens` 退回纯估算，
-	 * 所以 percent 可能低于真实用量 —— 本用例用 40% 阈值让触发成立，并断言 `percentBasis = "estimate"`。
+	 * 所以 percent 可能低于真实用量 —— 本用例用远离边界的 30% 阈值确保触发，并断言 `percentBasis = "estimate"`。
 	 */
 	it("溢出错误不再自动压缩；agent_settled 的自研触发仍压缩且有界", async () => {
 		const { session, observations } = await setup({
 			contextWindow: 20_000,
 			sdkCompaction: { enabled: false, reserveTokens: 2000 },
-			guard: { thresholdPct: 40 }, // 估算口径 ≈9k/20k ≈ 45% ⇒ 触发
+			guard: { thresholdPct: 30 }, // error轮回退到估算口径；阈值远离不同SDK估算器的临界值
 			stream: (callIndex) =>
 				callIndex === 0
 					? {

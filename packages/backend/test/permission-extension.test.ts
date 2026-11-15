@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
 	ExtensionAPI,
@@ -298,7 +298,8 @@ describe("permission-gate 扩展", () => {
 			expect(isTemporaryPath(fixtureBase)).toBe(false);
 			const isWithin = (parent: string, child: string) => {
 				const rel = relative(parent, child);
-				return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== "..");
+				// Windows 跨盘 relative 返回绝对路径，不能将它视为父目录内。
+				return rel === "" || (!isAbsolute(rel) && !rel.startsWith(`..${sep}`) && rel !== "..");
 			};
 			expect(isWithin(resolve(tmpdir()), fixtureBase)).toBe(false);
 			expect(isWithin(fixtureBase, resolve(tmpdir()))).toBe(false);

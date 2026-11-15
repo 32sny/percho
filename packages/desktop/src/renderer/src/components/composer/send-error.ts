@@ -1,34 +1,7 @@
-import { buildLlmUiError, classifyLlmError, DETAIL_MAX_LENGTH, type UiError } from "@percho/shared";
-
 /**
- * 发送路径失败 → UiError（Composer 内联条 data 源）。
- * 发送拒绝（无模型/无 key/会话只读/会话不存在/压缩中）与 LLM 运行错误不同源：
- * - 只读会话 → 专有标题（发送动作根本不该发生）；
- * - 其余复用 classifyLlmError 的模式表（auth/网络等的 hint 建议措辞正好适用），
- *   未命中（纯本地拒绝）则兜底「发送失败」，detail 保留原始 message 原文。
- * 纯函数放这里（随 Composer 域），+ 测试 send-error.test.ts。
+ * 发送路径失败 → UiError 的旧入口（Composer 内联条数据源）。
+ * 构造器已下沉 shared `errors.ts`（`buildSendUiError`）：控制投递失败卡（§19.8）与内联条
+ * 共用同一套标题/详情/分类判定，避免两份措辞漂移。本模块仅保留原导入路径的 re-export，
+ * 内联行为（含原分类的 retry/compact actions）保持不变。
  */
-export function buildSendUiError(message: string, now: number = Date.now()): UiError {
-	const lower = message.toLowerCase();
-	if (lower.includes("read-only")) {
-		return {
-			severity: "error",
-			source: "session",
-			titleKey: "error.title.sendReadOnly",
-			detail: truncateDetail(message),
-			actions: ["copyDetail"],
-			timestamp: now,
-		};
-	}
-	const cls = classifyLlmError(message);
-	const base = buildLlmUiError(message, now);
-	return {
-		...base,
-		titleKey: cls.titleKey === "error.title.llmGeneric" ? "error.title.sendFailed" : cls.titleKey,
-	};
-}
-
-function truncateDetail(detail: string): string {
-	if (detail.length <= DETAIL_MAX_LENGTH) return detail;
-	return `${[...detail].slice(0, DETAIL_MAX_LENGTH).join("")}\n…[已截断]`;
-}
+export { buildSendUiError } from "@percho/shared";

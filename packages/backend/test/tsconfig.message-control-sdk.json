@@ -1,0 +1,17 @@
+{
+	"extends": "../tsconfig.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"types": ["node"]
+	},
+	"include": [
+		"./message-control-sdk.test.ts",
+		"./message-control-sdk-harness.ts",
+		"./message-control-sdk-compaction.test.ts",
+		"./message-control-sdk-retry.test.ts",
+		"./message-control-sdk-lifecycle.test.ts",
+		"./message-control-sdk-lease.test.ts",
+		"./message-control-sdk-g5.test.ts",
+		"./message-control-sdk-image.test.ts"
+	]
+}

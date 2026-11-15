@@ -7,6 +7,13 @@
  */
 
 export { buildChatRows, type ChatRow, isAgentWorking, type MetaItem } from "./chat-rows";
+export {
+	CONTROL_SEND_ERROR_CARD_PREFIX,
+	type ControlSendFailure,
+	type ControlSendFailureOutcome,
+	controlSendErrorCardId,
+	projectControlSendFailure,
+} from "./control-errors";
 export { messagesToUIMessages } from "./mapping";
 export {
 	categoryOf,

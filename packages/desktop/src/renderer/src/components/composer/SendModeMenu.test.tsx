@@ -44,6 +44,15 @@ describe("SendModeMenu", () => {
 		expect(html).toContain("composer.modeDisabledSlash");
 		expect(html).toContain('aria-disabled="true"');
 	});
+
+	it("未禁用时两项均可选（auto 压缩放行由调用方的 compaction 策略决定，不硬编码 disabledReason）", () => {
+		const html = renderToStaticMarkup(
+			<SendModeMenu disabledReason={null} onPick={() => {}} onClose={() => {}} />,
+		);
+		expect(html).not.toContain('aria-disabled="true"');
+		expect(html).not.toContain("modeDisabled");
+		expect(html).not.toContain('disabled=""');
+	});
 });
 
 describe("queueItemActions（队列项可用操作）", () => {
