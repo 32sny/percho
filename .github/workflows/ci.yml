@@ -36,6 +36,9 @@ jobs:
             platform: mac
             arch: arm64
     runs-on: ${{ matrix.os }}
+    # 目录包不签名；禁止 macOS runner 自动发现证书并弹出身份选择。
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
