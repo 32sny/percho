@@ -111,6 +111,21 @@ jobs:
             matrix.arch }}/
           if-no-files-found: warn
 
+  # 保留 main 分支保护要求的稳定检查名；任一依赖失败/取消/跳过都不放行。
+  required-check:
+    name: check
+    needs: [check, windows-update-diagnostics]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all platform and installer checks
+        env:
+          PLATFORM_RESULT: ${{ needs.check.result }}
+          INSTALLER_RESULT: ${{ needs.windows-update-diagnostics.result }}
+        run: |
+          test "$PLATFORM_RESULT" = success
+          test "$INSTALLER_RESULT" = success
+
   windows-update-diagnostics:
     runs-on: windows-latest
     steps:
