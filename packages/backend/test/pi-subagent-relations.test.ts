@@ -233,7 +233,8 @@ describe("pi-subagents persisted relation resolver", () => {
 			receipt("a2", a, { description: "Latest task" }, 6000),
 		);
 		const result = await resolvePiSubagentRelations(entries, parent);
-		expect([...result.byEntryId.keys()]).toEqual(["result-a2", "result-b1"]);
+		// Map 按 entryId 查询；文件系统的目录枚举顺序没有跨平台保证。
+		expect([...result.byEntryId.keys()].sort()).toEqual(["result-a2", "result-b1"]);
 		expect(result.byEntryId.get("result-a2")).toMatchObject({
 			sessionFile: fa,
 			taskFirstLine: "Latest task",
