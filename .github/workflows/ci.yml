@@ -4,14 +4,38 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  # 三平台目录包验收：完整检查 + no-publish 打包 + 真实 exe 运行时冒烟。
+  # 只做 --dir 目录包（不产安装器、不发布）；证据 always 上传，仅用于诊断，不是 release 资产。
+  # 官方标准 runner：macos-15-intel 为 x64，macos-15 为 arm64；实际运行待 GitHub 验证。
   check:
-    runs-on: ubuntu-latest
+    name: packaged runtime (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: windows-latest
+            platform: win
+            arch: x64
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
+          - os: macos-15
+            platform: mac
+            arch: arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,18 +45,69 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm run test
+      - name: SDK message-control strict checks
+        run: >-
+          npm exec -w @percho/backend -- tsc
+          -p test/tsconfig.message-control-sdk.json
+      - name: SDK cancellation strict checks
+        run: npm exec -w @percho/backend -- tsc -p test/tsconfig.core-abort.json
+      - name: Host GC lease strict checks
+        run: >-
+          npm exec -w @percho/backend -- tsc
+          -p test/tsconfig.session-gc-lease.json
+      - name: Backend tests (maxWorkers=2)
+        run: npm exec -w @percho/backend -- vitest run --maxWorkers=2
+      - name: Desktop tests (maxWorkers=2)
+        run: npm exec -w @percho/desktop -- vitest run --maxWorkers=2
       - run: npm run build
-      # 打包冒烟：只解包不出安装器（--dir，此时 electron-builder 不做 publish），
-      # 让打包层回归（electron-builder.yml 解析、files/asarUnpack glob、图标、原生模块 unpack）
-      # 在 PR 阶段暴露，而不是发版打 tag 时才爆。Electron 二进制走缓存。
       - uses: actions/cache@v4
         with:
-          path: ~/.cache/electron
-          key: electron-${{ runner.os }}-${{ hashFiles('packages/desktop/package.json') }}
-      - name: Packaging smoke (electron-builder --dir)
+          path: |
+            ~/.cache/electron
+            ~/Library/Caches/electron
+            ~/AppData/Local/electron/Cache
+          key: >-
+            electron-${{ runner.os }}-${{ matrix.arch }}-${{
+            hashFiles('packages/desktop/package.json') }}
+      # 打包冒烟：只解包不出安装器（--dir，此时 electron-builder 不做 publish），
+      # 让打包层回归（electron-builder.yml 解析、files/asarUnpack glob、图标、原生模块 unpack）
+      # 在 PR 阶段暴露，而不是发版打 tag 时才爆。
+      - name: Packaging smoke (--dir, no publish)
         working-directory: packages/desktop
-        run: npx electron-builder --dir
+        run: >-
+          npx electron-builder --${{ matrix.platform }} dir
+          --${{ matrix.arch }} --publish never
+      # Linux 无显示：runner 自带 Xvfb，用 xvfb-run 提供 X 显示；其它平台直接跑。
+      - name: Packaged runtime smoke (Linux, xvfb)
+        if: runner.os == 'Linux'
+        run: >-
+          xvfb-run -a node scripts/check-packaged-runtime.mjs
+          --output .local/tmp/packaged-runtime/${{
+          matrix.platform }}-${{ matrix.arch }}
+      - name: Packaged runtime smoke
+        if: runner.os != 'Linux'
+        run: >-
+          node scripts/check-packaged-runtime.mjs
+          --output .local/tmp/packaged-runtime/${{
+          matrix.platform }}-${{ matrix.arch }}
+      # 证据缺失只做诊断告警，明确与 release 资产区分；不因此把失败伪装成通过。
+      - name: Warn when runtime evidence is missing
+        if: always()
+        shell: bash
+        run: |
+          target="${{ matrix.platform }}-${{ matrix.arch }}"
+          dir=".local/tmp/packaged-runtime/$target"
+          if [ ! -d "$dir" ]; then
+            echo "::warning::Runtime evidence missing: $dir (diagnostic only)."
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packaged-runtime-${{ matrix.platform }}-${{ matrix.arch }}
+          path: >-
+            .local/tmp/packaged-runtime/${{ matrix.platform }}-${{
+            matrix.arch }}/
+          if-no-files-found: warn
 
   windows-update-diagnostics:
     runs-on: windows-latest

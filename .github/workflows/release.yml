@@ -35,10 +35,10 @@ jobs:
             !packages/desktop/dist/win-unpacked
             !packages/desktop/dist/linux-unpacked
             !packages/desktop/dist/builder-debug.yml
-          if-no-files-found: warn
+          if-no-files-found: error
   publish:
     needs: build
-    if: always()
+    if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
