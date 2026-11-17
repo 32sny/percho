@@ -63,3 +63,30 @@ export function buildSessionTranscript(messages: readonly SessionMessage[]): str
 	}
 	return `${parts.join("\n").trimEnd()}\n`;
 }
+
+/**
+ * 转录临时文件名：`<会话名>-<sessionId 前 8 位>.md`；没有名字才回退裸 sessionId。
+ *
+ * 名字来源：左栏拖拽载荷的显示名 > 活跃会话名 > 未打开会话文件里的 `session_info`。
+ * 早期实现只给活跃会话取名，未打开会话直接落 `sessionId.md`，胶囊显示 UUID 乱码，
+ * 拖入历史会话时必现。
+ *
+ * 白名单过滤（字母/数字/空格/-/_/点/中文等非 ASCII）而非黑名单正则，避开 no-control-regex。
+ */
+export function transcriptFileName(sessionId: string, sessionName?: string): string {
+	const suffix = `-${sessionId.slice(0, 8)}`;
+	const safeName = sanitizeTranscriptName(sessionName?.trim() ?? "");
+	if (!safeName) return `${sessionId}.md`;
+	// 只截名字部分：把 id 后缀一起截掉会让同名会话互盖，胶囊也认不出 `-8位id`。
+	const maxNameChars = 80 - suffix.length;
+	const name = [...safeName].slice(0, maxNameChars).join("").trimEnd();
+	return `${name}${suffix}.md`;
+}
+
+/** 文件名白名单：字母/数字/空格/-/_/点 + 中文等非 ASCII；路径分隔符与保留字符直接丢弃。 */
+function sanitizeTranscriptName(value: string): string {
+	return [...value]
+		.filter((ch) => /[\w\-. ]/.test(ch) || ch.charCodeAt(0) > 127)
+		.join("")
+		.trim();
+}

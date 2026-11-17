@@ -142,7 +142,7 @@ export const SESSION_CHANNELS = {
 	>(),
 	/** 会话转可读 Markdown 转录写入临时文件（拖入输入栏胶囊用；返回临时 md 路径） */
 	exportSessionTranscript: ch("session:exportTranscript")<
-		{ sessionId: string; sessionFile?: string; cwd?: string },
+		{ sessionId: string; sessionFile?: string; cwd?: string; name?: string },
 		{ path: string }
 	>(),
 	/** 发送消息；images 为随消息附带的图片（base64） */

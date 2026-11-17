@@ -370,15 +370,20 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 			if (containsSessionDrag(event)) {
 				event.preventDefault();
 				const raw = event.dataTransfer.getData(SESSION_DRAG_MIME);
-				let payload: { sessionId: string; sessionFile?: string } | null = null;
+				let payload: { sessionId: string; sessionFile?: string; name?: string } | null = null;
 				try {
-					payload = JSON.parse(raw) as { sessionId: string; sessionFile?: string };
+					payload = JSON.parse(raw) as { sessionId: string; sessionFile?: string; name?: string };
 				} catch {
 					payload = null;
 				}
 				if (!payload?.sessionId) return;
+				// name：左栏显示名，后端用作转录文件名（否则未打开会话会退化成 UUID 文件名）
 				getPi()
-					.exportSessionTranscript({ sessionId: payload.sessionId, sessionFile: payload.sessionFile })
+					.exportSessionTranscript({
+						sessionId: payload.sessionId,
+						sessionFile: payload.sessionFile,
+						...(payload.name ? { name: payload.name } : {}),
+					})
 					.then(({ path }) => appendAttachments([path]))
 					.catch((error) => {
 						console.error("会话转录导出失败", error);

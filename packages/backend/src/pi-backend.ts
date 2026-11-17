@@ -112,6 +112,7 @@ import {
 	blockText,
 	type RawMessage,
 	readSessionMessagesFromContent,
+	readSessionNameFromContent,
 	resolveForkEntryId,
 	resolveRecallEntryId,
 	toBranchSessionMessages,
@@ -140,7 +141,7 @@ import {
 import { previewLoadedSession, previewSessionFile } from "./session/title-preview";
 import { TraceRecorder } from "./session/trace";
 import { SessionTraces } from "./session/traces";
-import { buildSessionTranscript } from "./session/transcript";
+import { buildSessionTranscript, transcriptFileName } from "./session/transcript";
 import { makeUiContext } from "./session/ui-context";
 import { syncAgentFileField } from "./settings/agent-file-sync";
 import { LoginService } from "./settings/login";
@@ -1195,33 +1196,33 @@ export class PiBackend {
 	 * 会话 → 可读 Markdown 转录临时文件（拖入输入栏胶囊用，spec PLAN §〇）。
 	 * 活跃会话走 registry，未打开的纯解析文件（同 peek，零副作用）；
 	 * 同一 sessionId 重复导出覆盖同名临时文件。
+	 *
+	 * `nameHint`：renderer 拖拽载荷里的会话显示名（与左栏一致）。未打开会话在磁盘上可能没有
+	 * `session_info`，只靠文件解析会退化成 sessionId → 胶囊显示 UUID。故优先用调用方给的语义名，
+	 * 其次活跃会话名，再次会话文件里最后一条 `session_info`，最后才回退 sessionId。
 	 */
 	async exportSessionTranscript(
 		sessionId: string,
 		sessionFile?: string,
 		cwd?: string,
+		nameHint?: string,
 	): Promise<{ path: string }> {
 		let messages: SessionMessage[];
+		let sessionName = typeof nameHint === "string" ? nameHint.trim() : "";
 		const entry = this.registry.get(sessionId);
 		if (entry) {
 			messages = await this.getSessionMessages(sessionId);
+			sessionName ||= entry.session.sessionManager.getSessionName()?.trim() ?? "";
 		} else {
 			const file = sessionFile ?? (await this.findUnloadedSessionFile(sessionId, cwd));
 			if (!file) throw new Error(`Session not found: ${sessionId}`);
-			messages = readSessionMessagesFromContent(await readFile(file, "utf8"));
+			const content = await readFile(file, "utf8");
+			messages = readSessionMessagesFromContent(content);
+			sessionName ||= readSessionNameFromContent(content) ?? "";
 		}
 		const dir = join(tmpdir(), "percho-transcripts");
 		await mkdir(dir, { recursive: true });
-		// 文件名用会话名（胶囊展示友好；无名字回退 sessionId）；sessionId 后缀保证同名会话不互盖。
-		// 白名单过滤（字母/数字/空格/-/_/点/中文等非 ASCII）而非黑名单正则，避开 no-control-regex。
-		const sessionName = entry?.session.sessionManager.getSessionName()?.trim();
-		const base = sessionName ? `${sessionName}-${sessionId.slice(0, 8)}` : sessionId;
-		const safeBase =
-			[...base]
-				.filter((ch) => /[\w\-. ]/.test(ch) || ch.charCodeAt(0) > 127)
-				.join("")
-				.slice(0, 80) || sessionId;
-		const path = join(dir, `${safeBase}.md`);
+		const path = join(dir, transcriptFileName(sessionId, sessionName));
 		await writeFile(path, buildSessionTranscript(messages), "utf8");
 		return { path };
 	}

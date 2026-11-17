@@ -191,6 +191,25 @@ export function readSessionMessagesFromContent(content: string): SessionMessage[
 }
 
 /**
+ * 从会话文件内容取显示名（未打开会话离线取名的唯一来源，与活跃态 `getSessionName()` 同源）：
+ * 最后一条带非空 name 的 `session_info` 胜出；解析失败或无名字返回 undefined。
+ * 只给转录文件名用，不改会话元数据。
+ */
+export function readSessionNameFromContent(content: string): string | undefined {
+	let name: string | undefined;
+	try {
+		for (const entry of parseSessionEntries(content)) {
+			if (entry.type !== "session_info") continue;
+			const candidate = typeof entry.name === "string" ? entry.name.trim() : "";
+			if (candidate) name = candidate;
+		}
+	} catch {
+		return undefined;
+	}
+	return name;
+}
+
+/**
  * 当前分支 → UI 历史消息。必须读 getBranch() 的完整持久历史，而不是
  * AgentSession.messages（后者是发给模型的上下文，compaction 后会裁掉旧消息）。
  *
