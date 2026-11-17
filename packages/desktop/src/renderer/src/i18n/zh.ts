@@ -246,6 +246,8 @@ export const zh = {
 		imagePending: "图片待加载",
 		imageRetry: "重新加载",
 		imageLoadError: "图片加载失败",
+		openSession: "打开所在会话",
+		openSessionFailed: "找不到对应的会话",
 		subagent: {
 			running: "工作中",
 			done: "已完成",

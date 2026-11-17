@@ -1,5 +1,7 @@
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useId, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
+import { MessageAttachmentChip } from "./MessageAttachmentChip";
+import { splitMessageReferences } from "./message-attachments";
 
 /** 只裁剪正文的展示，不截断原文；自然高度独立于折叠状态，避免测量反馈循环。 */
 export function UserMessageText({ text }: { text: string }) {
@@ -32,7 +34,15 @@ export function UserMessageText({ text }: { text: string }) {
 				data-collapsed={overflowing && !expanded ? "true" : undefined}
 			>
 				<div ref={contentRef} className="whitespace-pre-wrap break-words">
-					{text}
+					{splitMessageReferences(text).map((segment, index) =>
+						segment.type === "text" ? (
+							// biome-ignore lint/suspicious/noArrayIndexKey: 片段由同一段文本稳定派生，无独立 ID
+							<Fragment key={index}>{segment.text}</Fragment>
+						) : (
+							// biome-ignore lint/suspicious/noArrayIndexKey: 同上；`@路径` 片段渲染为语义芯片
+							<MessageAttachmentChip key={index} path={segment.path} />
+						),
+					)}
 				</div>
 			</div>
 			{overflowing && (

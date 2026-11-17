@@ -38,8 +38,18 @@
 - 图片与文件/目录/会话统一放在正文上方的 `flex flex-wrap` 托盘，图片在前、文件在后；选中引用 `quotes` 独立一行且不计入折叠阈值。
 - 芯片统一 `rounded-lg bg-hover h-5.5 px-2 text-ui-12 text-ink-2`；图片用 `size-4 rounded object-cover` 的真实 data URL 缩略图，类型尾缀用 `font-mono text-ui-105 text-ink-faint`，不新增色值或任意像素尺寸。
 - 合计超过 5 枚时默认展示前 5 枚并用真实按钮展开/收起（`aria-expanded`）；草稿切换或总数回落至 5 枚以内时重置。折叠只裁剪渲染，不裁剪草稿或发送数据。
-- 删除按钮固定占位，以 `group-hover` / `group-focus-within` 显隐，保证键盘可达且避免布局抖动；只读时禁用。Tooltip 复用 `components/ui/Tooltip`，仅暴露语义文件名/会话标题，不展示原始机器路径。
+- 折叠态必须单行：按容器实宽算出这一行能放几枚（`+N 项` 钮的宽度也计入），全部放得下就直接平铺；宽度靠不可见的 `inert` 测量行拿真实芯片宽度，不复用阈值硬编码。
+- 删除按钮不占流：绝对定位成渐变遮罩压在尾缀上（`w-5`，`bg-gradient-to-l from-hover`），常态 `opacity-0` + 不接收指针，hover / focus 时浮现并把尾缀淡出（原位替换）。Tooltip 复用 `components/ui/Tooltip`，仅暴露语义文件名/会话标题，不展示原始机器路径。
+- 托盘有芯片时在托盘与正文之间画一条 `.fade-rule`（`mx-3.5`），无芯片不画。
 - 正文 `<textarea>` 只在有 slash 命令胶囊时与其 flex 同行，否则保持 `w-full`。
+
+## 已发送气泡的 @ 引用芯片
+
+- 发送时附件会拼回 `@<path>` 文本；气泡渲染用 `chat/message-attachments.ts` 切成 text / reference 片段，reference 走 `chat/MessageAttachmentChip.tsx`，不显示机器路径。
+- 只切真路径：会话转录按 `…/percho-transcripts/….md`（文件名可含空格与 `·`）匹配到 `.md` 收尾；普通路径必须带路径分隔符。`@昵称`、邮箱、普通词不切。
+- 芯片与托盘同款柔灰：`rounded-md bg-hover h-5.5 px-1.5 text-ui-12`，前置 `@` + 单色 glyph + 语义名 + `font-mono text-ui-105` 类型尾缀（会话为「会话」微标）。
+- hover / focus 浮出操作卡：`createPortal` + `placeMenu` 夹进视口（避开 `.edge-fade` 的 mask 裁切），操作为查看、打开所在会话（会话类独有）、复制路径、在文件夹中显示。
+- 原文不变：复制与撤回仍用 `message.text`，芯片只是展示层转译。
 
 ## 消息与图片的特殊边界
 

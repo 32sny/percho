@@ -251,6 +251,8 @@ export const en: Messages = {
 		imagePending: "Image not loaded yet",
 		imageRetry: "Reload",
 		imageLoadError: "Image failed to load",
+		openSession: "Open session",
+		openSessionFailed: "Session not found",
 		subagent: {
 			running: "Working",
 			done: "Done",
