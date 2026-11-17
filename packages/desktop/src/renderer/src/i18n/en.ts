@@ -252,6 +252,7 @@ export const en: Messages = {
 		imageRetry: "Reload",
 		imageLoadError: "Image failed to load",
 		openSession: "Open session",
+		viewTranscript: "View transcript",
 		openSessionFailed: "Session not found",
 		subagent: {
 			running: "Working",

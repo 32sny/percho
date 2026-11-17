@@ -247,6 +247,7 @@ export const zh = {
 		imageRetry: "重新加载",
 		imageLoadError: "图片加载失败",
 		openSession: "打开所在会话",
+		viewTranscript: "查看转录文件",
 		openSessionFailed: "找不到对应的会话",
 		subagent: {
 			running: "工作中",
