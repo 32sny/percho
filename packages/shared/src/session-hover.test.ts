@@ -63,6 +63,33 @@ describe("session hover live projection", () => {
 		expect(safeUserFirstLine("one\ntwo")).toEqual({ status: "ok", text: "one" });
 	});
 
+	it("首行是 @附件路径时，自动命名/预览取下一行正文（不再拿裸路径当标题）", () => {
+		expect(safeUserFirstLine("@C:\\Users\\A\\Desktop\\00\n帮我看下这个会话的关键结论")).toEqual({
+			status: "ok",
+			text: "帮我看下这个会话的关键结论",
+		});
+		expect(
+			safeUserFirstLine(
+				"@C:\\Users\\A\\Temp\\percho-transcripts\\【实测】插件父子关系 · 适配验收-01a185e4.md\n帮我看下",
+			),
+		).toEqual({ status: "ok", text: "帮我看下" });
+	});
+
+	it("整条消息只有 @附件时提取短名，绝不返回绝对路径", () => {
+		expect(safeUserFirstLine("@C:\\Users\\A\\Desktop\\00")).toEqual({ status: "ok", text: "00" });
+		expect(
+			safeUserFirstLine(
+				"@C:\\Users\\A\\Temp\\percho-transcripts\\【实测】插件父子关系 · 适配验收-01a185e4.md",
+			),
+		).toEqual({ status: "ok", text: "【实测】插件父子关系 · 适配验收" });
+		const projection = safeUserFirstLine("@C:\\Users\\A\\a.md @C:\\Users\\A\\b.txt");
+		expect(projection).toEqual({ status: "ok", text: "a · b" });
+	});
+
+	it("@昵称不算附件行，不改变原首行行为", () => {
+		expect(safeUserFirstLine("@zhangyi 你好")).toEqual({ status: "ok", text: "@zhangyi 你好" });
+	});
+
 	it("projects reducer early streaming path before turn_end", () => {
 		let state = emptyTranscript();
 		state = reduceEvent(state, { type: "agent_start" } as never);

@@ -31,6 +31,42 @@ type Projection =
 	| { status: "ok"; text: string }
 	| { status: "empty" | "unsafe_projection" | "invalid_history" };
 
+/** 一行是不是「纯 @附件行」：拖入会话/文件后，附件路径被拼在正文前单独一行 */
+function isAttachmentLine(line: string): boolean {
+	const trimmed = line.trim();
+	if (!trimmed.startsWith("@")) return false;
+	// 必须带路径分隔符才算附件；`@昵称` 这类不当作附件行
+	return /[\\/]/.test(trimmed);
+}
+
+/** 附件行 → 短名（末段文件名/会话名，去扩展名与 `-8位id` 后缀）；不返回任何路径成分 */
+function attachmentShortNames(line: string): string[] {
+	return line
+		.split(/\s+@/)
+		.map((chunk) => chunk.replace(/^@/, "").trim())
+		.filter(Boolean)
+		.map((raw) => {
+			const base =
+				raw
+					.replace(/[/\\]+$/, "")
+					.split(/[/\\]/)
+					.pop() ?? "";
+			return base
+				.replace(/\.[A-Za-z0-9]+$/, "")
+				.replace(/-[0-9a-f]{8}$/i, "")
+				.trim();
+		})
+		.filter(Boolean);
+}
+
+/** 多条短名拼接：去重、限长，避免标题被一堆文件名撑爆 */
+function joinShortNames(names: string[]): string {
+	const unique = [...new Set(names)];
+	const joined = unique.slice(0, 3).join(" · ");
+	const text = unique.length > 3 ? `${joined} · …` : joined;
+	return text.length > 60 ? `${text.slice(0, 60)}…` : text;
+}
+
 function object(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -58,7 +94,15 @@ export function safeUserFirstLine(content: unknown): Projection {
 		return { status: "unsafe_projection" };
 	}
 	const projected = invocation ? formatSkillCommand(invocation) : text;
-	const firstLine = (projected.trim().split("\n", 1)[0] ?? "").trim();
+	// 逐行找第一条**不是 @附件**的正文行：拖入附件后正文常在下一行，
+	// 旧实现只取第一行，会把 `@C:\Users\…` 这样裸路径当成会话标题（实测污染顶栏/左栏）。
+	const lines = projected.trim().split("\n");
+	const bodyLine = lines.map((line) => line.trim()).find((line) => line && !isAttachmentLine(line));
+	if (bodyLine) return { status: "ok", text: bodyLine };
+	// 整条消息只有附件：给短文件名/会话名，绝不可回退成绝对路径
+	const shortNames = joinShortNames(lines.filter(Boolean).flatMap(attachmentShortNames));
+	if (shortNames) return { status: "ok", text: shortNames };
+	const firstLine = (lines[0] ?? "").trim();
 	return firstLine ? { status: "ok", text: firstLine } : { status: "empty" };
 }
 
