@@ -496,6 +496,9 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 						onRemoveImage={(index) => setImages((prev) => prev.filter((_, i) => i !== index))}
 						onRemoveAttachment={at.handleAttachmentRemove}
 					/>
+					{/* 托盘有芯片时补一条中段实、两头淡出的发丝线，拉开托盘与正文的呼吸（设计稿 variant-b）；
+					    没附件时不画，避免空托盘下多一条无来由的线 */}
+					{(images.length > 0 || attachments.length > 0) && <div className="fade-rule mx-3.5" />}
 					{/* 引用胶囊区：独占顶部一行贴边（专为选中引用留的位置，不占正文宽度） */}
 					{quotes.length > 0 && (
 						<div className="flex flex-wrap items-center gap-1.5 px-3 pt-2">

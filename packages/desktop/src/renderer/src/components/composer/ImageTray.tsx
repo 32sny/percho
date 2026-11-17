@@ -2,8 +2,8 @@ import type { ImageInput } from "@percho/shared";
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
 import { imageSrc } from "../chat/ImagePreview";
-import { CloseIcon } from "../icons";
 import { Tooltip } from "../ui/Tooltip";
+import { ChipRemoveButton } from "./AttachmentChip";
 
 type ComposerImage = ImageInput & { name?: string };
 
@@ -17,7 +17,7 @@ function imagePresentation(image: ComposerImage, index: number): { name: string;
 	return { name: fileName, suffix: mimeType === "jpeg" ? "JPG" : mimeType.toUpperCase() };
 }
 
-/** 单枚图片芯片：缩略图可点预览，删除按钮 hover/focus 才浮现；名称被截断时才挂 Tooltip。 */
+/** 单枚图片芯片：缩略图可点预览；删除钮与文件芯片同款（绝对定位遮罩，常态零占位）。 */
 function ImageChip({
 	image,
 	index,
@@ -48,10 +48,13 @@ function ImageChip({
 	}, []);
 
 	const chip = (
-		<span className="group flex h-5.5 max-w-48 select-none items-center gap-1.5 rounded-lg bg-hover px-2 text-ui-12 text-ink-2">
+		<span
+			data-measure-chip
+			className="group relative flex h-5.5 max-w-37 shrink-0 select-none items-center gap-1 rounded-lg bg-hover pl-1 pr-1.5 text-ui-12 text-ink-2"
+		>
 			<button
 				type="button"
-				className="flex min-w-0 items-center gap-1.5 overflow-hidden text-left"
+				className="flex min-w-0 items-center gap-1 overflow-hidden text-left"
 				aria-label={t("composer.previewImage")}
 				onClick={() => onPreview(image)}
 			>
@@ -60,20 +63,16 @@ function ImageChip({
 					{presentation.name}
 				</span>
 				{presentation.suffix && (
-					<span className="shrink-0 font-mono text-ui-105 text-ink-faint">{presentation.suffix}</span>
+					<span className="shrink-0 font-mono text-ui-105 text-ink-faint transition-opacity group-focus-within:opacity-0 group-hover:opacity-0">
+						{presentation.suffix}
+					</span>
 				)}
 			</button>
-			<Tooltip label={t("composer.removeImage")}>
-				<button
-					type="button"
-					className="pointer-events-none flex size-4 shrink-0 items-center justify-center rounded text-ink-dim opacity-0 transition-opacity hover:text-ink focus-visible:outline-2 focus-visible:outline-ink-faint group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 disabled:hover:text-ink-dim"
-					aria-label={t("composer.removeImage")}
-					disabled={readOnly}
-					onClick={() => onRemove(index)}
-				>
-					<CloseIcon size={9} />
-				</button>
-			</Tooltip>
+			<ChipRemoveButton
+				readOnly={readOnly}
+				label={t("composer.removeImage")}
+				onRemove={() => onRemove(index)}
+			/>
 		</span>
 	);
 
