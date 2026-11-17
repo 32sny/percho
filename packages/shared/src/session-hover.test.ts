@@ -86,6 +86,12 @@ describe("session hover live projection", () => {
 		expect(projection).toEqual({ status: "ok", text: "a · b" });
 	});
 
+	it("只有完整 ID 会话转录附件时，标题仍只取语义名", () => {
+		expect(
+			safeUserFirstLine("@C:/tmp/percho-transcripts/设计讨论-01a18ad2-e4fa-72a4-802e-b634ac9ccc52.md"),
+		).toEqual({ status: "ok", text: "设计讨论" });
+	});
+
 	it("@昵称不算附件行，不改变原首行行为", () => {
 		expect(safeUserFirstLine("@zhangyi 你好")).toEqual({ status: "ok", text: "@zhangyi 你好" });
 	});

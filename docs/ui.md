@@ -49,6 +49,7 @@
 - 只切真路径：会话转录按 `…/percho-transcripts/….md`（文件名可含空格与 `·`）匹配到 `.md` 收尾；普通路径必须带路径分隔符。`@昵称`、邮箱、普通词不切。
 - 芯片与托盘同款柔灰：`rounded-md bg-hover h-5.5 px-1.5 text-ui-12`，前置 `@` + 单色 glyph + 语义名 + `font-mono text-ui-105` 类型尾缀（会话为「会话」微标）。
 - **左键单击即执行主操作**：会话芯片 → 打开所在会话（必走前端 `useProjectsStore.openSession`，只调后端 IPC 不会切界面）；文件/目录芯片 → 系统默认应用打开。
+- 会话转录新文件名保留完整会话 ID，导航按完整 ID 精确匹配，芯片与自动标题仍只展示语义名；无名转录支持完整 UUID 文件名。旧八位前缀引用仅在唯一匹配时跳转，多义时提示从侧栏重新拖入，不按标题猜测或选择第一条。
 - hover / focus 才浮出**精简**操作卡：`createPortal` + `placeMenu` 夹进视口（避开 `.edge-fade` 的 mask 裁切）。不重复标题/副标题、不画 `.fade-rule`；只在名字被截断时补一行完整名。
 - 菜单项规格对齐 `components/ui/ContextMenu.tsx`：`h-[30px] gap-[10px] rounded-[7px] px-2 text-ui-13` + 左侧 13px 单色图标，禁止裸文字列表。
 - 会话芯片只留三项：打开所在会话（`SessionChatIcon`）/ 查看转录文件（`FileTextIcon`）/ 复制路径（`CopyIcon`）——会话不是本地文件，不给「在访达中显示」（只会指向 Temp 目录）。

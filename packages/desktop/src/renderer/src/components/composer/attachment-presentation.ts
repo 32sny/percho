@@ -1,3 +1,5 @@
+import { parseSessionTranscriptReference } from "@percho/shared";
+
 const CODE_EXTENSIONS = new Set([
 	"c",
 	"cc",
@@ -58,7 +60,7 @@ export function attachmentPresentation(path: string): { kind: AttachmentKind; na
 			.split(/[/\\]/)
 			.pop() || path;
 	if (/(?:^|[\\/])percho-transcripts(?:[\\/]|$)/i.test(path)) {
-		return { kind: "session", name: fileName.replace(/-[0-9a-f]{8}\.md$/i, ""), suffix: "" };
+		return { kind: "session", name: parseSessionTranscriptReference(path)?.name ?? fileName, suffix: "" };
 	}
 	const dotIndex = fileName.lastIndexOf(".");
 	const extension = dotIndex > 0 ? fileName.slice(dotIndex + 1) : "";

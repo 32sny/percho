@@ -1,4 +1,5 @@
 import type { SessionHoverLiveRun } from "./session";
+import { parseSessionTranscriptReference } from "./session-transcript-reference";
 import { formatSkillCommand, parseExpandedSkillInvocation } from "./skill-invocation";
 import type { SessionTranscriptState, StreamingState } from "./transcript/types";
 
@@ -46,6 +47,8 @@ function attachmentShortNames(line: string): string[] {
 		.map((chunk) => chunk.replace(/^@/, "").trim())
 		.filter(Boolean)
 		.map((raw) => {
+			const reference = parseSessionTranscriptReference(raw);
+			if (reference) return reference.name;
 			const base =
 				raw
 					.replace(/[/\\]+$/, "")

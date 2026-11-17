@@ -249,6 +249,7 @@ export const zh = {
 		openSession: "打开所在会话",
 		viewTranscript: "查看转录文件",
 		openSessionFailed: "找不到对应的会话",
+		openSessionAmbiguous: "该引用匹配到多个会话，请从侧栏重新拖入目标会话",
 		subagent: {
 			running: "工作中",
 			done: "已完成",

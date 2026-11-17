@@ -10,6 +10,20 @@ describe("attachmentPresentation", () => {
 		});
 	});
 
+	it("完整 UUID 转录只显示语义名，无名转录保留完整 ID", () => {
+		const id = "01a18ad2-e4fa-72a4-802e-b634ac9ccc52";
+		expect(attachmentPresentation(`C:/tmp/percho-transcripts/设计讨论-${id}.md`)).toEqual({
+			kind: "session",
+			name: "设计讨论",
+			suffix: "",
+		});
+		expect(attachmentPresentation(`C:/tmp/percho-transcripts/${id}.md`)).toEqual({
+			kind: "session",
+			name: id,
+			suffix: "",
+		});
+	});
+
 	it("区分尾斜线及无扩展目录", () => {
 		expect(attachmentPresentation("D:/project/功能/")).toEqual({ kind: "folder", name: "功能", suffix: "/" });
 		expect(attachmentPresentation("D:/project/功能")).toEqual({ kind: "folder", name: "功能", suffix: "/" });

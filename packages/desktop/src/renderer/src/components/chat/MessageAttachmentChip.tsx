@@ -1,3 +1,4 @@
+import { parseSessionTranscriptReference } from "@percho/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getPi } from "../../api";
@@ -98,12 +99,22 @@ export function MessageAttachmentChip({ path }: { path: string }) {
 
 	/** 打开所在会话：必须走前端 store，否则只唤了后端、界面不切换（旧实现只调 IPC，点击像没反应）。 */
 	const openSessionOf = async () => {
-		// 转录文件名尾部的 8 位 id = sessionId 前缀
-		const suffix = /-([0-9a-f]{8})\.md$/i.exec(path.replace(/^.*[/\\]/, ""))?.[1];
+		const reference = parseSessionTranscriptReference(path);
+		if (!reference) {
+			useToastsStore.getState().push("error", "message.openSessionFailed");
+			return;
+		}
 		const sessions = await getPi().listAllSessions();
-		const session = suffix
-			? sessions.find((item) => item.sessionId.toLowerCase().startsWith(suffix.toLowerCase()))
-			: undefined;
+		const id = reference.sessionId.toLowerCase();
+		const matches = sessions.filter((item) =>
+			reference.legacy ? item.sessionId.toLowerCase().startsWith(id) : item.sessionId.toLowerCase() === id,
+		);
+		// 旧引用没有足够的身份信息；不能用标题猜测，也不能取第一个候选。
+		if (matches.length > 1) {
+			useToastsStore.getState().push("error", "message.openSessionAmbiguous");
+			return;
+		}
+		const session = matches[0];
 		if (!session) {
 			useToastsStore.getState().push("error", "message.openSessionFailed");
 			return;

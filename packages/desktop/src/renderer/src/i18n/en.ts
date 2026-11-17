@@ -254,6 +254,8 @@ export const en: Messages = {
 		openSession: "Open session",
 		viewTranscript: "View transcript",
 		openSessionFailed: "Session not found",
+		openSessionAmbiguous:
+			"This reference matches multiple sessions. Drag the target session from the sidebar again.",
 		subagent: {
 			running: "Working",
 			done: "Done",
