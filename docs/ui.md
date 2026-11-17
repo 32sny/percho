@@ -33,6 +33,14 @@
 - 动画遵守 `prefers-reduced-motion`。避免通过逐帧改变布局宽度让聊天内容连续重排；优先固定尺寸 + transform。
 - 文案用 `useT()`，同时维护 `i18n/zh.ts` 与 `en.ts`；第三方原名不强行翻译。
 
+## Composer 附件托盘配方
+
+- 图片与文件/目录/会话统一放在正文上方的 `flex flex-wrap` 托盘，图片在前、文件在后；选中引用 `quotes` 独立一行且不计入折叠阈值。
+- 芯片统一 `rounded-lg bg-hover h-5.5 px-2 text-ui-12 text-ink-2`；图片用 `size-4 rounded object-cover` 的真实 data URL 缩略图，类型尾缀用 `font-mono text-ui-105 text-ink-faint`，不新增色值或任意像素尺寸。
+- 合计超过 5 枚时默认展示前 5 枚并用真实按钮展开/收起（`aria-expanded`）；草稿切换或总数回落至 5 枚以内时重置。折叠只裁剪渲染，不裁剪草稿或发送数据。
+- 删除按钮固定占位，以 `group-hover` / `group-focus-within` 显隐，保证键盘可达且避免布局抖动；只读时禁用。Tooltip 复用 `components/ui/Tooltip`，仅暴露语义文件名/会话标题，不展示原始机器路径。
+- 正文 `<textarea>` 只在有 slash 命令胶囊时与其 flex 同行，否则保持 `w-full`。
+
 ## 消息与图片的特殊边界
 
 - UI 历史来自完整分支，而非压缩后的模型上下文，见 [架构](architecture.md)。

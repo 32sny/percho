@@ -112,6 +112,66 @@ export function FileTextIcon({ size = 14, className }: IconProps) {
 	);
 }
 
+/** Markdown 文档（M + 向下箭头 glyph，输入框附件胶囊用） */
+export function MarkdownIcon({ size = 14, className }: IconProps) {
+	return (
+		<svg
+			className={className}
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			{...strokeProps}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<rect x="2" y="4" width="20" height="16" rx="2" />
+			<path d="M6 15V9l3 3 3-3v6" />
+			<path d="M18 9v6" />
+			<path d="m15.5 12.5 2.5 2.5 2.5-2.5" />
+		</svg>
+	);
+}
+
+/** 会话转录引用（对话气泡 glyph，左侧栏拖入会话生成的胶囊用） */
+export function SessionChatIcon({ size = 14, className }: IconProps) {
+	return (
+		<svg
+			className={className}
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			{...strokeProps}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+		</svg>
+	);
+}
+
+/** 代码/脚本文件（</> 尖括号文档 glyph，代码类附件胶囊用） */
+export function FileCodeIcon({ size = 14, className }: IconProps) {
+	return (
+		<svg
+			className={className}
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			{...strokeProps}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+			<path d="M14 2v6h6" />
+			<path d="m10 12.5-2 2 2 2" />
+			<path d="m14 12.5 2 2-2 2" />
+		</svg>
+	);
+}
+
 /** 错误包「！」：（报错卡片 glyph，severity 着色由使用方 text-err/warn/info 控制） */
 export function ErrorCircleIcon({ size = 14, className }: IconProps) {
 	return (

@@ -1,55 +1,63 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
-import { CloseIcon, FileTextIcon } from "../icons";
+import { CloseIcon, FileCodeIcon, FileTextIcon, FolderIcon, MarkdownIcon, SessionChatIcon } from "../icons";
 import { Tooltip } from "../ui/Tooltip";
+import { attachmentPresentation } from "./attachment-presentation";
 
-function fileNameOf(path: string): string {
-	return (
-		path
-			.replace(/[/\\]+$/, "")
-			.split(/[/\\]/)
-			.pop() || path
-	);
-}
-
-/**
- * 文件附件胶囊：只展示文件图标和文件名，完整原始路径保留在 title/Tooltip 中。
- * 发送时仍由父级使用原始 path 组装 @ 引用，不改变协议；删除也不再把长路径写回输入框。
- */
-export function AttachmentChip({ path, onRemove }: { path: string; onRemove: () => void }) {
+/** 原始 path 只作为草稿数据传入；展示与 Tooltip 均使用语义名称，不暴露机器路径。 */
+export function AttachmentChip({
+	path,
+	readOnly = false,
+	onRemove,
+}: {
+	path: string;
+	readOnly?: boolean;
+	onRemove: () => void;
+}) {
 	const t = useT();
 	const nameRef = useRef<HTMLSpanElement>(null);
 	const [truncated, setTruncated] = useState(false);
-	const name = fileNameOf(path);
+	const presentation = attachmentPresentation(path);
 
 	useEffect(() => {
 		const el = nameRef.current;
 		if (!el) return;
 		const check = () => setTruncated(el.scrollWidth > el.clientWidth);
 		check();
-		const ro = new ResizeObserver(check);
-		ro.observe(el);
-		return () => ro.disconnect();
+		const observer = new ResizeObserver(check);
+		observer.observe(el);
+		return () => observer.disconnect();
 	}, []);
-
+	const suffix = presentation.kind === "session" ? t("composer.attachmentSessionBadge") : presentation.suffix;
+	const Icon =
+		presentation.kind === "session"
+			? SessionChatIcon
+			: presentation.kind === "folder"
+				? FolderIcon
+				: presentation.kind === "markdown"
+					? MarkdownIcon
+					: presentation.kind === "code"
+						? FileCodeIcon
+						: FileTextIcon;
 	const chip = (
-		<span
-			className="mt-0.5 flex max-w-[190px] select-none items-center gap-1.5 rounded-md bg-surface px-2 py-0.5 text-ui-12 leading-5 text-ink-2 shadow-pop"
-			title={path}
-		>
-			<FileTextIcon size={13} className="shrink-0 text-ink-dim" />
+		<span className="group flex h-5.5 max-w-48 select-none items-center gap-1.5 rounded-lg bg-hover px-2 text-ui-12 text-ink-2">
+			<Icon size={13} className="shrink-0 text-ink-dim" />
 			<span ref={nameRef} className="min-w-0 truncate">
-				{name}
+				{presentation.name}
 			</span>
-			<button
-				type="button"
-				aria-label={t("composer.removeAttachment")}
-				onClick={onRemove}
-				className="shrink-0 text-ink-dim transition-colors hover:text-ink"
-			>
-				<CloseIcon size={9} />
-			</button>
+			{suffix && <span className="shrink-0 font-mono text-ui-105 text-ink-faint">{suffix}</span>}
+			<Tooltip label={t("composer.removeAttachment")}>
+				<button
+					type="button"
+					aria-label={t("composer.removeAttachment")}
+					disabled={readOnly}
+					onClick={onRemove}
+					className="pointer-events-none flex size-4 shrink-0 items-center justify-center rounded text-ink-dim opacity-0 transition-opacity hover:text-ink focus-visible:outline-2 focus-visible:outline-ink-faint group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 disabled:hover:text-ink-dim"
+				>
+					<CloseIcon size={9} />
+				</button>
+			</Tooltip>
 		</span>
 	);
-	return truncated ? <Tooltip label={path}>{chip}</Tooltip> : chip;
+	return truncated ? <Tooltip label={presentation.name}>{chip}</Tooltip> : chip;
 }

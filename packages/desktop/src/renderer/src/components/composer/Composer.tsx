@@ -21,10 +21,9 @@ import { ImagePreviewOverlay } from "../chat/ImagePreview";
 import { ArrowUpIcon, ChevronDownIcon, PencilIcon, PlusIcon, StopIcon } from "../icons";
 import { SESSION_DRAG_MIME } from "../sidebar/SessionRow";
 import { AtMenu } from "./AtMenu";
-import { AttachmentChip } from "./AttachmentChip";
+import { AttachmentTray } from "./AttachmentTray";
 import { ContextRing } from "./ContextRing";
 import { resolveDroppedFilePaths } from "./drop-files";
-import { ImageTray } from "./ImageTray";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionPicker } from "./PermissionPicker";
 import { QueueBar, type QueueItemAction } from "./QueueBar";
@@ -431,7 +430,7 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 
 	return (
 		<div ref={boxRef} className={centered ? "w-full max-w-[760px]" : "shrink-0 px-6 pb-3"}>
-			{/* relative：ImageTray 悬浮层（absolute bottom-full）的定位锚，浮在错误条/菜单/输入框整列之上 */}
+			{/* relative：保留为输入框菜单与图片预览的定位锚 */}
 			<div className="relative mx-auto max-w-[760px]">
 				{error && <SendErrorBar error={error} onRetry={() => void sendWhenReady()} />}
 				{feedback && !error && (
@@ -483,10 +482,14 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 					onMouseDown={handleComposerMouseDown}
 					className="rounded-[20px] border-[0.5px] border-border bg-surface shadow-soft"
 				>
-					<ImageTray
+					<AttachmentTray
+						draftKey={draftKey}
 						images={images}
+						attachments={attachments}
+						readOnly={readOnly}
 						onPreview={setPreviewImage}
-						onRemove={(index) => setImages((prev) => prev.filter((_, i) => i !== index))}
+						onRemoveImage={(index) => setImages((prev) => prev.filter((_, i) => i !== index))}
+						onRemoveAttachment={at.handleAttachmentRemove}
 					/>
 					{/* 引用胶囊区：独占顶部一行贴边（专为选中引用留的位置，不占正文宽度） */}
 					{quotes.length > 0 && (
@@ -500,29 +503,19 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 							))}
 						</div>
 					)}
-					{/* 正文行：slash/@ 胶囊内联在文本行首（有胶囊时 flex-wrap 同行，否则 textarea 独占整行）；
-					    外层容器恒定渲染，textarea 只切 className 不换位置 → 不重挂、不丢焦点；
-					    无引用时文本贴顶（可编辑区向上扩展），引用行临时加一行、不浪费空间 */}
+					{/* 附件统一在上方托盘；正文行仅 slash 胶囊与 textarea 同行，其余时候 textarea 独占整行。
+					    外层容器恒定渲染，textarea 只切 className 不换位置 → 不重挂、不丢焦点。 */}
 					<div className={`px-4 pb-5.5 ${quotes.length > 0 ? "pt-1.5" : "pt-2"}`}>
-						<div
-							className={
-								slashCommand || attachments.length > 0
-									? "flex flex-wrap items-start gap-x-1.5 gap-y-1"
-									: undefined
-							}
-						>
+						<div className={slashCommand ? "flex flex-wrap items-start gap-x-1.5 gap-y-1" : undefined}>
 							{slashCommand && (
 								<span className="mt-0.5 flex shrink-0 select-none items-center rounded-md bg-surface px-2 py-0.5 font-mono text-ui-12 leading-5 text-ink-2 shadow-pop">
 									{slashLabel !== slashCommand && <span className="mr-1.5">{slashLabel}</span>}/{slashCommand}
 								</span>
 							)}
-							{attachments.map((path, index) => (
-								<AttachmentChip key={path} path={path} onRemove={() => at.handleAttachmentRemove(index)} />
-							))}
 							<textarea
 								ref={textareaRef}
 								className={`max-h-[200px] resize-none bg-transparent text-ui-14 leading-relaxed outline-none placeholder:text-ink-faint select-text thin-scrollbar ${
-									slashCommand || attachments.length > 0 ? "min-w-[140px] flex-1" : "w-full"
+									slashCommand ? "min-w-[140px] flex-1" : "w-full"
 								}`}
 								placeholder={slashCommand ? t("slash.argPlaceholder") : placeholder}
 								value={text}
