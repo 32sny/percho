@@ -10,6 +10,7 @@ import type {
 	ProviderModelDiscoveryResult,
 	ProviderTestResult,
 } from "@percho/shared";
+import { readThinkingDeclaration } from "@percho/shared";
 import { JsonStore } from "../json-store";
 import { type DiscoveryResult, formatLimitWarning, parseModelLimits } from "./model-discovery";
 import { discoverProviderModels as runModelDiscovery } from "./model-discovery-fetch";
@@ -170,6 +171,9 @@ export class SettingsService {
 									...(typeof raw.contextWindow === "number" ? { contextWindow: raw.contextWindow } : {}),
 									...(typeof raw.maxTokens === "number" ? { maxTokens: raw.maxTokens } : {}),
 									...(Array.isArray(raw.input) && raw.input.includes("image") ? { imageInput: true } : {}),
+									...(raw.thinkingLevelMap && typeof raw.thinkingLevelMap === "object"
+										? { thinkingLevelMap: raw.thinkingLevelMap as Record<string, string | null> }
+										: {}),
 								})),
 							}
 						: {}),
@@ -258,6 +262,9 @@ export class SettingsService {
 								...(m.contextWindow ? { contextWindow: Math.round(m.contextWindow) } : {}),
 								...(m.maxTokens ? { maxTokens: Math.round(m.maxTokens) } : {}),
 								...(m.imageInput ? { input: ["text", "image"] } : {}),
+								...(m.thinkingLevelMap && Object.keys(m.thinkingLevelMap).length > 0
+									? { thinkingLevelMap: m.thinkingLevelMap }
+									: {}),
 							};
 						}),
 					}
@@ -464,6 +471,7 @@ export function toModelDiscoveryResult(result: DiscoveryResult): ProviderModelDi
 	}
 	const models: DiscoveredModelSummary[] = result.models.map((entry) => {
 		const parsed = parseModelLimits(entry.raw);
+		const thinking = readThinkingDeclaration(entry.raw);
 		return {
 			id: entry.id,
 			...(entry.name ? { name: entry.name } : {}),
@@ -474,6 +482,7 @@ export function toModelDiscoveryResult(result: DiscoveryResult): ProviderModelDi
 			...(parsed.candidates.inputLimit !== undefined ? { inputLimit: parsed.candidates.inputLimit } : {}),
 			sources: parsed.sources,
 			warnings: parsed.warnings.map(formatLimitWarning),
+			...(thinking ? { thinking } : {}),
 		};
 	});
 	return {

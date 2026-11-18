@@ -207,3 +207,43 @@ describe("filterDiscoveredModels", () => {
 		expect(filterDiscoveredModels(models, "nope")).toEqual([]);
 	});
 });
+
+describe("发现带回来的思考档位", () => {
+	it("选中后把档位映射写进行里，并原样提交给保存", () => {
+		const { row } = applyDiscoveredModel(
+			{ id: "", contextWindow: "", maxTokens: "", reasoning: true, imageInput: false },
+			{
+				id: "cn:kimi-k3.1-pro",
+				contextWindow: 1_000_000,
+				maxTokens: 32000,
+				warnings: [],
+				thinking: { supported: ["low", "high", "max"], canDisable: false },
+			},
+		);
+		expect(row.thinkingLevelMap).toEqual({
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: null,
+			high: "high",
+			xhigh: null,
+			max: "max",
+		});
+		// 档位映射在 reasoning=false 的模型上不生效，选中声明思考的模型时要一并勾上
+		expect(row.reasoning).toBe(true);
+		const [input] = rowsToModelInputs([row]);
+		expect(input?.thinkingLevelMap).toEqual(row.thinkingLevelMap);
+		expect(input?.reasoning).toBe(true);
+	});
+
+	it("编辑已存配置时能把手写的档位映射读回表单", () => {
+		const stored = {
+			id: "relay-pro",
+			reasoning: true,
+			thinkingLevelMap: { off: null, low: "low", high: "high", max: "max" },
+		};
+		const [row] = modelsToRows([stored]);
+		expect(row?.thinkingLevelMap).toEqual(stored.thinkingLevelMap);
+		expect(rowsToModelInputs(row ? [row] : [])[0]?.thinkingLevelMap).toEqual(stored.thinkingLevelMap);
+	});
+});

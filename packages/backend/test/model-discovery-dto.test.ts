@@ -89,3 +89,32 @@ describe("toModelDiscoveryResult", () => {
 		expect(JSON.stringify(dto)).not.toContain("Authorization");
 	});
 });
+
+describe("toModelDiscoveryResult 思考档位", () => {
+	it("接口声明了 efforts 才带 thinking，未声明则不带", () => {
+		const dto = toModelDiscoveryResult({
+			ok: true,
+			path: "/v1/models",
+			tried: [],
+			truncated: false,
+			duplicates: 0,
+			models: [
+				{
+					id: "m-reasoning",
+					raw: {
+						supports_reasoning: true,
+						only_reasoning: true,
+						reasoning_supported_efforts: ["low", "high", "max"],
+						can_disable_thinking: true,
+					},
+				},
+				{ id: "m-plain", raw: { context_length: 128000 } },
+			],
+		});
+		expect(dto.models[0]?.thinking).toEqual({
+			supported: ["low", "high", "max"],
+			canDisable: true,
+		});
+		expect(dto.models[1]?.thinking).toBeUndefined();
+	});
+});

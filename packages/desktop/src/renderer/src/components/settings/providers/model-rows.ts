@@ -1,12 +1,18 @@
-import type { CustomProviderModelInput, DiscoveredModelSummary } from "@percho/shared";
+import {
+	buildThinkingLevelMap,
+	type CustomProviderModelInput,
+	type DiscoveredModelSummary,
+} from "@percho/shared";
 
-/** 模型行编辑器的一行：数字字段保留原文（支持 k 后缀），提交时才解析 */
+/** 模型行编辑器的一行：数字字段保留原文（支持 k/M 后缀），提交时才解析 */
 export interface ModelRow {
 	id: string;
 	contextWindow: string;
 	maxTokens: string;
 	reasoning: boolean;
 	imageInput: boolean;
+	/** 来自清单发现的档位映射；不动手编辑，保存时原样写回 models.json */
+	thinkingLevelMap?: Record<string, string | null>;
 }
 
 export const EMPTY_MODEL_ROW: ModelRow = {
@@ -52,6 +58,7 @@ export function modelsToRows(
 		contextWindow?: number;
 		maxTokens?: number;
 		imageInput?: boolean;
+		thinkingLevelMap?: Record<string, string | null>;
 	}[],
 ): ModelRow[] {
 	const rows = models.map((m) => ({
@@ -60,6 +67,7 @@ export function modelsToRows(
 		maxTokens: m.maxTokens !== undefined ? formatTokenCount(m.maxTokens) : "",
 		reasoning: m.reasoning === true,
 		imageInput: m.imageInput === true,
+		...(m.thinkingLevelMap ? { thinkingLevelMap: m.thinkingLevelMap } : {}),
 	}));
 	return rows.length > 0 ? rows : [{ ...EMPTY_MODEL_ROW }];
 }
@@ -74,6 +82,7 @@ export function rowsToModelInputs(rows: ModelRow[]): CustomProviderModelInput[] 
 			contextWindow: (row.contextWindow.trim() && parseTokenCount(row.contextWindow)) || undefined,
 			maxTokens: (row.maxTokens.trim() && parseTokenCount(row.maxTokens)) || undefined,
 			imageInput: row.imageInput || undefined,
+			thinkingLevelMap: row.thinkingLevelMap,
 		}));
 }
 
@@ -148,6 +157,14 @@ export function applyDiscoveredModel(
 	} else {
 		const value = uniqueSourceValue(model.sources?.maxTokens);
 		if (value !== undefined) notice.maxTokens = value;
+	}
+
+	// 接口声明的思考档位：选中即带过来，保存时写进 models.json 的 thinkingLevelMap；
+	// 映射写在 reasoning=false 的模型上不会生效，所以声明支持思考时一并勾上
+	const thinkingLevelMap = model.thinking ? buildThinkingLevelMap(model.thinking) : undefined;
+	if (thinkingLevelMap) {
+		next.thinkingLevelMap = thinkingLevelMap;
+		next.reasoning = true;
 	}
 
 	const hasNotice =

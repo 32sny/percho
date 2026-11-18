@@ -1,5 +1,7 @@
 /** 设置页相关类型（IPC 往返用，独立于 pi 内部类型） */
 
+import type { ModelThinkingDeclaration } from "./thinking";
+
 /** pi-ai 的 KnownApi 协议可选值（自定义 provider 时用） */
 export const KNOWN_APIS = [
 	"openai-completions",
@@ -145,6 +147,11 @@ export interface CustomProviderModelInput {
 	maxTokens?: number;
 	/** 支持图片输入；缺省仅文本 */
 	imageInput?: boolean;
+	/**
+	 * 思考档位映射（SDK `thinkingLevelMap`）：键为 pi 档位，值为接口 effort 名，`null` 表示不支持。
+	 * 来自清单发现（A3）；缺省不写，沿用 SDK 默认阶梯。
+	 */
+	thinkingLevelMap?: Record<string, string | null>;
 }
 
 export interface CustomProviderInput {
@@ -193,6 +200,8 @@ export interface DiscoveredModelSummary {
 	};
 	/** 上限告警，形如 `contextWindow:conflict` / `max_output_tokens:invalid` / `maxTokens:inconsistent` */
 	warnings: string[];
+	/** 接口声明的思考能力；未声明则不写（保持 SDK 默认阶梯） */
+	thinking?: ModelThinkingDeclaration;
 }
 
 /** 发现失败的机器可读原因；文案由 renderer 本地化，不含响应体与凭证 */
