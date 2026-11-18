@@ -42,7 +42,11 @@ describe("会话悬停卡定位", () => {
 
 	it("超高内容只限制卡片高度，不把卡片顶端推出屏幕", () => {
 		expect(
-			positionSessionHoverCard(row, { width: SESSION_HOVER_WIDTH, height: 9000 }, { width: 1200, height: 240 }),
+			positionSessionHoverCard(
+				row,
+				{ width: SESSION_HOVER_WIDTH, height: 9000 },
+				{ width: 1200, height: 240 },
+			),
 		).toMatchObject({ x: 240, y: 8, width: SESSION_HOVER_WIDTH, maxHeight: 224 });
 	});
 

@@ -18,7 +18,10 @@ const assets = resolve(root, "packages/desktop/out/renderer/assets");
 await mkdir(outDir, { recursive: true });
 let css;
 for (const file of await readdir(assets)) {
-	if (/^index-.*\.css$/.test(file) && (await readFile(join(assets, file), "utf8")).includes("--color-surface"))
+	if (
+		/^index-.*\.css$/.test(file) &&
+		(await readFile(join(assets, file), "utf8")).includes("--color-surface")
+	)
 		css = file;
 }
 if (!css) throw new Error("先构建 renderer：npm run build -w packages/desktop");
