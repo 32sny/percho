@@ -595,6 +595,11 @@ export const en: Messages = {
 			discoverLimitAmbiguous:
 				"{modelId} reports several different context windows; not filled in, please confirm manually",
 			discoverAdopt: "Use API values",
+			thinkingLevels: "Levels",
+			thinkingLevelsPlaceholder: "low, high, max",
+			thinkingLevelsHint:
+				"Comma separated: minimal / low / medium / high / xhigh / max; leave empty to follow the default (minimal..high)",
+			allowThinkingOff: "Can disable",
 			discoverLimitConflict: "limit conflict",
 			discoverReasons: {
 				invalidUrl: "Unusable base URL: http(s) only, no credentials, query or fragment",

@@ -2,6 +2,7 @@ import {
 	buildThinkingLevelMap,
 	type CustomProviderModelInput,
 	type DiscoveredModelSummary,
+	isThinkingLevel,
 } from "@percho/shared";
 
 /** 模型行编辑器的一行：数字字段保留原文（支持 k/M 后缀），提交时才解析 */
@@ -11,8 +12,10 @@ export interface ModelRow {
 	maxTokens: string;
 	reasoning: boolean;
 	imageInput: boolean;
-	/** 来自清单发现的档位映射；不动手编辑，保存时原样写回 models.json */
-	thinkingLevelMap?: Record<string, string | null>;
+	/** 思考档位（逗号/空格分隔，如 `low, high, max`）；留空 = 不写映射、跟随 SDK 默认 */
+	thinkingLevels: string;
+	/** 是否允许关闭思考（写入映射的 off 档） */
+	allowThinkingOff: boolean;
 }
 
 export const EMPTY_MODEL_ROW: ModelRow = {
@@ -21,6 +24,8 @@ export const EMPTY_MODEL_ROW: ModelRow = {
 	maxTokens: "",
 	reasoning: false,
 	imageInput: false,
+	thinkingLevels: "",
+	allowThinkingOff: true,
 };
 
 /**
@@ -67,12 +72,27 @@ export function modelsToRows(
 		maxTokens: m.maxTokens !== undefined ? formatTokenCount(m.maxTokens) : "",
 		reasoning: m.reasoning === true,
 		imageInput: m.imageInput === true,
-		...(m.thinkingLevelMap ? { thinkingLevelMap: m.thinkingLevelMap } : {}),
+		...thinkingTextOf(m.thinkingLevelMap),
 	}));
 	return rows.length > 0 ? rows : [{ ...EMPTY_MODEL_ROW }];
 }
 
 /** 表单行 → CustomProviderModelInput（空 id 行丢弃；数字字段在此处已保证合法，见 rowsValid） */
+/** 已存映射 → 可编辑文本：非 null 的档位（不含 off），以及 off 是否开放 */
+function thinkingTextOf(map: Record<string, string | null> | undefined): {
+	thinkingLevels: string;
+	allowThinkingOff: boolean;
+} {
+	if (!map) return { thinkingLevels: "", allowThinkingOff: true };
+	const levels = Object.entries(map)
+		.filter(([level, value]) => level !== "off" && value !== null)
+		.map(([level]) => level);
+	return {
+		thinkingLevels: levels.join(", "),
+		allowThinkingOff: map.off !== null,
+	};
+}
+
 export function rowsToModelInputs(rows: ModelRow[]): CustomProviderModelInput[] {
 	return rows
 		.filter((row) => row.id.trim())
@@ -82,7 +102,7 @@ export function rowsToModelInputs(rows: ModelRow[]): CustomProviderModelInput[] 
 			contextWindow: (row.contextWindow.trim() && parseTokenCount(row.contextWindow)) || undefined,
 			maxTokens: (row.maxTokens.trim() && parseTokenCount(row.maxTokens)) || undefined,
 			imageInput: row.imageInput || undefined,
-			thinkingLevelMap: row.thinkingLevelMap,
+			...thinkingMapOf(row),
 		}));
 }
 
@@ -94,8 +114,17 @@ export function rowsValid(rows: ModelRow[]): boolean {
 	return rows.every(
 		(row) =>
 			(!row.contextWindow.trim() || parseTokenCount(row.contextWindow) !== null) &&
-			(!row.maxTokens.trim() || parseTokenCount(row.maxTokens) !== null),
+			(!row.maxTokens.trim() || parseTokenCount(row.maxTokens) !== null) &&
+			parseThinkingLevels(row.thinkingLevels).unknown.length === 0,
 	);
+}
+
+/** 档位文本 → `thinkingLevelMap`；留空则不写（保持 SDK 默认阶梯） */
+function thinkingMapOf(row: ModelRow): { thinkingLevelMap?: Record<string, string | null> } {
+	if (!row.reasoning) return {};
+	const { levels } = parseThinkingLevels(row.thinkingLevels);
+	if (levels.length === 0) return {};
+	return { thinkingLevelMap: buildThinkingLevelMap({ supported: levels, canDisable: row.allowThinkingOff }) };
 }
 
 /**
@@ -120,6 +149,28 @@ export interface DiscoveredLimitNotice {
 	maxTokens?: number;
 	/** 存在多个不同的总窗口别名：无法一键采用 */
 	ambiguousContext: boolean;
+}
+
+/**
+ * 解析档位文本：逗号/空格分隔，大小写不敏感；返回 pi 认识的档位与无法识别的词。
+ * `off` 不在这里出现——关闭与否由「可关闭思考」决定。
+ */
+export function parseThinkingLevels(text: string): { levels: string[]; unknown: string[] } {
+	const tokens = text
+		.split(/[,\s]+/)
+		.map((token) => token.trim().toLowerCase())
+		.filter(Boolean);
+	const levels: string[] = [];
+	const unknown: string[] = [];
+	for (const token of tokens) {
+		if (token === "off") continue;
+		if (isThinkingLevel(token)) {
+			if (!levels.includes(token)) levels.push(token);
+		} else if (!unknown.includes(token)) {
+			unknown.push(token);
+		}
+	}
+	return { levels, unknown };
 }
 
 /**
@@ -159,11 +210,11 @@ export function applyDiscoveredModel(
 		if (value !== undefined) notice.maxTokens = value;
 	}
 
-	// 接口声明的思考档位：选中即带过来，保存时写进 models.json 的 thinkingLevelMap；
-	// 映射写在 reasoning=false 的模型上不会生效，所以声明支持思考时一并勾上
-	const thinkingLevelMap = model.thinking ? buildThinkingLevelMap(model.thinking) : undefined;
-	if (thinkingLevelMap) {
-		next.thinkingLevelMap = thinkingLevelMap;
+	// 接口声明的思考档位：选中即带成可编辑文本；映射写在 reasoning=false 的模型上不会生效，
+	// 所以声明支持思考时一并勾上「思考」
+	if (model.thinking) {
+		next.thinkingLevels = model.thinking.supported.join(", ");
+		next.allowThinkingOff = model.thinking.canDisable;
 		next.reasoning = true;
 	}
 

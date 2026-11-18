@@ -8,6 +8,7 @@ import {
 	EMPTY_MODEL_ROW,
 	formatTokenCount,
 	type ModelRow,
+	parseThinkingLevels,
 	parseTokenCount,
 	splitPastedModelIds,
 } from "./model-rows";
@@ -79,6 +80,31 @@ export function ModelRowsEditor({
 		);
 	};
 
+	/**
+	 * 勾了「思考」才出现的档位行：文本可留空（= 不写映射、跟随 SDK 默认）；
+	 * 写入的值只认 pi 的档位名，认不出的标红且禁止保存。
+	 */
+	const thinkingRow = (row: ModelRow, index: number) => {
+		const { unknown } = parseThinkingLevels(row.thinkingLevels);
+		return (
+			<div className="mt-1 flex items-center gap-1.5 pl-1">
+				<Tooltip label={t("settings.providers.thinkingLevelsHint")} className="shrink-0">
+					<span className="text-ui-10 text-ink-faint">{t("settings.providers.thinkingLevels")}</span>
+				</Tooltip>
+				<input
+					className={`${inputClass} min-w-0 flex-1 ${unknown.length > 0 ? "border-red-400" : ""}`}
+					aria-invalid={unknown.length > 0}
+					placeholder={t("settings.providers.thinkingLevelsPlaceholder")}
+					value={row.thinkingLevels}
+					onChange={(e) => setRow(index, { thinkingLevels: e.target.value })}
+				/>
+				{toggle(row.allowThinkingOff, t("settings.providers.allowThinkingOff"), () =>
+					setRow(index, { allowThinkingOff: !row.allowThinkingOff }),
+				)}
+			</div>
+		);
+	};
+
 	const toggle = (active: boolean, label: string, onToggle: () => void) => (
 		<button
 			type="button"
@@ -97,44 +123,47 @@ export function ModelRowsEditor({
 			{rows.map((row, i) => (
 				// 行随增删变化，无稳定 id，用序号做 key（局部编辑器，重排场景不存在）
 				// biome-ignore lint/suspicious/noArrayIndexKey: 行编辑器无稳定标识
-				<div key={i} className="mb-1.5 flex items-center gap-1.5">
-					<ModelIdPicker
-						className={`${inputClass} min-w-0`}
-						placeholder={t("settings.providers.customModelId")}
-						value={row.id}
-						onValue={(value) => setRow(i, { id: value })}
-						onPaste={onIdPaste(i)}
-						onPick={(model) => onPickModel?.(i, model)}
-						candidates={discovery?.models ?? []}
-						status={discovery?.status ?? "idle"}
-						reason={discovery?.reason}
-					/>
-					{numberField(
-						row.contextWindow,
-						"ctx 128k",
-						(v) => setRow(i, { contextWindow: v }),
-						t("settings.providers.customModelCtx"),
-					)}
-					{numberField(
-						row.maxTokens,
-						"out 16k",
-						(v) => setRow(i, { maxTokens: v }),
-						t("settings.providers.customModelOut"),
-					)}
-					{toggle(row.reasoning, t("settings.providers.customModelReasoning"), () =>
-						setRow(i, { reasoning: !row.reasoning }),
-					)}
-					{toggle(row.imageInput, t("settings.providers.customModelImage"), () =>
-						setRow(i, { imageInput: !row.imageInput }),
-					)}
-					<button
-						type="button"
-						aria-label={t("settings.providers.removeModelRow")}
-						className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-faint transition-colors hover:bg-hover hover:text-ink-dim"
-						onClick={() => removeRow(i)}
-					>
-						<CloseIcon size={9} />
-					</button>
+				<div key={i} className="mb-1.5">
+					<div className="flex items-center gap-1.5">
+						<ModelIdPicker
+							className={`${inputClass} min-w-0`}
+							placeholder={t("settings.providers.customModelId")}
+							value={row.id}
+							onValue={(value) => setRow(i, { id: value })}
+							onPaste={onIdPaste(i)}
+							onPick={(model) => onPickModel?.(i, model)}
+							candidates={discovery?.models ?? []}
+							status={discovery?.status ?? "idle"}
+							reason={discovery?.reason}
+						/>
+						{numberField(
+							row.contextWindow,
+							"ctx 128k",
+							(v) => setRow(i, { contextWindow: v }),
+							t("settings.providers.customModelCtx"),
+						)}
+						{numberField(
+							row.maxTokens,
+							"out 16k",
+							(v) => setRow(i, { maxTokens: v }),
+							t("settings.providers.customModelOut"),
+						)}
+						{toggle(row.reasoning, t("settings.providers.customModelReasoning"), () =>
+							setRow(i, { reasoning: !row.reasoning }),
+						)}
+						{toggle(row.imageInput, t("settings.providers.customModelImage"), () =>
+							setRow(i, { imageInput: !row.imageInput }),
+						)}
+						<button
+							type="button"
+							aria-label={t("settings.providers.removeModelRow")}
+							className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-faint transition-colors hover:bg-hover hover:text-ink-dim"
+							onClick={() => removeRow(i)}
+						>
+							<CloseIcon size={9} />
+						</button>
+					</div>
+					{row.reasoning && thinkingRow(row, i)}
 				</div>
 			))}
 			<div className="flex items-center gap-3">

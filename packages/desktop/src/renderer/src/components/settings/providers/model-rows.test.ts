@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
 	adoptDiscoveredLimits,
 	applyDiscoveredModel,
+	EMPTY_MODEL_ROW,
 	filterDiscoveredModels,
 	formatTokenCount,
 	modelsToRows,
+	parseThinkingLevels,
 	parseTokenCount,
 	rowsToModelInputs,
 	rowsValid,
@@ -46,36 +48,112 @@ describe("formatTokenCount", () => {
 describe("rowsValid / rowsToModelInputs", () => {
 	it("全空行合法：模型列表留空 = 沿用内置模型列表（仅覆写 baseUrl）", () => {
 		expect(
-			rowsValid([{ id: "", contextWindow: "", maxTokens: "", reasoning: false, imageInput: false }]),
-		).toBe(true);
-		expect(
 			rowsValid([
-				{ id: "", contextWindow: "", maxTokens: "", reasoning: false, imageInput: false },
-				{ id: "", contextWindow: "", maxTokens: "", reasoning: false, imageInput: false },
+				{
+					id: "",
+					contextWindow: "",
+					maxTokens: "",
+					reasoning: false,
+					imageInput: false,
+					thinkingLevels: "",
+					allowThinkingOff: true,
+				},
 			]),
 		).toBe(true);
 		expect(
-			rowsValid([{ id: "gpt-5", contextWindow: "", maxTokens: "", reasoning: false, imageInput: false }]),
+			rowsValid([
+				{
+					id: "",
+					contextWindow: "",
+					maxTokens: "",
+					reasoning: false,
+					imageInput: false,
+					thinkingLevels: "",
+					allowThinkingOff: true,
+				},
+				{
+					id: "",
+					contextWindow: "",
+					maxTokens: "",
+					reasoning: false,
+					imageInput: false,
+					thinkingLevels: "",
+					allowThinkingOff: true,
+				},
+			]),
+		).toBe(true);
+		expect(
+			rowsValid([
+				{
+					id: "gpt-5",
+					contextWindow: "",
+					maxTokens: "",
+					reasoning: false,
+					imageInput: false,
+					thinkingLevels: "",
+					allowThinkingOff: true,
+				},
+			]),
 		).toBe(true);
 	});
 
 	it("全空行转换为空数组（不落盘 models 键）", () => {
 		expect(
-			rowsToModelInputs([{ id: "", contextWindow: "", maxTokens: "", reasoning: false, imageInput: false }]),
+			rowsToModelInputs([
+				{
+					id: "",
+					contextWindow: "",
+					maxTokens: "",
+					reasoning: false,
+					imageInput: false,
+					thinkingLevels: "",
+					allowThinkingOff: true,
+				},
+			]),
 		).toEqual([]);
 	});
 
 	it("ctx/out 留空合法，非法值不合法", () => {
-		const base = { id: "m1", reasoning: false, imageInput: false };
+		const base = {
+			id: "m1",
+			reasoning: false,
+			imageInput: false,
+			thinkingLevels: "",
+			allowThinkingOff: true,
+		};
 		expect(rowsValid([{ ...base, contextWindow: "abc", maxTokens: "" }])).toBe(false);
 		expect(rowsValid([{ ...base, contextWindow: "256k", maxTokens: "64k" }])).toBe(true);
 	});
 
 	it("转换时丢弃空行、留空字段不落盘", () => {
 		const inputs = rowsToModelInputs([
-			{ id: " gpt-5.6-terra ", contextWindow: "256k", maxTokens: "", reasoning: true, imageInput: true },
-			{ id: "", contextWindow: "", maxTokens: "", reasoning: false, imageInput: false },
-			{ id: "gpt-5-mini", contextWindow: "", maxTokens: "16k", reasoning: false, imageInput: false },
+			{
+				id: " gpt-5.6-terra ",
+				contextWindow: "256k",
+				maxTokens: "",
+				reasoning: true,
+				imageInput: true,
+				thinkingLevels: "",
+				allowThinkingOff: true,
+			},
+			{
+				id: "",
+				contextWindow: "",
+				maxTokens: "",
+				reasoning: false,
+				imageInput: false,
+				thinkingLevels: "",
+				allowThinkingOff: true,
+			},
+			{
+				id: "gpt-5-mini",
+				contextWindow: "",
+				maxTokens: "16k",
+				reasoning: false,
+				imageInput: false,
+				thinkingLevels: "",
+				allowThinkingOff: true,
+			},
 		]);
 		expect(inputs).toEqual([
 			{ id: "gpt-5.6-terra", reasoning: true, contextWindow: 256000, maxTokens: undefined, imageInput: true },
@@ -98,14 +176,38 @@ describe("modelsToRows", () => {
 				{ id: "b", name: "b" },
 			]),
 		).toEqual([
-			{ id: "a", contextWindow: "256k", maxTokens: "", reasoning: true, imageInput: false },
-			{ id: "b", contextWindow: "", maxTokens: "", reasoning: false, imageInput: false },
+			{
+				id: "a",
+				contextWindow: "256k",
+				maxTokens: "",
+				reasoning: true,
+				imageInput: false,
+				thinkingLevels: "",
+				allowThinkingOff: true,
+			},
+			{
+				id: "b",
+				contextWindow: "",
+				maxTokens: "",
+				reasoning: false,
+				imageInput: false,
+				thinkingLevels: "",
+				allowThinkingOff: true,
+			},
 		]);
 	});
 
 	it("空列表兜底一个空行", () => {
 		expect(modelsToRows([])).toEqual([
-			{ id: "", contextWindow: "", maxTokens: "", reasoning: false, imageInput: false },
+			{
+				id: "",
+				contextWindow: "",
+				maxTokens: "",
+				reasoning: false,
+				imageInput: false,
+				thinkingLevels: "",
+				allowThinkingOff: true,
+			},
 		]);
 	});
 });
@@ -129,6 +231,8 @@ describe("applyDiscoveredModel", () => {
 		maxTokens: "8k",
 		reasoning: true,
 		imageInput: false,
+		thinkingLevels: "",
+		allowThinkingOff: true,
 	};
 
 	it("能确定的上限一并填入，文本与行内输入同款格式", () => {
@@ -208,10 +312,10 @@ describe("filterDiscoveredModels", () => {
 	});
 });
 
-describe("发现带回来的思考档位", () => {
-	it("选中后把档位映射写进行里，并原样提交给保存", () => {
+describe("思考档位：发现带入与保存回写", () => {
+	it("选中候选后档位变成可编辑文本，提交时生成映射并一并勾上思考", () => {
 		const { row } = applyDiscoveredModel(
-			{ id: "", contextWindow: "", maxTokens: "", reasoning: true, imageInput: false },
+			{ ...EMPTY_MODEL_ROW, id: "" },
 			{
 				id: "cn:kimi-k3.1-pro",
 				contextWindow: 1_000_000,
@@ -220,7 +324,11 @@ describe("发现带回来的思考档位", () => {
 				thinking: { supported: ["low", "high", "max"], canDisable: false },
 			},
 		);
-		expect(row.thinkingLevelMap).toEqual({
+		expect(row.thinkingLevels).toBe("low, high, max");
+		expect(row.allowThinkingOff).toBe(false);
+		expect(row.reasoning).toBe(true);
+		const [input] = rowsToModelInputs([row]);
+		expect(input?.thinkingLevelMap).toEqual({
 			off: null,
 			minimal: null,
 			low: "low",
@@ -229,21 +337,60 @@ describe("发现带回来的思考档位", () => {
 			xhigh: null,
 			max: "max",
 		});
-		// 档位映射在 reasoning=false 的模型上不生效，选中声明思考的模型时要一并勾上
-		expect(row.reasoning).toBe(true);
-		const [input] = rowsToModelInputs([row]);
-		expect(input?.thinkingLevelMap).toEqual(row.thinkingLevelMap);
-		expect(input?.reasoning).toBe(true);
 	});
 
-	it("编辑已存配置时能把手写的档位映射读回表单", () => {
-		const stored = {
-			id: "relay-pro",
-			reasoning: true,
-			thinkingLevelMap: { off: null, low: "low", high: "high", max: "max" },
-		};
-		const [row] = modelsToRows([stored]);
-		expect(row?.thinkingLevelMap).toEqual(stored.thinkingLevelMap);
-		expect(rowsToModelInputs(row ? [row] : [])[0]?.thinkingLevelMap).toEqual(stored.thinkingLevelMap);
+	it("编辑已存配置时读回档位文本，空文本不写映射", () => {
+		const [row] = modelsToRows([
+			{
+				id: "relay-pro",
+				reasoning: true,
+				thinkingLevelMap: {
+					off: "off",
+					minimal: null,
+					low: "low",
+					medium: null,
+					high: "high",
+					xhigh: null,
+					max: "max",
+				},
+			},
+		]);
+		expect(row?.thinkingLevels).toBe("low, high, max");
+		expect(row?.allowThinkingOff).toBe(true);
+		expect(rowsToModelInputs(row ? [row] : [])[0]?.thinkingLevelMap).toEqual({
+			off: "off",
+			minimal: null,
+			low: "low",
+			medium: null,
+			high: "high",
+			xhigh: null,
+			max: "max",
+		});
+
+		const [plain] = modelsToRows([{ id: "plain" }]);
+		expect(plain?.thinkingLevels).toBe("");
+		expect(rowsToModelInputs(plain ? [plain] : [])[0]?.thinkingLevelMap).toBeUndefined();
+	});
+});
+
+describe("parseThinkingLevels 与档位校验", () => {
+	it("逗号或空格分隔、去重、忽略大小写与 off", () => {
+		expect(parseThinkingLevels("Low, high  max")).toEqual({ levels: ["low", "high", "max"], unknown: [] });
+		expect(parseThinkingLevels("off, low")).toEqual({ levels: ["low"], unknown: [] });
+		expect(parseThinkingLevels("")).toEqual({ levels: [], unknown: [] });
+	});
+
+	it("认不出的词单独报出，并阻止保存", () => {
+		expect(parseThinkingLevels("low, hgih").unknown).toEqual(["hgih"]);
+		expect(rowsValid([{ ...EMPTY_MODEL_ROW, id: "m", thinkingLevels: "low, hgih" }])).toBe(false);
+		expect(rowsValid([{ ...EMPTY_MODEL_ROW, id: "m", thinkingLevels: "low, max" }])).toBe(true);
+		expect(rowsValid([{ ...EMPTY_MODEL_ROW, id: "m", thinkingLevels: "" }])).toBe(true);
+	});
+
+	it("未勾思考时不写映射，即使填了档位", () => {
+		const [input] = rowsToModelInputs([
+			{ ...EMPTY_MODEL_ROW, id: "m", reasoning: false, thinkingLevels: "high, max" },
+		]);
+		expect(input?.thinkingLevelMap).toBeUndefined();
 	});
 });
