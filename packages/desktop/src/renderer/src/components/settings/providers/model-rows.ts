@@ -113,7 +113,11 @@ export interface DiscoveredLimitNotice {
 	ambiguousContext: boolean;
 }
 
-function uniqueSourceValue(list: { value: number }[] | undefined): number | undefined {
+/**
+ * 从来源里取**唯一值**：同一上限的多个同义键值一致时给值，值不一致就是真冲突，
+ * 不选较大/较小/第一个。与后端 `parseModelLimits` 同一个口径，前端不再另写一份。
+ */
+export function uniqueSourceValue(list: { value: number }[] | undefined): number | undefined {
 	const values = new Set((list ?? []).map((source) => source.value));
 	return values.size === 1 ? [...values][0] : undefined;
 }

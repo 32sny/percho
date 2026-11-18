@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { type MessageKey, useT } from "../../../i18n";
 import { ChevronDownIcon } from "../../icons";
 import { anchorOfElement, placeMenu } from "../../ui/place-menu";
-import { filterDiscoveredModels, formatTokenCount } from "./model-rows";
+import { filterDiscoveredModels, formatTokenCount, uniqueSourceValue } from "./model-rows";
 
 /** 发现失败的机器原因 → 文案键：显式映射，缺键在编译期暴露，不做动态拼串 */
 export const DISCOVERY_REASON_KEYS: Record<ModelDiscoveryErrorReason, MessageKey> = {
@@ -36,13 +36,9 @@ export const EMPTY_DISCOVERY: ModelDiscoveryState = { status: "idle", models: []
 
 /** 候选右侧的上限摘要：`128k / 16k`；缺值显示破折号，冲突时先用固定来源展示真实数字，并标出冲突 */
 function limitSummary(model: DiscoveredModelSummary, conflictLabel: string): string {
-	const uniqueValue = (list: { value: number }[] | undefined) => {
-		const values = new Set((list ?? []).map((source) => source.value));
-		return values.size === 1 ? [...values][0] : undefined;
-	};
 	const part = (value: number | undefined) => (value === undefined ? "—" : formatTokenCount(value));
-	const contextWindow = model.contextWindow ?? uniqueValue(model.sources?.contextWindow);
-	const maxTokens = model.maxTokens ?? uniqueValue(model.sources?.maxTokens);
+	const contextWindow = model.contextWindow ?? uniqueSourceValue(model.sources?.contextWindow);
+	const maxTokens = model.maxTokens ?? uniqueSourceValue(model.sources?.maxTokens);
 	const text = `${part(contextWindow)} / ${part(maxTokens)}`;
 	const conflicted = model.warnings.some(
 		(warning) => warning.endsWith(":conflict") || warning.endsWith(":inconsistent"),

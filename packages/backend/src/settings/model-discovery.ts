@@ -262,7 +262,8 @@ export async function discoverModelList(
 
 	try {
 		for (let index = 0; index < urls.length; index++) {
-			const url = urls[index] as string;
+			const url = urls[index];
+			if (!url) break;
 			const path = pathOf(url);
 			let response: DiscoveryResponse;
 			try {
@@ -277,8 +278,9 @@ export async function discoverModelList(
 				const { models, truncated, duplicates } = decision;
 				return { ok: true, path, models, truncated, duplicates, tried };
 			}
+			// 路径错误：记一笔继续试下一个地址；其余失败立即停
+			if (decision.kind === "fail") return stop(path, decision.reason);
 			tried.push({ path, reason: decision.reason });
-			if (decision.kind === "fail") return { ok: false, reason: decision.reason, tried };
 		}
 		return { ok: false, reason: "not-found", tried };
 	} finally {
