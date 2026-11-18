@@ -1,7 +1,16 @@
+import type { DiscoveredModelSummary } from "@percho/shared";
 import { useT } from "../../../i18n";
 import { CloseIcon } from "../../icons";
 import { Tooltip } from "../../ui/Tooltip";
-import { EMPTY_MODEL_ROW, type ModelRow, parseTokenCount, splitPastedModelIds } from "./model-rows";
+import { type ModelDiscoveryState, ModelDiscoveryStatus, ModelIdPicker } from "./ModelIdPicker";
+import {
+	type DiscoveredLimitNotice,
+	EMPTY_MODEL_ROW,
+	formatTokenCount,
+	type ModelRow,
+	parseTokenCount,
+	splitPastedModelIds,
+} from "./model-rows";
 
 const inputClass =
 	"w-full rounded-lg border border-border px-2.5 py-1.5 text-ui-12 outline-none focus:border-ink-faint disabled:cursor-not-allowed disabled:text-ink-faint";
@@ -10,9 +19,24 @@ const inputClass =
 export function ModelRowsEditor({
 	rows,
 	onChange,
+	discovery,
+	canDiscover = false,
+	onDiscover,
+	onPickModel,
+	limitNotice,
+	onAdoptLimits,
 }: {
 	rows: ModelRow[];
 	onChange: (rows: ModelRow[]) => void;
+	/** 清单发现结果（A1）；不传则隐藏「自动获取」入口 */
+	discovery?: ModelDiscoveryState;
+	/** baseUrl/api 已就绪才允许发起发现（禁用而不隐藏，入口可寻） */
+	canDiscover?: boolean;
+	onDiscover?: () => void;
+	/** 选中候选后未自动填入的上限（一键采用提示）；不传则不渲染 */
+	limitNotice?: { modelId: string; notice: DiscoveredLimitNotice } | null;
+	onAdoptLimits?: () => void;
+	onPickModel?: (index: number, model: DiscoveredModelSummary) => void;
 }) {
 	const t = useT();
 
@@ -74,12 +98,16 @@ export function ModelRowsEditor({
 				// 行随增删变化，无稳定 id，用序号做 key（局部编辑器，重排场景不存在）
 				// biome-ignore lint/suspicious/noArrayIndexKey: 行编辑器无稳定标识
 				<div key={i} className="mb-1.5 flex items-center gap-1.5">
-					<input
-						className={`${inputClass} min-w-0 flex-1`}
+					<ModelIdPicker
+						className={`${inputClass} min-w-0`}
 						placeholder={t("settings.providers.customModelId")}
 						value={row.id}
-						onChange={(e) => setRow(i, { id: e.target.value })}
+						onValue={(value) => setRow(i, { id: value })}
 						onPaste={onIdPaste(i)}
+						onPick={(model) => onPickModel?.(i, model)}
+						candidates={discovery?.models ?? []}
+						status={discovery?.status ?? "idle"}
+						reason={discovery?.reason}
 					/>
 					{numberField(
 						row.contextWindow,
@@ -126,7 +154,56 @@ export function ModelRowsEditor({
 						{t("settings.providers.clearModelRows")}
 					</button>
 				)}
+				{discovery && (
+					<Tooltip
+						label={
+							canDiscover
+								? t("settings.providers.discoverModels")
+								: t("settings.providers.discoverNotFetched")
+						}
+					>
+						<button
+							type="button"
+							className="rounded-md px-1.5 py-1 text-ui-11 text-ink-dim transition-colors hover:bg-hover disabled:opacity-40 disabled:hover:bg-transparent"
+							disabled={!canDiscover || discovery.status === "loading"}
+							onClick={onDiscover}
+						>
+							{discovery.status === "loading"
+								? t("settings.providers.discovering")
+								: t("settings.providers.discoverModels")}
+						</button>
+					</Tooltip>
+				)}
 			</div>
+			{discovery && <ModelDiscoveryStatus discovery={discovery} />}
+			{limitNotice && (
+				<p className="mt-1 flex flex-wrap items-center gap-2 text-ui-11 leading-relaxed text-ink-faint">
+					<span>
+						{limitNotice.notice.ambiguousContext
+							? t("settings.providers.discoverLimitAmbiguous", { modelId: limitNotice.modelId })
+							: t("settings.providers.discoverLimitSkipped", {
+									modelId: limitNotice.modelId,
+									contextWindow:
+										limitNotice.notice.contextWindow !== undefined
+											? formatTokenCount(limitNotice.notice.contextWindow)
+											: "—",
+									maxTokens:
+										limitNotice.notice.maxTokens !== undefined
+											? formatTokenCount(limitNotice.notice.maxTokens)
+											: "—",
+								})}
+					</span>
+					{!limitNotice.notice.ambiguousContext && onAdoptLimits && (
+						<button
+							type="button"
+							className="rounded-md px-1.5 py-0.5 text-ui-11 text-ink-dim transition-colors hover:bg-hover"
+							onClick={onAdoptLimits}
+						>
+							{t("settings.providers.discoverAdopt")}
+						</button>
+					)}
+				</p>
+			)}
 			<p className="mt-1 text-ui-10 leading-relaxed text-ink-faint">
 				{t("settings.providers.customModelsHint")}
 			</p>

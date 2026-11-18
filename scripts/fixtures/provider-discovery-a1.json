@@ -1,0 +1,110 @@
+{
+	"endpoints": [
+		{ "id": "api-empty-list", "base": "/api/", "reply": ["empty"], "calls": ["/api/models"], "result": "ok" },
+		{
+			"id": "api-version-after-miss",
+			"base": "/api",
+			"reply": [404, "list"],
+			"calls": ["/api/models", "/api/v1/models"],
+			"result": "ok"
+		},
+		{
+			"id": "api-html-then-miss",
+			"base": "/api",
+			"reply": ["html", 404],
+			"calls": ["/api/models", "/api/v1/models"],
+			"result": "error"
+		},
+		{
+			"id": "root-version",
+			"base": "/",
+			"reply": [405, "list"],
+			"calls": ["/models", "/v1/models"],
+			"result": "ok"
+		},
+		{
+			"id": "version-already-present",
+			"base": "/api/v1/",
+			"reply": [404],
+			"calls": ["/api/v1/models"],
+			"result": "error"
+		},
+		{
+			"id": "tenant-prefix",
+			"base": "/tenant/api",
+			"reply": [404],
+			"calls": ["/tenant/api/models"],
+			"result": "error"
+		},
+		{
+			"id": "other-protocol",
+			"base": "/api",
+			"api": "anthropic-messages",
+			"reply": [404],
+			"calls": ["/api/models"],
+			"result": "error"
+		},
+		{ "id": "bad-key", "base": "/api", "reply": [401], "calls": ["/api/models"], "result": "error" },
+		{ "id": "rate-limited", "base": "/", "reply": [429], "calls": ["/models"], "result": "error" },
+		{ "id": "redirect", "base": "/api", "reply": [302], "calls": ["/api/models"], "result": "error" },
+		{ "id": "timeout", "base": "/api", "reply": ["timeout"], "calls": ["/api/models"], "result": "error" },
+		{
+			"id": "unexpected-json",
+			"base": "/api",
+			"reply": ["object"],
+			"calls": ["/api/models"],
+			"result": "error"
+		}
+	],
+	"limits": [
+		{
+			"id": "three-meanings",
+			"raw": { "context_length": "128000", "max_input_tokens": 96000, "max_output_tokens": "16384" },
+			"expected": { "contextWindow": 128000, "inputLimit": 96000, "maxTokens": 16384 },
+			"warnings": []
+		},
+		{
+			"id": "no-inferred-window",
+			"raw": { "max_input_tokens": 96000, "max_output_tokens": 16384 },
+			"expected": { "inputLimit": 96000, "maxTokens": 16384 },
+			"warnings": []
+		},
+		{
+			"id": "aliases-agree",
+			"raw": { "context_window": 128000, "context_length": "128000" },
+			"expected": { "contextWindow": 128000 },
+			"warnings": []
+		},
+		{
+			"id": "aliases-disagree",
+			"raw": { "context_window": 128000, "max_context_length": 64000, "max_output_tokens": 4096 },
+			"expected": { "maxTokens": 4096 },
+			"warnings": ["contextWindow:conflict"]
+		},
+		{
+			"id": "bad-alias-valid-sibling",
+			"raw": { "context_window": "128k", "context_length": "64000" },
+			"expected": { "contextWindow": 64000 },
+			"warnings": ["context_window:invalid"]
+		},
+		{
+			"id": "invalid-values",
+			"raw": { "context_window": "9007199254740992", "max_input_tokens": 0, "max_output_tokens": "1.5" },
+			"expected": {},
+			"warnings": ["context_window:invalid", "max_input_tokens:invalid", "max_output_tokens:invalid"]
+		},
+		{
+			"id": "input-exceeds-window",
+			"raw": { "context_window": 32000, "max_input_tokens": 64000, "max_output_tokens": 4096 },
+			"expected": { "maxTokens": 4096 },
+			"warnings": ["contextWindow:inconsistent", "inputLimit:inconsistent"]
+		},
+		{
+			"id": "output-exceeds-window",
+			"raw": { "context_window": 32000, "max_output_tokens": 64000 },
+			"expected": {},
+			"warnings": ["contextWindow:inconsistent", "maxTokens:inconsistent"]
+		},
+		{ "id": "id-only", "raw": {}, "expected": {}, "warnings": [] }
+	]
+}

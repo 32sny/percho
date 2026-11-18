@@ -168,3 +168,60 @@ export interface ProviderTestResult {
 	/** 测试时实际使用的模型 */
 	modelId?: string;
 }
+
+/** 模型清单发现：一个上限候选的响应原始键与值（冲突时用于展示差异） */
+export interface DiscoveredLimitSource {
+	key: string;
+	value: number;
+}
+
+/** 模型清单发现：单个候选（只读，不含凭证；数值缺省 = 没有可自动采用的值） */
+export interface DiscoveredModelSummary {
+	id: string;
+	name?: string;
+	/** 总上下文窗口候选；冲突时不给值，见 warnings 与 sources */
+	contextWindow?: number;
+	/** 最大输出候选 */
+	maxTokens?: number;
+	/** 仅输入上限：参考信息，不写入模型配置、不代填总窗口 */
+	inputLimit?: number;
+	/** 所有被接受的数值及响应原始键；未自动采用的数值在此保留来源 */
+	sources?: {
+		contextWindow?: DiscoveredLimitSource[];
+		inputLimit?: DiscoveredLimitSource[];
+		maxTokens?: DiscoveredLimitSource[];
+	};
+	/** 上限告警，形如 `contextWindow:conflict` / `max_output_tokens:invalid` / `maxTokens:inconsistent` */
+	warnings: string[];
+}
+
+/** 发现失败的机器可读原因；文案由 renderer 本地化，不含响应体与凭证 */
+export type ModelDiscoveryErrorReason =
+	| "invalid-url"
+	| "not-found"
+	| "auth"
+	| "rate-limited"
+	| "http"
+	| "server"
+	| "redirect"
+	| "html"
+	| "shape"
+	| "too-large"
+	| "timeout"
+	| "aborted"
+	| "network";
+
+/** 一次模型清单发现的结果（A1：只发现，不写任何配置） */
+export interface ProviderModelDiscoveryResult {
+	ok: boolean;
+	models: DiscoveredModelSummary[];
+	/** 命中清单的路径（成功时），只含路径与查询串，不含 origin */
+	path?: string;
+	/** 条目数达上限时为真，此时不能称完整模型目录 */
+	truncated?: boolean;
+	/** 被丢弃的重复 id 数量 */
+	duplicates?: number;
+	reason?: ModelDiscoveryErrorReason;
+	/** 已试路径与原因（失败时展示，不含凭证） */
+	tried?: { path: string; reason: string }[];
+}

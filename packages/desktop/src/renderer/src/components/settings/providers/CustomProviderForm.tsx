@@ -1,10 +1,21 @@
 import { type CustomProviderInput, KNOWN_APIS, type ProviderInfo } from "@percho/shared";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getPi } from "../../../api";
 import { useT } from "../../../i18n";
 import { useSettingsStore } from "../../../stores/settings";
 import { Tooltip } from "../../ui/Tooltip";
+import { EMPTY_DISCOVERY, type ModelDiscoveryState } from "./ModelIdPicker";
 import { ModelRowsEditor } from "./ModelRowsEditor";
-import { EMPTY_MODEL_ROW, type ModelRow, modelsToRows, rowsToModelInputs, rowsValid } from "./model-rows";
+import {
+	adoptDiscoveredLimits,
+	applyDiscoveredModel,
+	type DiscoveredLimitNotice,
+	EMPTY_MODEL_ROW,
+	type ModelRow,
+	modelsToRows,
+	rowsToModelInputs,
+	rowsValid,
+} from "./model-rows";
 
 interface ProviderFormState {
 	id: string;
@@ -44,6 +55,7 @@ function ProviderConfigForm({
 	title,
 	initial,
 	lockId,
+	providerId,
 	onSubmit,
 	onCancel,
 }: {
@@ -51,12 +63,94 @@ function ProviderConfigForm({
 	initial: ProviderFormState;
 	/** 编辑模式锁定 ID：它是 models.json/auth.json/会话模型引用的主键，不可改 */
 	lockId?: boolean;
+	/** 编辑模式的 provider ID：发现时用它读取已存凭证（新填 key 优先） */
+	providerId?: string;
 	onSubmit: (form: ProviderFormState) => Promise<void>;
 	onCancel: () => void;
 }) {
 	const t = useT();
 	const [form, setForm] = useState(initial);
 	const [submitting, setSubmitting] = useState(false);
+	const [discovery, setDiscovery] = useState<ModelDiscoveryState>(EMPTY_DISCOVERY);
+	/** 刚选中但没能自动填上限的那一行（冲突/矛盾时给原因与一键采用） */
+	const [limitNotice, setLimitNotice] = useState<{
+		rowIndex: number;
+		modelId: string;
+		notice: DiscoveredLimitNotice;
+	} | null>(null);
+	/** 进行中的发现请求 ID：改写地址/重取/卸载时用旧 ID 发取消，并通过比对丢弃过期结果 */
+	const requestRef = useRef<string | null>(null);
+
+	const cancelDiscovery = useCallback(() => {
+		const requestId = requestRef.current;
+		requestRef.current = null;
+		if (requestId) void getPi().cancelProviderModelDiscovery({ requestId });
+	}, []);
+
+	// baseUrl/api 变了旧清单即作废（Plan 要求：旧请求不得覆盖新表单）
+	const discoveryKey = `${form.baseUrl.trim()}\u0000${form.api.trim()}`;
+	const lastKeyRef = useRef(discoveryKey);
+	useEffect(() => {
+		if (lastKeyRef.current === discoveryKey) return;
+		lastKeyRef.current = discoveryKey;
+		cancelDiscovery();
+		setDiscovery(EMPTY_DISCOVERY);
+		setLimitNotice(null);
+	}, [discoveryKey, cancelDiscovery]);
+
+	// 卸载/收起时取消在途请求，避免后台白跑
+	useEffect(() => cancelDiscovery, [cancelDiscovery]);
+
+	const canDiscover = form.baseUrl.trim().length > 0 && form.api.trim().length > 0;
+
+	const discover = async () => {
+		if (!canDiscover) return;
+		cancelDiscovery();
+		const requestId = crypto.randomUUID();
+		requestRef.current = requestId;
+		setDiscovery({ status: "loading", models: [] });
+		setLimitNotice(null);
+		try {
+			const result = await getPi().discoverProviderModels({
+				requestId,
+				providerId,
+				baseUrl: form.baseUrl.trim(),
+				api: form.api.trim(),
+				apiKey: form.apiKey.trim() || undefined,
+			});
+			if (requestRef.current !== requestId) return;
+			requestRef.current = null;
+			setDiscovery(
+				result.ok
+					? { status: "ready", models: result.models, path: result.path, tried: result.tried }
+					: { status: "error", models: [], reason: result.reason, tried: result.tried },
+			);
+		} catch {
+			if (requestRef.current !== requestId) return;
+			requestRef.current = null;
+			setDiscovery({ status: "error", models: [], reason: "network" });
+		}
+	};
+
+	const pickModel = (index: number, model: Parameters<typeof applyDiscoveredModel>[1]) => {
+		const picked = applyDiscoveredModel(form.models[index] ?? { ...EMPTY_MODEL_ROW }, model);
+		setForm((f) => ({
+			...f,
+			models: f.models.map((row, i) => (i === index ? picked.row : row)),
+		}));
+		// 自相矛盾/多值冲突的上限不自动填，提示原因并给一键采用
+		setLimitNotice(picked.notice ? { rowIndex: index, modelId: model.id, notice: picked.notice } : null);
+	};
+
+	const adoptLimits = () => {
+		if (!limitNotice) return;
+		const { rowIndex, notice } = limitNotice;
+		setForm((f) => ({
+			...f,
+			models: f.models.map((row, i) => (i === rowIndex ? adoptDiscoveredLimits(row, notice) : row)),
+		}));
+		setLimitNotice(null);
+	};
 
 	const set = (field: keyof ProviderFormState) => (e: { target: { value: string } }) =>
 		setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -124,7 +218,16 @@ function ProviderConfigForm({
 					value={form.apiKey}
 					onChange={set("apiKey")}
 				/>
-				<ModelRowsEditor rows={form.models} onChange={(models) => setForm((f) => ({ ...f, models }))} />
+				<ModelRowsEditor
+					rows={form.models}
+					onChange={(models) => setForm((f) => ({ ...f, models }))}
+					discovery={discovery}
+					canDiscover={canDiscover}
+					onDiscover={() => void discover()}
+					onPickModel={pickModel}
+					limitNotice={limitNotice && { modelId: limitNotice.modelId, notice: limitNotice.notice }}
+					onAdoptLimits={adoptLimits}
+				/>
 			</div>
 			<div className="mt-2 flex justify-end gap-2">
 				<button
@@ -199,6 +302,7 @@ export function CustomProviderEditForm({ provider, onDone }: { provider: Provide
 				models: modelsToRows(provider.customModels ?? []),
 			}}
 			lockId
+			providerId={provider.id}
 			onSubmit={async (form) => {
 				await updateCustom(toInput(form));
 				onDone();

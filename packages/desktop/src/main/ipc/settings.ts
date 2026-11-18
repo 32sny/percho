@@ -22,6 +22,8 @@ export function registerSettingsIpc(backend: PiBackend): void {
 		setProviderBaseUrl: ({ providerId, baseUrl, apiKey }) =>
 			backend.settings.setProviderBaseUrl(providerId, baseUrl, apiKey),
 		testProvider: ({ providerId, modelId }) => backend.settings.testProvider(providerId, modelId),
+		discoverProviderModels: (input) => backend.settings.discoverProviderModels(input),
+		cancelProviderModelDiscovery: ({ requestId }) => backend.settings.cancelModelDiscovery(requestId),
 		getModelPrefs: () => backend.modelPrefs.getPrefs(),
 		setModelHidden: ({ provider, modelId, hidden }) =>
 			backend.modelPrefs.setModelHidden(provider, modelId, hidden),

@@ -76,6 +76,7 @@ import type {
 	LoginResult,
 	ModelPrefs,
 	ProviderInfo,
+	ProviderModelDiscoveryResult,
 	ProviderTestResult,
 	SubagentInfo,
 } from "./settings";
@@ -288,6 +289,15 @@ export const SETTINGS_CHANNELS = {
 		void
 	>(),
 	testProvider: ch("settings:testProvider")<{ providerId: string; modelId?: string }, ProviderTestResult>(),
+	/**
+	 * 读取自定义 provider 的模型清单（A1）：只发现，不写 models.json；apiKey 留空时用已存凭证。
+	 * `requestId` 用于取消：同一表单改地址/失焦时取消旧请求，结果不得覆盖新表单。
+	 */
+	discoverProviderModels: ch("settings:discoverModels")<
+		{ requestId: string; providerId?: string; baseUrl: string; api: string; apiKey?: string },
+		ProviderModelDiscoveryResult
+	>(),
+	cancelProviderModelDiscovery: ch("settings:cancelDiscoverModels")<{ requestId: string }, void>(),
 	/** 用户级模型偏好：隐藏模型 + 子代理模型/思考深度覆盖 + 执行器偏好 */
 	getModelPrefs: ch("settings:getModelPrefs")<void, ModelPrefs>(),
 	/** 设置模型在选择器中的可见性；隐藏不影响已经选中的会话运行 */

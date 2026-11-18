@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+	adoptDiscoveredLimits,
+	applyDiscoveredModel,
+	filterDiscoveredModels,
 	formatTokenCount,
 	modelsToRows,
 	parseTokenCount,
@@ -9,12 +12,14 @@ import {
 } from "./model-rows";
 
 describe("parseTokenCount", () => {
-	it("解析裸数字与 k 后缀", () => {
+	it("解析裸数字与 k/M 后缀", () => {
 		expect(parseTokenCount("256000")).toBe(256000);
 		expect(parseTokenCount("256k")).toBe(256000);
 		expect(parseTokenCount("128K")).toBe(128000);
 		expect(parseTokenCount(" 16k ")).toBe(16000);
 		expect(parseTokenCount("1.5k")).toBe(1500);
+		expect(parseTokenCount("1M")).toBe(1_000_000);
+		expect(parseTokenCount("0.5m")).toBe(500_000);
 	});
 
 	it("拒绝非法输入", () => {
@@ -28,9 +33,11 @@ describe("parseTokenCount", () => {
 });
 
 describe("formatTokenCount", () => {
-	it("整千折叠为 k，其余原样", () => {
+	it("整千折 k、整百万折 M，其余原样", () => {
 		expect(formatTokenCount(256000)).toBe("256k");
 		expect(formatTokenCount(128000)).toBe("128k");
+		expect(formatTokenCount(1_000_000)).toBe("1M");
+		expect(formatTokenCount(1048576)).toBe("1048576");
 		expect(formatTokenCount(999)).toBe("999");
 		expect(formatTokenCount(65536)).toBe("65536");
 	});
@@ -112,5 +119,91 @@ describe("splitPastedModelIds", () => {
 		]);
 		expect(splitPastedModelIds("gpt-5")).toBeNull();
 		expect(splitPastedModelIds(",,\n")).toBeNull();
+	});
+});
+
+describe("applyDiscoveredModel", () => {
+	const base = {
+		id: "manual-id",
+		contextWindow: "200k",
+		maxTokens: "8k",
+		reasoning: true,
+		imageInput: false,
+	};
+
+	it("能确定的上限一并填入，文本与行内输入同款格式", () => {
+		const { row, notice } = applyDiscoveredModel(base, {
+			id: "relay-pro",
+			contextWindow: 128000,
+			maxTokens: 16384,
+			warnings: [],
+		});
+		expect(row).toEqual({ ...base, id: "relay-pro", contextWindow: "128k", maxTokens: "16384" });
+		expect(notice).toBeUndefined();
+	});
+
+	it("接口自相矛盾（输出大于总窗口）时不自动填，但把值交出来供一键采用", () => {
+		const { row, notice } = applyDiscoveredModel(base, {
+			id: "cn:kimi-k3-1",
+			sources: {
+				contextWindow: [{ key: "context_length", value: 1000000 }],
+				maxTokens: [{ key: "max_output_tokens", value: 1048576 }],
+			},
+			warnings: ["contextWindow:inconsistent", "maxTokens:inconsistent"],
+		});
+		expect(row).toEqual({ ...base, id: "cn:kimi-k3-1" });
+		expect(notice).toEqual({ contextWindow: 1000000, maxTokens: 1048576, ambiguousContext: false });
+	});
+
+	it("多个不同总窗口别名时只报歧义，不给一键采用的值", () => {
+		const { row, notice } = applyDiscoveredModel(base, {
+			id: "relay-x",
+			sources: {
+				contextWindow: [
+					{ key: "context_window", value: 128000 },
+					{ key: "max_context_length", value: 64000 },
+				],
+			},
+			warnings: ["contextWindow:conflict"],
+		});
+		expect(row.id).toBe("relay-x");
+		expect(notice).toEqual({ ambiguousContext: true });
+	});
+
+	it("采用接口值后写入该行，不触碰思考/图像等未发现字段", () => {
+		const adopted = adoptDiscoveredLimits(base, {
+			contextWindow: 1000000,
+			maxTokens: 1048576,
+			ambiguousContext: false,
+		});
+		expect(adopted).toEqual({ ...base, contextWindow: "1M", maxTokens: "1048576" });
+		expect(adopted.reasoning).toBe(true);
+		expect(adopted.imageInput).toBe(false);
+	});
+});
+
+describe("filterDiscoveredModels", () => {
+	const models = [
+		{ id: "cn:deepseek-v4.1-flash", name: "DeepSeek V4.1", warnings: [] },
+		{ id: "cn:glm-5.3-flash", name: "GLM 5.3", warnings: [] },
+		{ id: "relay-pro", warnings: [] },
+	];
+
+	it("空查询返回全部：打开面板时不能被已填 ID 筛掉", () => {
+		expect(filterDiscoveredModels(models, "")).toHaveLength(3);
+		expect(filterDiscoveredModels(models, "   ")).toHaveLength(3);
+	});
+
+	it("按 id 子串过滤，忽略大小写", () => {
+		expect(filterDiscoveredModels(models, "DEEPSEEK").map((m) => m.id)).toEqual(["cn:deepseek-v4.1-flash"]);
+		expect(filterDiscoveredModels(models, "flash").map((m) => m.id)).toEqual([
+			"cn:deepseek-v4.1-flash",
+			"cn:glm-5.3-flash",
+		]);
+	});
+
+	it("也匹配展示名，无命中返回空数组", () => {
+		expect(filterDiscoveredModels(models, "glm 5.3").map((m) => m.id)).toEqual(["cn:glm-5.3-flash"]);
+		expect(filterDiscoveredModels(models, "nope")).toEqual([]);
 	});
 });

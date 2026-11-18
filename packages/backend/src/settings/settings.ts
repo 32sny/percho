@@ -4,11 +4,15 @@ import { getAgentDir, type ModelRuntime } from "@earendil-works/pi-coding-agent"
 import type {
 	CustomProviderInput,
 	CustomProviderUpdateInput,
+	DiscoveredModelSummary,
 	ListProvidersOptions,
 	ProviderInfo,
+	ProviderModelDiscoveryResult,
 	ProviderTestResult,
 } from "@percho/shared";
 import { JsonStore } from "../json-store";
+import { type DiscoveryResult, formatLimitWarning, parseModelLimits } from "./model-discovery";
+import { discoverProviderModels as runModelDiscovery } from "./model-discovery-fetch";
 
 /** 内置 provider id 集合：models.json 里配置的 ID 命中它 = 「覆写内置」（有官方模型列表可共享），否则是全新自定义 provider */
 const BUILTIN_PROVIDER_IDS = new Set(builtinProviders().map((p) => p.id));
@@ -63,6 +67,9 @@ async function readJsonFile(path: string): Promise<JsonObject> {
  * 写完统一经 ModelRuntime.refresh() 让运行中的会话生效。
  */
 export class SettingsService {
+	/** 进行中的清单发现：requestId → abort（同一表单改地址/卸载时取消旧请求） */
+	private readonly discoveryRequests = new Map<string, AbortController>();
+
 	constructor(private readonly getRuntime: () => Promise<ModelRuntime>) {}
 
 	private get authPath(): string {
@@ -401,4 +408,80 @@ export class SettingsService {
 			return { ok: false, modelId: model.id, error: error instanceof Error ? error.message : String(error) };
 		}
 	}
+
+	/**
+	 * 读取自定义 provider 的模型清单（A1）：只发现，不写 models.json、不改 provider。
+	 * 表单新填的 key 优先；留空时用 auth.json 里该 provider 已存的 key（编辑场景）。
+	 * 凭证只进内存请求头，不进返回值、日志或错误文案。
+	 */
+	async discoverProviderModels(input: {
+		requestId: string;
+		providerId?: string;
+		baseUrl: string;
+		api: string;
+		apiKey?: string;
+	}): Promise<ProviderModelDiscoveryResult> {
+		const apiKey = input.apiKey?.trim() || (await this.readStoredKey(input.providerId?.trim()));
+
+		// 同一 requestId 重入时先取消旧请求，避免慢响应覆盖新表单
+		this.discoveryRequests.get(input.requestId)?.abort();
+		const controller = new AbortController();
+		this.discoveryRequests.set(input.requestId, controller);
+		try {
+			const result = await runModelDiscovery(
+				{ baseUrl: input.baseUrl, api: input.api, apiKey },
+				{ signal: controller.signal },
+			);
+			return toModelDiscoveryResult(result);
+		} finally {
+			if (this.discoveryRequests.get(input.requestId) === controller) {
+				this.discoveryRequests.delete(input.requestId);
+			}
+		}
+	}
+
+	/** 取消进行中的清单发现（关闭编辑面板、改地址、切 provider 时调用） */
+	cancelModelDiscovery(requestId: string): void {
+		this.discoveryRequests.get(requestId)?.abort();
+		this.discoveryRequests.delete(requestId);
+	}
+
+	/** 已存凭证（仅 auth.json 的 api_key 条目；不要求已配置，未配置就当作无 key） */
+	private async readStoredKey(providerId: string | undefined): Promise<string | undefined> {
+		if (!providerId) return undefined;
+		const auth = await readJsonFile(this.authPath);
+		const entry = auth[providerId];
+		if (!entry || typeof entry !== "object") return undefined;
+		const key = (entry as JsonObject).key;
+		return typeof key === "string" && key.trim() ? key.trim() : undefined;
+	}
+}
+
+/** 发现结果（后端）→ IPC DTO：只带可供 UI 展示的数值与告警，不携凭证与响应体 */
+export function toModelDiscoveryResult(result: DiscoveryResult): ProviderModelDiscoveryResult {
+	if (!result.ok) {
+		return { ok: false, models: [], reason: result.reason, tried: result.tried };
+	}
+	const models: DiscoveredModelSummary[] = result.models.map((entry) => {
+		const parsed = parseModelLimits(entry.raw);
+		return {
+			id: entry.id,
+			...(entry.name ? { name: entry.name } : {}),
+			...(parsed.candidates.contextWindow !== undefined
+				? { contextWindow: parsed.candidates.contextWindow }
+				: {}),
+			...(parsed.candidates.maxTokens !== undefined ? { maxTokens: parsed.candidates.maxTokens } : {}),
+			...(parsed.candidates.inputLimit !== undefined ? { inputLimit: parsed.candidates.inputLimit } : {}),
+			sources: parsed.sources,
+			warnings: parsed.warnings.map(formatLimitWarning),
+		};
+	});
+	return {
+		ok: true,
+		models,
+		path: result.path,
+		truncated: result.truncated,
+		duplicates: result.duplicates,
+		tried: result.tried,
+	};
 }
