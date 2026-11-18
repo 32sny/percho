@@ -22,8 +22,10 @@ export interface DraftEntry {
 	/** 选中引用（对话区选中内容弹菜单添加）；发送时逐条转 blockquote 段落置于最前 */
 	quotes: string[];
 	/**
-	 * 取回（recover）关联元数据：本草稿来自队列项取回编辑，重发时必须携带它更新 SDK 原实体
-	 * （受理成功才替换旧实体；stale 则刷新提示，不暗重发）。仅元数据，不参与 isEmpty 判定。
+	 * 出队尚未确认的保护标记，只用于两种情况：
+	 * 1) 取回已完成冻结与回填、但确认 discard 还失败/无回执（防止把内容当成新消息发出去，也防丢标记）；
+	 * 2) 兼容旧版本草稿残留的取回关联（需明确取回一次补完出队）。
+	 * 出队确认后即清除；它**不**参与提交，也不再携带旧实体提交。仅元数据，不参与 isEmpty 判定。
 	 */
 	recovery?: { messageId: string; expectedRevision: number };
 }
@@ -39,11 +41,11 @@ export const EMPTY_DRAFT: DraftEntry = {
 
 /**
  * 输入框草稿按会话保存。Composer 会在空态（EmptyState 内）与列表态（底部）之间切换实例，
- * 本地 useState 会丢草稿；且不同会话的草稿应各自独立（A 的不串到 B）。全空条目不入表。
+ * 本地 useState 会丢草稿；且不同会话的草稿应各自独立（A 的不串到 B）。无内容且无恢复关联的条目不入表。
  */
 interface DraftStore {
 	bySession: Record<string, DraftEntry>;
-	/** 更新某会话草稿（传整个条目的变换函数）；结果全空时删除条目 */
+	/** 更新某会话草稿；仅无内容且无出队保护标记时删除，避免丢掉未确认的出队状态。 */
 	updateDraft: (key: string, updater: (entry: DraftEntry) => DraftEntry) => void;
 }
 
@@ -67,7 +69,7 @@ export const useDraftStore = create<DraftStore>((set) => ({
 	updateDraft: (key, updater) =>
 		set((state) => {
 			const next = updater(state.bySession[key] ?? EMPTY_DRAFT);
-			if (isEmpty(next)) {
+			if (isEmpty(next) && !next.recovery) {
 				if (!(key in state.bySession)) return state;
 				const rest = { ...state.bySession };
 				delete rest[key];

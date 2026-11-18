@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DRAFT, useDraftStore } from "../../desktop/src/renderer/src/stores/drafts";
 import type { MessageControlHandle } from "../src/session/message-control";
 import {
 	assistantTurn,
@@ -254,6 +255,123 @@ describe("AgentSession message control (idle, identity, queue boundaries)", () =
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("[recovery draft] clear and rewrite preserves identity, replaces the occupied slot and commits once", async () => {
+		const { session, c, log, release } = await workingTool();
+		const draftKey = session.sessionId;
+		try {
+			await c.submit(request(session, "original-pending", "queue", "original text"));
+			await vi.waitFor(() => expect(session.agent.hasQueuedMessages()).toBe(true));
+			const recovered = c.recover({
+				...request(session, "recover-edit"),
+				messageId: "original-pending",
+				expectedRevision: c.getSnapshot().revision,
+			});
+			if (!recovered.ok) throw new Error(recovered.error.message);
+			expect(session.agent.hasQueuedMessages()).toBe(false);
+			useDraftStore.getState().updateDraft(draftKey, () => ({
+				...EMPTY_DRAFT,
+				text: recovered.value.payload.text,
+				recovery: {
+					messageId: recovered.value.messageId,
+					expectedRevision: recovered.value.snapshot.revision,
+				},
+			}));
+			useDraftStore.getState().updateDraft(draftKey, (draft) => ({ ...draft, text: "" }));
+			useDraftStore.getState().updateDraft(draftKey, (draft) => ({ ...draft, text: "edited replacement" }));
+			const draft = useDraftStore.getState().bySession[draftKey];
+			if (!draft) throw new Error("Recovered draft was lost");
+			expect(draft.recovery?.messageId).toBe("original-pending");
+			const result = await c.submit({
+				...request(session, "resubmit-edited", "queue", draft.text),
+				recovery: draft.recovery,
+			});
+			expect(result).toMatchObject({ ok: true, value: { messageId: "original-pending" } });
+			release.resolve();
+			await c.waitForIdle();
+			expect(log.filter((line) => line === "user:edited replacement")).toHaveLength(1);
+			expect(log).not.toContain("user:original text");
+			expect(c.getSnapshot().items).toEqual([]);
+		} finally {
+			useDraftStore.getState().updateDraft(draftKey, () => EMPTY_DRAFT);
+			release.resolve();
+		}
+	});
+
+	it("[recovery discard] explicitly discarding a recovered item frees capacity for a new message", async () => {
+		const { session, c, log, release } = await workingTool();
+		await c.submit(request(session, "discard-original"));
+		await vi.waitFor(() => expect(session.agent.hasQueuedMessages()).toBe(true));
+		expect(
+			c.recover({
+				...request(session, "recover-discard"),
+				messageId: "discard-original",
+				expectedRevision: c.getSnapshot().revision,
+			}),
+		).toMatchObject({ ok: true });
+		expect(
+			await c.changePending({
+				...request(session, "discard-recovered"),
+				messageId: "discard-original",
+				expectedRevision: c.getSnapshot().revision,
+				action: "discard",
+			}),
+		).toMatchObject({ ok: true });
+		expect(await c.submit(request(session, "after-discard"))).toMatchObject({ ok: true });
+		release.resolve();
+		await c.waitForIdle();
+		expect(log.filter((line) => line === "user:after-discard")).toHaveLength(1);
+		expect(log).not.toContain("user:discard-original");
+		expect(c.getSnapshot().items).toEqual([]);
+	});
+
+	it("[retrieve-dequeue] take-back freezes with the full payload, discard removes the entity, and the next submit is an ordinary new message", async () => {
+		const { session, c, log, release } = await workingTool();
+		session.agent.state.model = { ...MODEL, input: ["text", "image"] };
+		const payload = {
+			text: "queued text",
+			images: [{ mimeType: "image/png", data: "eA==" }],
+			draft: {
+				text: "raw text",
+				attachments: ["a.ts"],
+				quotes: ["quote"],
+				slashCommand: null,
+				imageNames: ["pic"],
+			},
+		};
+		await c.submit({ ...request(session, "retrieve-original"), payload });
+		await vi.waitFor(() => expect(session.agent.hasQueuedMessages()).toBe(true));
+		const recovered = c.recover({
+			...request(session, "retrieve-freeze"),
+			messageId: "retrieve-original",
+			expectedRevision: c.getSnapshot().revision,
+		});
+		// 冻结同时把完整载荷（正文/图片/附件/引用/slash 原件）交给渲染器
+		expect(recovered).toMatchObject({ ok: true, value: { payload } });
+		if (!recovered.ok) throw new Error(recovered.error.message);
+		// 出队未确认前，SDK 仍持有 recovering 实体（所以渲染器需要临时保护标记）
+		expect(c.getSnapshot().items.find((item) => item.messageId === recovered.value.messageId)?.state).toBe(
+			"recovering",
+		);
+		const discarded = await c.changePending({
+			...request(session, "retrieve-discard"),
+			runtimeId: recovered.value.snapshot.runtimeId,
+			messageId: recovered.value.messageId,
+			expectedRevision: recovered.value.snapshot.revision,
+			action: "discard",
+		});
+		expect(discarded).toMatchObject({ ok: true });
+		// 出队确认：待发集合里彻底没有这个实体
+		expect(c.getSnapshot().items).toEqual([]);
+		// 此后重发就是普通新消息：新 messageId，不需要 recovery 信封
+		const resent = await c.submit(request(session, "retrieve-new", "queue", "edited text"));
+		expect(resent).toMatchObject({ ok: true, value: { messageId: "retrieve-new" } });
+		release.resolve();
+		await c.waitForIdle();
+		expect(log).toContain("user:edited text");
+		expect(log).not.toContain("user:queued text");
+		expect(log).not.toContain("user:raw text");
 	});
 
 	it("[§6.5 mode-change] removes actual transport entries on recover/discard and changes mode without duplicate execution", async () => {

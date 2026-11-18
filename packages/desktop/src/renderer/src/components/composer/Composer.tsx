@@ -1,4 +1,4 @@
-import type { ImageInput } from "@percho/shared";
+import type { ImageInput, MessageMode } from "@percho/shared";
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import { getPi } from "../../api";
 import { useActiveModelInfo, useSessionReadOnly } from "../../hooks/use-session-state";
@@ -20,6 +20,7 @@ import { selectTranscript, useTranscriptStore } from "../../stores/transcript";
 import { ImagePreviewOverlay } from "../chat/ImagePreview";
 import { ArrowUpIcon, ChevronDownIcon, PencilIcon, PlusIcon, StopIcon } from "../icons";
 import { SESSION_DRAG_MIME } from "../sidebar/SessionRow";
+import { Tooltip } from "../ui/Tooltip";
 import { AtMenu } from "./AtMenu";
 import { AttachmentTray } from "./AttachmentTray";
 import { ContextRing } from "./ContextRing";
@@ -146,25 +147,34 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 	// 每次渲染刷新：等完预处理后要调**最新一份** handleSend，才读得到刚 setImages 进去的图
 	const latestSendRef = useRef(handleSend);
 	latestSendRef.current = handleSend;
-	const sendWhenReady = async () => {
-		if (preparingRef.current.length > 0) {
-			const inFlight = preparingRef.current;
-			preparingRef.current = [];
-			await Promise.all(inFlight);
+	const preparingSendRef = useRef(false);
+	const sendWhenReady = async (mode: MessageMode = "queue") => {
+		if (readOnly || preparingSendRef.current) return;
+		const originSessionId = activeSessionId;
+		const originDraftKey = draftKey;
+		preparingSendRef.current = true;
+		try {
+			// 不提前清除 promise；新的发送入口必须等同一批图片落入原草稿。
+			while (preparingRef.current.length > 0) {
+				await Promise.all(preparingRef.current);
+			}
+			// 等图期间切会话后，不能调用另一会话的最新发送闭包。
+			if (useSessionsStore.getState().activeSessionId !== originSessionId) return;
+			const originSession = useSessionsStore
+				.getState()
+				.sessions.find((session) => session.sessionId === originSessionId);
+			if (originSession?.readOnly) return;
+			await latestSendRef.current(mode);
+		} catch (error) {
+			if ((useSessionsStore.getState().activeSessionId ?? NEW_SESSION_DRAFT_KEY) === originDraftKey) {
+				setError(error instanceof Error ? error.message : String(error));
+			}
+		} finally {
+			preparingSendRef.current = false;
 		}
-		await latestSendRef.current();
 	};
-	/** Ctrl+Enter / 菜单「打断并发送」：同样等附件预处理落地后发（interrupt 一次性，不改 Enter 默认） */
-	const latestInterruptRef = useRef(() => send.handleSend("interrupt"));
-	latestInterruptRef.current = () => send.handleSend("interrupt");
-	const sendInterruptWhenReady = async () => {
-		if (preparingRef.current.length > 0) {
-			const inFlight = preparingRef.current;
-			preparingRef.current = [];
-			await Promise.all(inFlight);
-		}
-		await latestInterruptRef.current();
-	};
+	/** Ctrl+Enter / 菜单与普通发送共用图片预处理屏障，不记忆发送模式。 */
+	const sendInterruptWhenReady = () => sendWhenReady("interrupt");
 	const handleQueueAction = (item: { messageId: string; preview: string }, action: QueueItemAction) => {
 		if (action === "recover") void send.recoverPending(item);
 		else void send.changePending(item, action);
@@ -191,11 +201,21 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 	const controlPhase = control?.phase ?? "idle";
 	const controlBusy = controlPhase !== "idle";
 	const isStreaming = transcript.phase === "streaming" || sending;
-	const isBusy = isStreaming || transcript.agentActive || controlBusy;
+	const isBusy = isStreaming || transcript.agentActive || compacting || controlBusy;
 	/** 运行中的待发控制项（QueueBar 新形态；legacy 回退 followUpQueue 文本） */
 	const controlItems = control?.items ?? [];
 	/** 模式菜单一次性开关（不记默认；Esc 只关菜单不取消） */
 	const [modeMenuOpen, setModeMenuOpen] = useState(false);
+	const sendGroupRef = useRef<HTMLDivElement>(null);
+	const closeModeMenu = useCallback(() => setModeMenuOpen(false), []);
+	const modeMenuDraftKeyRef = useRef(draftKey);
+	useEffect(() => {
+		// 会话切换、清空草稿、任务结束或转只读后，不能把菜单带到下一次运行。
+		if (modeMenuDraftKeyRef.current !== draftKey || !isBusy || !hasContent || readOnly) {
+			setModeMenuOpen(false);
+		}
+		modeMenuDraftKeyRef.current = draftKey;
+	}, [draftKey, isBusy, hasContent, readOnly]);
 	// 压缩只阻塞「手动/未知」；自动压缩允许排队→菜单保持可用（与发送门禁同一规则，见 compaction-gate.ts）
 	const modeDisabledReason: MessageKey | null = readOnly
 		? "composer.modeDisabledReadOnly"
@@ -212,7 +232,7 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 				? t("composer.placeholderBlocked")
 				: controlPhase === "interrupting"
 					? t("composer.placeholderInterrupting")
-					: isStreaming
+					: isBusy
 						? t("composer.placeholderQueued")
 						: t("composer.placeholder");
 
@@ -536,7 +556,7 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 							/>
 						</div>
 					</div>
-					<div className="flex items-center gap-2 px-3 pb-2">
+					<div className="flex min-w-0 items-center gap-2 px-3 pb-2">
 						<input
 							ref={fileInputRef}
 							type="file"
@@ -564,53 +584,76 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 						<div className="flex-1" />
 						<ContextRing />
 						<RegionHost region={UI_REGIONS.ComposerFooter} />
-						<div className={readOnly ? "pointer-events-none opacity-40" : undefined}>
+						<div className={`min-w-0 ${readOnly ? "pointer-events-none opacity-40" : ""}`}>
 							<ModelPicker />
 						</div>
-						{/* 发送方式菜单（一次性选择：优先插话 / 打断并发送；不改 Enter 默认 queue） */}
-						{hasContent && !readOnly && (
-							<div className="relative">
-								<button
-									type="button"
-									className="flex h-8 w-5 items-center justify-center rounded-full text-ink-dim transition-colors hover:bg-hover hover:text-ink"
-									aria-label={t("composer.modeMenuTitle")}
-									onClick={() => setModeMenuOpen((open) => !open)}
-								>
-									<ChevronDownIcon size={12} />
-								</button>
-								{modeMenuOpen && (
+						{/* 运行中草稿才显示一次性发送模式入口；普通发送始终 queue。 */}
+						{hasContent && (
+							<div
+								ref={sendGroupRef}
+								className={
+									isBusy && !readOnly
+										? "relative flex h-8 shrink-0 items-center rounded-full bg-hover pl-0.5"
+										: "relative shrink-0"
+								}
+							>
+								{isBusy && !readOnly && (
+									<Tooltip label={t("composer.modeMenuTitle")} align="end">
+										<button
+											type="button"
+											className="flex h-7 w-6 items-center justify-center rounded-full text-ink-2 transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-faint"
+											aria-label={t("composer.modeMenuTitle")}
+											aria-haspopup="menu"
+											aria-expanded={modeMenuOpen}
+											onKeyDown={(event) => {
+												if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+													event.preventDefault();
+													setModeMenuOpen(true);
+												}
+											}}
+											onClick={() => setModeMenuOpen((open) => !open)}
+										>
+											<ChevronDownIcon size={12} />
+										</button>
+									</Tooltip>
+								)}
+								<Tooltip label={t(isBusy ? "composer.queueSend" : "composer.send")} align="end">
+									<button
+										type="button"
+										className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink text-on-ink transition-colors hover:bg-ink-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-faint disabled:opacity-30"
+										disabled={readOnly || sending}
+										onClick={() => void sendWhenReady()}
+										aria-label={t(isBusy ? "composer.queueSend" : "composer.send")}
+									>
+										<ArrowUpIcon size={20} />
+									</button>
+								</Tooltip>
+								{modeMenuOpen && isBusy && !readOnly && (
 									<SendModeMenu
+										anchorRef={sendGroupRef}
 										disabledReason={modeDisabledReason}
-										onPick={(mode: SendModePick) => {
-											if (mode === "interrupt") void sendInterruptWhenReady();
-											else void send.handleSend("steer");
-										}}
-										onClose={() => setModeMenuOpen(false)}
+										onPick={(mode: SendModePick) => void sendWhenReady(mode)}
+										onClose={closeModeMenu}
 									/>
 								)}
 							</div>
 						)}
-						{hasContent && (
-							<button
-								type="button"
-								className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-on-ink transition-colors hover:bg-ink-2 disabled:opacity-30"
-								disabled={readOnly || sending}
-								onClick={() => void sendWhenReady()}
-								aria-label={t("composer.send")}
-							>
-								<ArrowUpIcon size={20} />
-							</button>
-						)}
-						{/* 独立停止：运行中常显（有草稿也可点），与菜单发送解耦 */}
+						{/* 停止始终独立；有草稿时降为次级视觉，点击不发送或清除草稿。 */}
 						{isBusy && (
-							<button
-								type="button"
-								className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-on-ink transition-colors hover:bg-red-600"
-								onClick={() => void send.handleStop()}
-								aria-label={t("composer.stop")}
-							>
-								<StopIcon />
-							</button>
+							<Tooltip label={t("composer.stop")} align="end">
+								<button
+									type="button"
+									className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-faint ${
+										hasContent
+											? "bg-hover text-ink-2 hover:bg-err hover:text-on-ink"
+											: "bg-ink text-on-ink hover:bg-err"
+									}`}
+									onClick={() => void send.handleStop()}
+									aria-label={t("composer.stop")}
+								>
+									<StopIcon />
+								</button>
+							</Tooltip>
 						)}
 					</div>
 				</div>

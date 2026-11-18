@@ -109,6 +109,32 @@ async function refreshControl(api: NonNullable<ReturnType<typeof controlApi>>, s
 }
 
 /**
+ * 取回（冻结 → 回填 → 确认出队）按会话的模块级互斥锁。
+ *
+ * 取回同时要写草稿和改动队列，且要跨多个 await：Composer 重挂载、空态/列表态切换、
+ * 分栏多实例都会各自持有一份 hook 实例。用组件 ref 挡不住这些并发，所以锁必须按 session
+ * 存在模块级 Map 里；调用方用 try/finally 释放（异常路径也要放开，不能留下永久锁）。
+ * 它只覆盖同一个会话，别的会话的发送/取回互不影响（草稿不串台）。
+ */
+const retrievingSessions = new Map<string, symbol>();
+
+function tryAcquireRetrieveLock(sessionId: string): symbol | null {
+	if (retrievingSessions.has(sessionId)) return null;
+	const token = Symbol(sessionId);
+	retrievingSessions.set(sessionId, token);
+	return token;
+}
+
+function releaseRetrieveLock(sessionId: string, token: symbol): void {
+	if (retrievingSessions.get(sessionId) === token) retrievingSessions.delete(sessionId);
+}
+
+/** 该会话是否正在取回（取回期间不允许发送/改派，避免与原实体抢同一份队列容量） */
+function isRetrieving(sessionId: string): boolean {
+	return retrievingSessions.has(sessionId);
+}
+
+/**
  * 发送域：会话确保/建链、发送（queue/steer/interrupt 三态路由 + 斜杠命令分发）、停止、排队项操作。
  * sending/error/feedback 状态也在此（与发送动作同生命周期）。
  */
@@ -211,6 +237,10 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		b: typeof a,
 	) => JSON.stringify(a) === JSON.stringify(b);
 
+	/**
+	 * 受理成功后清草稿：只有当前内容仍等于本次发出的快照才清（ACK 等待期间用户新写的内容
+	 * 属于下一条草稿，必须原样保留）。dequeue 保护标记不在这里处理。
+	 */
 	const clearSentDraft = (
 		draftKey: string,
 		sent: {
@@ -220,14 +250,10 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			quotes: string[];
 			slashCommand: string | null;
 		},
-		recovery?: { messageId: string; expectedRevision: number },
 	) => {
 		const current = useDraftStore.getState().bySession[draftKey];
-		if (
-			current?.recovery?.messageId !== recovery?.messageId ||
-			current?.recovery?.expectedRevision !== recovery?.expectedRevision
-		)
-			return;
+		// 等待旧发送 ACK 时可能取回了另一项，即使内容碰巧相同也不能清掉新取回稿。
+		if (current?.recovery) return;
 		const currentPayload = {
 			text: current?.text ?? "",
 			images: current?.images ?? [],
@@ -243,11 +269,6 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			attachments: [],
 			quotes: [],
 			slashCommand: null,
-			...(recovery &&
-			draft.recovery?.messageId === recovery.messageId &&
-			draft.recovery.expectedRevision === recovery.expectedRevision
-				? { recovery: undefined }
-				: {}),
 		}));
 		if ((useSessionsStore.getState().activeSessionId ?? NEW_SESSION_DRAFT_KEY) === draftKey) {
 			options.setText("");
@@ -268,7 +289,6 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		wasActive: boolean;
 		mode: MessageMode;
 		slashCommand: string | null;
-		recovery?: { messageId: string; expectedRevision: number };
 	}
 
 	/**
@@ -375,7 +395,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		draftKey: string;
 		sent: SentPayload;
 	}): Promise<void> => {
-		const { content, text, images, attachments, quotes, wasActive, slashCommand, recovery } = sent;
+		const { content, text, images, attachments, quotes, wasActive, slashCommand } = sent;
 		// 仅在 store 确认为 idle 时取得本次乐观忙碌状态的所有权。
 		const activityToken = useTranscriptStore.getState().beginPromptActivity(sessionId);
 		// 乐观回显用户气泡：带图发送时 SDK 在构造用户消息**之前**先做图片归一化
@@ -394,7 +414,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 				images: images.length > 0 ? images.map(({ data, mimeType }) => ({ data, mimeType })) : undefined,
 			});
 			const handled = ack?.disposition === "handled";
-			clearSentDraft(draftKey, { text, images, attachments, quotes, slashCommand }, recovery);
+			clearSentDraft(draftKey, { text, images, attachments, quotes, slashCommand });
 			useTranscriptStore.getState().settlePromptActivity(sessionId, activityToken, handled);
 			if (handled && optimisticId)
 				useTranscriptStore.getState().removeOptimisticUser(sessionId, optimisticId);
@@ -407,7 +427,11 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		}
 	};
 
-	/** 托管控制发送路径：三态路由 + requestId 幂等 + recovery 编辑重发 */
+	/**
+	 * 托管控制发送路径：三态路由 + requestId 幂等。
+	 * 这里**不再携带 recovery 信封**：取回即出队（原实体已在取回时取消排队），
+	 * 编辑后的草稿就是普通草稿，发送就是一个新 messageId。
+	 */
 	const sendControlled = async (
 		api: NonNullable<ReturnType<typeof controlApi>>,
 		{
@@ -422,7 +446,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			sent: SentPayload;
 		},
 	): Promise<void> => {
-		const { content, text, images, attachments, quotes, wasActive, mode, slashCommand, recovery } = sent;
+		const { content, text, images, attachments, quotes, wasActive, mode, slashCommand } = sent;
 		const wireImages = images.map(({ data, mimeType }) => ({ data, mimeType }));
 		const payload = {
 			text: content,
@@ -440,7 +464,6 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			runtimeId,
 			mode,
 			payload,
-			...(recovery ? { recovery } : {}),
 		};
 		// 指纹与提交共用同一份完整 payload，避免同图片数不同内容误复用 requestId。
 		const fingerprint = JSON.stringify(requestBase);
@@ -460,8 +483,8 @@ export function useComposerSend(options: UseComposerSendOptions) {
 				: useTranscriptStore.getState().appendOptimisticUser(sessionId, {
 						text: content,
 						images: wireImages,
-						// requestId 标识新尝试；恢复实体的 message_start 沿用原消息 ID。
-						controlMessageId: recovery?.messageId ?? requestId,
+						// 草稿（含取回后编辑的）都是新消息：气泡只等本次 requestId 的 message_start 认领。
+						controlMessageId: requestId,
 					});
 		try {
 			const res = await api.submitMessage({ ...requestBase, requestId });
@@ -477,8 +500,8 @@ export function useComposerSend(options: UseComposerSendOptions) {
 					const outcome = res.error.snapshot
 						? useTranscriptStore.getState().applyControlSendFailure(sessionId, {
 								snapshot: res.error.snapshot,
-								// 原请求身份：恢复实体用原 messageId，否则就是本次 requestId，不生成新 id
-								messageId: recovery?.messageId ?? requestId,
+								// 原请求身份就是本次 requestId（取回后的草稿也是新消息），不生成新 id
+								messageId: requestId,
 								requestId,
 								error: res.error.message,
 							})
@@ -492,7 +515,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 				if (res.error.snapshot)
 					useTranscriptStore.getState().setControlSnapshot(sessionId, res.error.snapshot);
 				if (code === "stale_revision" || code === "stale_runtime") {
-					// 恢复实体已被外部更新：刷新快照并提示，绝不暗自重发
+					// 队列已被外部更新：刷新快照并提示，绝不暗自重发
 					await refreshControl(api, sessionId);
 					pushToast("warning", "composer.controlStale");
 				} else if (code === "queue_full") {
@@ -508,9 +531,9 @@ export function useComposerSend(options: UseComposerSendOptions) {
 				}
 				return;
 			}
-			// 成功回执后才消费草稿；与快照不一致时保留用户编辑及 recovery 关联。
+			// 成功回执后才消费草稿；ACK 期间用户改了内容则保留新输入。
 			pendingTx.current = null;
-			clearSentDraft(draftKey, { text, images, attachments, quotes, slashCommand }, recovery);
+			clearSentDraft(draftKey, { text, images, attachments, quotes, slashCommand });
 			const ack = res.value;
 			// handled 只表示输入被扩展消费，不能推断全会话空闲（保护 optimisticActivityToken 修复语义）：
 			// 仅回滚本次乐观所有权；queued/held 未开工同样回滚；started/interrupting 保持等真实事件。
@@ -570,10 +593,26 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			showFeedback(t("composer.queueFull"), "warn");
 			return;
 		}
+		const draftKey = options.activeSessionId ?? NEW_SESSION_DRAFT_KEY;
+		// 取回在途：原实体正被冻结/出队，不能把旧实体当成新消息提交。
+		const retrieving = options.activeSessionId ? isRetrieving(options.activeSessionId) : false;
+		if (retrieving) {
+			pushToast("warning", "composer.recoverReleaseRequired");
+			return;
+		}
+		// 某次取回还没确认出队（discard 已执行但响应丢失、快照核对失败时 QueueBar 项已消失，
+		// 草稿依旧挂着保护标记）：这时「发送」是用户唯一可点的入口，所以先核对/补完出队。
+		// 本次点击**不发送**：既避免拿旧闭包数据直接提交，也要先确认原项确实不在待发集合里。
+		const blockingRecovery = useDraftStore.getState().bySession[draftKey]?.recovery;
+		if (blockingRecovery) {
+			const released = await recoverPending({ messageId: blockingRecovery.messageId });
+			// 失败时 recoverPending 已经给过具体提示（冲突/未完成/过期），这里不叠加
+			if (released) pushToast("info", "composer.recoverReadyToSend");
+			return;
+		}
 		// 同步锁：`sending` 下一帧才生效，挡不住「draft 页要先 await 转正」这个窗口里的第二次触发
 		// （两次 Enter 会共享同一次 createSession，然后各自 prompt 一遍 = 同一句话发两次）
 		if (!sendGuard.current.tryAcquire()) return;
-		const draftKey = options.activeSessionId ?? NEW_SESSION_DRAFT_KEY;
 		const sent: SentPayload = {
 			content,
 			text,
@@ -581,7 +620,6 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			attachments: [...attachments],
 			quotes: [...quotes],
 			slashCommand,
-			recovery: useDraftStore.getState().bySession[draftKey]?.recovery,
 			imageNames: images.map((image) => (image as { name?: string }).name ?? ""),
 			wasActive: agentActive,
 			mode,
@@ -645,13 +683,16 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		requestAnimationFrame(focus);
 	};
 
-	/** 队列项操作（steer/interrupt/resend/discard）：带 SDK revision 的 CAS；拒绝刷新快照并反馈 */
+	/**
+	 * 队列项操作（steer/interrupt/resend/discard）：带 SDK runtime + revision 的 CAS；
+	 * 拒绝刷新快照并反馈。取回在途时直接忽略，避免与「冻结→出队」抢同一个实体。
+	 */
 	const changePending = async (
 		item: { messageId: string; preview?: string },
 		action: "steer" | "interrupt" | "resend" | "discard",
 	): Promise<boolean> => {
 		const { activeSessionId } = options;
-		if (!activeSessionId) return false;
+		if (!activeSessionId || isRetrieving(activeSessionId)) return false;
 		const api = controlApi();
 		const control = currentControl(activeSessionId);
 		if (!api || !control || typeof api.changePendingMessage !== "function") {
@@ -669,6 +710,15 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			});
 			if (res.ok) {
 				useTranscriptStore.getState().setControlSnapshot(activeSessionId, res.value.snapshot);
+				if (action === "discard") {
+					// 后端确认取消排队后才释放该实体的保护关联；用户新写的内容、图片等仍归输入框所有。
+					// 只清指向本实体（item.messageId）的标记，不影响其他草稿。
+					useDraftStore
+						.getState()
+						.updateDraft(activeSessionId, (draft) =>
+							draft.recovery?.messageId === item.messageId ? { ...draft, recovery: undefined } : draft,
+						);
+				}
 				return true;
 			}
 			if (res.error.snapshot)
@@ -687,69 +737,224 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	};
 
 	/**
-	 * 取回（recover）：冻结实体换完整载荷写回本会话草稿（文本/图片/附件/引用/slash 原样恢复），
-	 * 草稿携带 recovery 元数据，重发时更新 SDK 原实体（受理成功才替换）。
-	 * 有未保存草稿时拒绝覆盖——避免「队列已删、草稿没到」的双失与静默合并。
+	 * 取回 = 冻结原项 → 同步回填完整载荷 → 确认取消排队（出队），成功后只留下普通草稿。
+	 *
+	 * `recovery` 字段只剩「出队尚未确认」的保护标记作用（含旧版本草稿兼容）：它不再用来
+	 * 提交旧实体——出队成功后标记即清，草稿就是普通草稿，重发走新 messageId。
 	 */
 	const recoverPending = async (item: { messageId: string; preview?: string }): Promise<boolean> => {
 		const { activeSessionId } = options;
 		if (!activeSessionId) return false;
 		const draftKey = activeSessionId;
-		const existing = useDraftStore.getState().bySession[draftKey];
-		if (existing && !isDraftEmpty(existing)) {
-			pushToast("warning", "composer.recoverDraftConflict");
-			return false;
-		}
 		const api = controlApi();
-		const control = currentControl(activeSessionId);
-		if (!api || !control || typeof api.recoverPendingMessage !== "function") {
+		if (
+			!api ||
+			typeof api.recoverPendingMessage !== "function" ||
+			typeof api.changePendingMessage !== "function" ||
+			typeof api.getMessageControl !== "function"
+		) {
 			pushToast("warning", "composer.controlActionFailed");
 			return false;
 		}
+		const token = tryAcquireRetrieveLock(draftKey);
+		// 已在取回中（重复点击 / 另一实例 / 重挂载）：不再发第二次请求，也不动草稿
+		if (!token) return false;
+		let runtimeId: string | null = null;
+		let messageId = item.messageId;
+		/**
+		 * 本次取回是否已经把完整载荷安全落在草稿里（或确认改动内容本就属于同项且未被覆盖）。
+		 * 「队列里没有这个实体」本身**不等于**取回成功：首次取回失败/异常时 items 也可能空，
+		 * 那只是原项去向未知，任何 finish 分支都必须先有这份证据。
+		 */
+		let draftSecured = false;
+		/** 出队确认后的收尾：只清指向本实体的保护标记，绝不改用户内容 */
+		const finish = () => {
+			useDraftStore
+				.getState()
+				.updateDraft(draftKey, (draft) =>
+					draft.recovery?.messageId === messageId ? { ...draft, recovery: undefined } : draft,
+				);
+			// 仅在用户仍停留在这个会话时才抢焦点（切走后的取回不该把人拽回去）
+			if (useSessionsStore.getState().activeSessionId === activeSessionId && typeof window !== "undefined") {
+				window.dispatchEvent(new CustomEvent(COMPOSER_FOCUS_EVENT));
+			}
+		};
+		/**
+		 * 权威核对：只有当前快照（必要时要求同 runtime）里确实没有这个实体，才能判断它已经不
+		 * 在待发集合里。绝不凭失败回执或旧快照假装成功。
+		 */
+		const itemGone = async (id: string, expectedRuntimeId?: string | null): Promise<boolean> => {
+			try {
+				const res = await api.getMessageControl({ sessionId: activeSessionId });
+				if (!res.ok) return false;
+				useTranscriptStore.getState().setControlSnapshot(activeSessionId, res.value);
+				if (expectedRuntimeId && res.value.runtimeId !== expectedRuntimeId) return false;
+				return !res.value.items.some((entry) => entry.messageId === id);
+			} catch {
+				return false;
+			}
+		};
 		try {
-			const res = await api.recoverPendingMessage({
+			const existing = useDraftStore.getState().bySession[draftKey];
+			// 兼容「同一实体上次取回未完成」的保护标记：允许明确再次取回，只补完出队，保留用户修改
+			const editingSame = existing?.recovery?.messageId === item.messageId;
+			if (!editingSame && existing?.recovery) {
+				// 别的实体还挂着保护标记：草稿有内容就先按冲突拒绝（不发请求，不覆盖内容）
+				if (!isDraftEmpty(existing)) {
+					pushToast("warning", "composer.recoverDraftConflict");
+					return false;
+				}
+				// 草稿本身是空的：标记可能指着一个早就不在队列里的实体（旧版本残留/已被受理）。
+				// 权威快照确认它确实不在时才清掉，否则旧标记会把整份草稿永久锁死。
+				if (!(await itemGone(existing.recovery.messageId))) {
+					pushToast("warning", "composer.recoverDraftConflict");
+					return false;
+				}
+				useDraftStore
+					.getState()
+					.updateDraft(draftKey, (draft) =>
+						draft.recovery?.messageId === existing.recovery?.messageId
+							? { ...draft, recovery: undefined }
+							: draft,
+					);
+			}
+			// 取回会占用输入框：正文/图片/附件/引用/slash 任一有内容都拒绝，且不发任何请求
+			const claimed = useDraftStore.getState().bySession[draftKey];
+			if (!editingSame && claimed && !isDraftEmpty(claimed)) {
+				pushToast("warning", "composer.recoverDraftConflict");
+				return false;
+			}
+			let control = currentControl(activeSessionId);
+			if (!control) {
+				// 重载后本地无快照（recovering 项仍在 items 里，取回入口可用）：先取权威快照
+				const fresh = await api.getMessageControl({ sessionId: activeSessionId });
+				if (fresh.ok) control = fresh.value;
+			}
+			if (!control) {
+				pushToast("warning", "composer.controlActionFailed");
+				return false;
+			}
+			runtimeId = control.runtimeId;
+			// 冻结：SDK 侧立刻摘出实体并回传完整载荷，此后它不会再被派发
+			const recovered = await api.recoverPendingMessage({
 				sessionId: activeSessionId,
-				runtimeId: control.runtimeId,
+				runtimeId,
 				requestId: newRequestId(),
 				messageId: item.messageId,
 				expectedRevision: control.revision,
 			});
-			if (!res.ok) {
-				if (res.error.snapshot)
-					useTranscriptStore.getState().setControlSnapshot(activeSessionId, res.error.snapshot);
-				if (res.error.code === "stale_revision" || res.error.code === "stale_runtime") {
+			// 等待期间草稿会被别处改写（用户清空、切换会话、另一实例取回）：必须重新读标记，
+			// 不能拿 await 之前的快照当依据去补标记/出队。
+			const afterRecover = useDraftStore.getState().bySession[draftKey];
+			if (editingSame) {
+				// 同一实体上次已回填过完整载荷：只要标记还在同一项，内容就是安全的
+				if (afterRecover?.recovery?.messageId !== item.messageId) {
+					// 标记已消失或换成另一个实体：不补标记、不出队、不覆盖内容
+					pushToast("warning", "composer.controlActionFailed");
+					return false;
+				}
+				draftSecured = true;
+			}
+			if (!recovered.ok) {
+				if (recovered.error.snapshot)
+					useTranscriptStore.getState().setControlSnapshot(activeSessionId, recovered.error.snapshot);
+				if (recovered.error.code === "stale_revision" || recovered.error.code === "stale_runtime") {
+					// 版本变了：草稿与标记都保留，刷新最新快照，用户再点一次即可用最新版本重试
 					await refreshControl(api, activeSessionId);
 					pushToast("warning", "composer.controlStale");
-				} else {
-					pushToast("warning", "composer.controlActionFailed");
+					return false;
 				}
+				if (recovered.error.code === "already_committed" || recovered.error.code === "not_found") {
+					// 原项已不在待发集合：但「不在队列」不等于「内容已取回」。首次取回就走到这儿时
+					// 从来没回填过载荷，不得因 items 为空就报成功；只有 draftSecured（标记同项已确认
+					// 稳妥保留着内容）才允许权威核对后解除保护标记。
+					if (!draftSecured) {
+						// 原项去向未知且内容没回填过：提示「可能还在队列」并保留一切，等用户重试
+						pushToast("warning", "composer.recoverReleaseRequired");
+						return false;
+					}
+					if (await itemGone(messageId, runtimeId)) {
+						finish();
+						return true;
+					}
+					pushToast("warning", "composer.recoverReleaseRequired");
+					return false;
+				}
+				pushToast("warning", "composer.controlActionFailed");
 				return false;
 			}
-			useTranscriptStore.getState().setControlSnapshot(activeSessionId, res.value.snapshot);
-			const latestDraft = useDraftStore.getState().bySession[draftKey];
-			if (latestDraft && !isDraftEmpty(latestDraft)) {
-				pushToast("warning", "composer.recoverDraftConflict");
+			useTranscriptStore.getState().setControlSnapshot(activeSessionId, recovered.value.snapshot);
+			messageId = recovered.value.messageId;
+			const { snapshot, payload } = recovered.value;
+			if (editingSame) {
+				// 已取回过：只把标记对齐到最新版本，绝不覆盖用户的修改
+				useDraftStore.getState().updateDraft(draftKey, (draft) => ({
+					...draft,
+					recovery: { messageId, expectedRevision: snapshot.revision },
+				}));
+			} else {
+				const latest = useDraftStore.getState().bySession[draftKey];
+				if (latest?.recovery || (latest && !isDraftEmpty(latest))) {
+					// 冻结等待期间草稿有了内容或挂了指向别的实体的标记：保现有草稿 + 保冻结项，
+					// 不 discard、不覆盖（下次点击再补完）
+					pushToast("warning", "composer.recoverDraftConflict");
+					return false;
+				}
+				// 同步回填完整载荷（正文/图片/附件/引用/slash），并挂上临时保护标记直到出队确认
+				useDraftStore.getState().updateDraft(draftKey, () => ({
+					text: payload.draft?.text ?? payload.text,
+					images: (payload.images ?? []).map((img, index) => ({
+						...img,
+						...(payload.draft?.imageNames?.[index] ? { name: payload.draft.imageNames[index] } : {}),
+					})),
+					slashCommand: payload.draft?.slashCommand ?? null,
+					attachments: payload.draft?.attachments ?? [],
+					quotes: payload.draft?.quotes ?? [],
+					recovery: { messageId, expectedRevision: snapshot.revision },
+				}));
+			}
+			// 到这里内容已安全落位（完整回填，或同项标记确认后的用户改动），出队只剩删队列
+			draftSecured = true;
+			// 确认出队：用取回快照的 runtime + revision 做 CAS，真正把原项从队列删掉
+			const discarded = await api.changePendingMessage({
+				sessionId: activeSessionId,
+				runtimeId: snapshot.runtimeId,
+				requestId: newRequestId(),
+				messageId,
+				expectedRevision: snapshot.revision,
+				action: "discard",
+			});
+			if (discarded.ok) {
+				useTranscriptStore.getState().setControlSnapshot(activeSessionId, discarded.value.snapshot);
+				finish();
+				return true;
+			}
+			if (discarded.error.snapshot)
+				useTranscriptStore.getState().setControlSnapshot(activeSessionId, discarded.error.snapshot);
+			if (discarded.error.code === "stale_revision" || discarded.error.code === "stale_runtime") {
+				await refreshControl(api, activeSessionId);
+				pushToast("warning", "composer.controlStale");
 				return false;
 			}
-			const { payload } = res.value;
-			useDraftStore.getState().updateDraft(draftKey, () => ({
-				text: payload.draft?.text ?? payload.text,
-				images: (payload.images ?? []).map((img, index) => ({
-					...img,
-					...(payload.draft?.imageNames?.[index] ? { name: payload.draft.imageNames[index] } : {}),
-				})),
-				slashCommand: payload.draft?.slashCommand ?? null,
-				attachments: payload.draft?.attachments ?? [],
-				quotes: payload.draft?.quotes ?? [],
-				recovery: { messageId: res.value.messageId, expectedRevision: res.value.snapshot.revision },
-			}));
-			if (typeof window !== "undefined") {
-				window.dispatchEvent(new CustomEvent(COMPOSER_FOCUS_EVENT));
+			// 其余拒绝可能是「其实已出队、回执丢了」：用权威快照核对，否则保留标记等用户重试
+			if (draftSecured && (await itemGone(messageId, snapshot.runtimeId))) {
+				finish();
+				return true;
 			}
-			return true;
+			pushToast("warning", "composer.retrieveIncomplete");
+			return false;
 		} catch {
+			// 传输异常（含 discard 已执行但响应丢失）：草稿与标记都保留，只有「本次已把载荷安全
+			// 落在草稿里」且「冻结/出队发生在同一 runtime」且权威快照确认原项不在时才算成功；
+			// 首次取回就异常（draftSecured=false）时 items 为空也不能算取回完成。
+			if (runtimeId && draftSecured && (await itemGone(messageId, runtimeId))) {
+				finish();
+				return true;
+			}
 			pushToast("warning", "composer.controlActionFailed");
 			return false;
+		} finally {
+			releaseRetrieveLock(draftKey, token);
 		}
 	};
 

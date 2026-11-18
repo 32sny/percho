@@ -42,6 +42,16 @@
 - 删除按钮不占流：绝对定位成渐变遮罩压在尾缀上（`w-5`，`bg-gradient-to-l from-hover`），常态 `opacity-0` + 不接收指针，hover / focus 时浮现并把尾缀淡出（原位替换）。Tooltip 复用 `components/ui/Tooltip`，仅暴露语义文件名/会话标题，不展示原始机器路径。
 - 托盘有芯片时在托盘与正文之间画一条 `.fade-rule`（`mx-3.5`），无芯片不画。
 - 正文 `<textarea>` 只在有 slash 命令胶囊时与其 flex 同行，否则保持 `w-full`。
+- 发送操作按状态收敛：空闲草稿仅显示 `32×32 bg-ink` 发送钮；忙碌无草稿仅显示 `32×32 bg-ink` 停止钮；忙碌有草稿时用 `h-8 rounded-full bg-hover` 包住 `24×28` 模式触发钮与 `32×32 bg-ink` queue 发送钮，外侧停止钮降为 `bg-hover` 次级态。菜单只含一次性 steer / interrupt，不提供 queue 默认项；发送与停止始终是独立真实 button，复用 `Tooltip`，模式菜单用 Portal + `placeMenu` 视口定位，键盘支持 Esc / 上下/Home/End / Tab 关闭与焦点归还。
+
+## 队列取回编辑
+
+- 托管队列“取回编辑”按冻结原项 → 完整回填 → 后端确认取消排队执行；成功后原项消失，仅留下普通草稿，不保留恢复关联。修改、清空和再次发送均按普通草稿处理，新发送不携带原消息版本。
+- 输入框已有任何内容（含纯空格、图片、附件、引用和命令胶囊）时拦截新取回；等待期间再次检查草稿，不能覆盖新输入或删除尚未回填的原项。
+- “放弃”统一称为“取消排队”：后端确认后才移除原项，保留输入框内容；失败保留并提示。
+- `recovering` 仅用于取回未完成或旧版本残留，显示“取回未完成”，提供取回重试与取消排队；出队未确认的 recovery 标记仅作保护，禁止提交旧实体。
+- 旧标记或取消响应丢失时，取回入口可补完出队；若队列条已消失，发送入口也可核对出队，成功提示确认草稿后再次发送，本次核对不提交消息。
+- 取回按会话互斥，保护跨实例和切会话场景；发送 ACK 不清新编辑或带出队保护标记的草稿。
 
 ## 已发送气泡的 @ 引用芯片
 
@@ -60,5 +70,6 @@
 - UI 历史来自完整分支，而非压缩后的模型上下文，见 [架构](architecture.md)。
 - 历史图片使用 `components/chat/history-image/` 资源层；稳定外盒、加载区门控、缩略图与原图预览各有归属，不在列表直接挂大量原图 data URL。资源释放与 worker 代次沿用现有服务，不在组件另建缓存。
 - markstream/Monaco/Mermaid 的接入限制先查 `Markdown.tsx`、`MermaidBlock.tsx` 与现有测试；不要复制库内部实现。
+- Monaco 只读代码块仍可能启动语言服务。`monaco-contribs.ts` 必须为 JSON、CSS/SCSS/LESS、HTML/Handlebars/Razor 与 JS/TS 分配对应语言 Worker，不能用 editor Worker 代替已注册的语言服务；Worker 使用 Vite `?worker` 导入。
 
 实机调试与验收方法见 [UI 调试](ui-debugging.md)。

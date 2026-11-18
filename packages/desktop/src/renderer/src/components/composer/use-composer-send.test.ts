@@ -67,7 +67,7 @@ vi.mock("../../stores/settings", () => ({ useSettingsStore: { getState: () => ({
 vi.mock("../../stores/toasts", () => ({ pushToast: mocks.toast }));
 
 import { buildChatRows, controlSendErrorCardId, isAgentWorking, type PromptAck } from "@percho/shared";
-import { useDraftStore } from "../../stores/drafts";
+import { type DraftEntry, useDraftStore } from "../../stores/drafts";
 import { useTranscriptStore } from "../../stores/transcript";
 import { useComposerSend } from "./use-composer-send";
 
@@ -491,7 +491,7 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 	});
 
 	it.each(["before", "after"] as const)(
-		"recovered idle queue resend is claimed by original message id when message_start arrives %s submit ACK",
+		"取回后的普通草稿按本次 requestId 认领：message_start %s submit ACK 都只剩一条用户消息",
 		async (order) => {
 			useTranscriptStore.getState().setControlSnapshot("s1", snap());
 			useDraftStore.getState().updateDraft("s1", () => ({
@@ -500,7 +500,6 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 				slashCommand: null,
 				attachments: [],
 				quotes: [],
-				recovery: { messageId: "original-message", expectedRevision: 6 },
 			}));
 			const gate = deferred<ReturnType<typeof ok>>();
 			mocks.submitMessage.mockReturnValue(gate.promise);
@@ -508,26 +507,28 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 				makeOptions({ text: "编辑后重发", slashCommand: null }),
 			).handleSend();
 			await vi.waitFor(() => expect(mocks.submitMessage).toHaveBeenCalledTimes(1));
-			const requestId = mocks.submitMessage.mock.calls[0]![0].requestId;
-			expect(requestId).not.toBe("original-message");
+			const request = mocks.submitMessage.mock.calls[0]![0];
+			const requestId = request.requestId;
+			// 取回即出队：编辑后的草稿就是新消息，信封里没有旧实体关联
+			expect(request.recovery).toBeUndefined();
 			expect(entry()?.messages[0]).toMatchObject({
 				kind: "user",
 				pending: true,
-				controlMessageId: "original-message",
+				controlMessageId: requestId,
 			});
 			const applyStart = () => {
 				useTranscriptStore.getState().applyEvent("s1", {
 					type: "message_start",
-					controlMessageId: "original-message",
+					controlMessageId: requestId,
 					message: { role: "user", content: [{ type: "text", text: "编辑后重发" }] },
 				} as never);
 			};
 			if (order === "before") {
 				applyStart();
-				gate.resolve(ok({ requestId, messageId: "original-message", disposition: "started" }));
+				gate.resolve(ok({ requestId, messageId: requestId, disposition: "started" }));
 				await pendingSend;
 			} else {
-				gate.resolve(ok({ requestId, messageId: "original-message", disposition: "started" }));
+				gate.resolve(ok({ requestId, messageId: requestId, disposition: "started" }));
 				await pendingSend;
 				applyStart();
 			}
@@ -559,7 +560,7 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
 	});
 
-	it("await 中的新编辑、切换会话及新 recovery 不被迟到成功回执清除", async () => {
+	it("await 中的新编辑与切换会话不被迟到成功回执清除", async () => {
 		useTranscriptStore.getState().setControlSnapshot("s1", snap());
 		useDraftStore.getState().updateDraft("s1", () => ({
 			text: "original",
@@ -567,7 +568,6 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 			slashCommand: null,
 			attachments: ["a.ts"],
 			quotes: [],
-			recovery: { messageId: "old", expectedRevision: 4 },
 		}));
 		const gate = deferred<ReturnType<typeof ok>>();
 		mocks.submitMessage.mockReturnValue(gate.promise);
@@ -582,7 +582,6 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 			slashCommand: "template:new",
 			attachments: ["b.ts"],
 			quotes: ["new quote"],
-			recovery: { messageId: "new", expectedRevision: 9 },
 		}));
 		gate.resolve(ok({ requestId: "r", messageId: "r", disposition: "queued" }));
 		await pending;
@@ -591,7 +590,6 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 			slashCommand: "template:new",
 			attachments: ["b.ts"],
 			quotes: ["new quote"],
-			recovery: { messageId: "new", expectedRevision: 9 },
 		});
 	});
 
@@ -716,8 +714,8 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 		expect(mocks.submitMessage.mock.calls[2]![0].requestId).not.toBe(first);
 	});
 
-	it("携带 recovery 元数据提交；受理成功后清除对应草稿及 recovery", async () => {
-		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+	it("出队未确认时点发送：先核对补完出队且本次不发送，确认后再次发送按新消息提交", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ revision: 9 }));
 		useDraftStore.setState({
 			bySession: {
 				s1: {
@@ -730,39 +728,201 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 				},
 			},
 		});
+		// 真实可达场景：discard 已执行、响应丢失，QueueBar 项已消失，权威快照也确认它不在
+		mocks.getMessageControl.mockResolvedValue(ok(snap({ revision: 10, items: [] })));
+		mocks.recoverPendingMessage.mockResolvedValue(fail("already_committed"));
 		const send = useComposerSend(makeOptions({ text: "编辑后重发", slashCommand: null }));
 		await send.handleSend();
-		expect(mocks.submitMessage.mock.calls[0]![0].recovery).toEqual({
-			messageId: "m-9",
-			expectedRevision: 6,
-		});
-		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
+		expect(mocks.recoverPendingMessage).toHaveBeenCalledTimes(1);
+		// 这一击只核对/补完出队，不直接发送
+		expect(mocks.submitMessage).not.toHaveBeenCalled();
+		expect(mocks.prompt).not.toHaveBeenCalled();
+		expect(mocks.toast).toHaveBeenCalledWith("info", "composer.recoverReadyToSend");
+		// 标记已清、内容原样留给用户确认
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "编辑后重发" });
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
+		// 第二次发送才是真正提交：普通新消息，新 messageId
+		await send.handleSend();
+		expect(mocks.submitMessage).toHaveBeenCalledTimes(1);
+		const request = mocks.submitMessage.mock.calls[0]?.[0];
+		expect(request?.payload.text).toBe("编辑后重发");
+		expect(request?.requestId).not.toBe("m-9");
+		expect(request?.recovery).toBeUndefined();
 	});
 
-	it("匹配 payload 但 recovery 已换关联时不清新草稿或 recovery", async () => {
-		useTranscriptStore.getState().setControlSnapshot("s1", snap());
-		useDraftStore.getState().updateDraft("s1", () => ({
-			text: "retry",
+	it("出队未确认且核对失败时发送仍被拦下：保留标记与内容、不提交", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ revision: 9 }));
+		const draft = {
+			text: "编辑后重发",
 			images: [],
 			slashCommand: null,
 			attachments: [],
 			quotes: [],
-			recovery: { messageId: "old", expectedRevision: 4 },
-		}));
+			recovery: { messageId: "m-9", expectedRevision: 6 },
+		};
+		useDraftStore.setState({ bySession: { s1: draft } });
+		// 权威快照里原项还在：出队没生效，不能解除标记
+		mocks.getMessageControl.mockResolvedValue(
+			ok(snap({ revision: 10, items: [{ messageId: "m-9", state: "recovering" }] })),
+		);
+		mocks.recoverPendingMessage.mockResolvedValue(fail("already_committed"));
+		const send = useComposerSend(makeOptions({ text: "编辑后重发", slashCommand: null }));
+		await send.handleSend();
+		expect(mocks.submitMessage).not.toHaveBeenCalled();
+		expect(mocks.prompt).not.toHaveBeenCalled();
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.recoverReleaseRequired");
+		expect(useDraftStore.getState().bySession.s1).toEqual(draft);
+	});
+
+	it("取回后清空再重写：控制版本已变化也按普通新消息发送", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({
+				messageId: "m1",
+				snapshot: snap({ revision: 8 }),
+				payload: { text: "original" },
+			}),
+		);
+		expect(
+			await useComposerSend(makeOptions({ slashCommand: null })).recoverPending({ messageId: "m1" }),
+		).toBe(true);
+		// 出队已确认：普通草稿，没有旧实体关联
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "" }));
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "replacement" }));
+		await useComposerSend(makeOptions({ text: "replacement", slashCommand: null })).handleSend();
+		expect(mocks.submitMessage).toHaveBeenCalledTimes(1);
+		const request = mocks.submitMessage.mock.calls[0]![0];
+		expect(request.payload.text).toBe("replacement");
+		expect(request.recovery).toBeUndefined();
+		expect(request.requestId).not.toBe("m1");
+		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
+	});
+
+	it("发送等待 ACK 期间继续编辑：保留新内容（新草稿保护）", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "sent" }));
 		const gate = deferred<ReturnType<typeof ok>>();
 		mocks.submitMessage.mockReturnValue(gate.promise);
-		const pending = useComposerSend(makeOptions({ text: "retry", slashCommand: null })).handleSend();
+		const pending = useComposerSend(makeOptions({ text: "sent", slashCommand: null })).handleSend();
 		await vi.waitFor(() => expect(mocks.submitMessage).toHaveBeenCalledTimes(1));
-		useDraftStore.getState().updateDraft("s1", (draft) => ({
-			...draft,
-			recovery: { messageId: "new", expectedRevision: 9 },
-		}));
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "new edit" }));
 		gate.resolve(ok({ requestId: "r", messageId: "r", disposition: "queued" }));
 		await pending;
-		expect(useDraftStore.getState().bySession.s1).toMatchObject({
-			text: "retry",
-			recovery: { messageId: "new", expectedRevision: 9 },
+		expect(useDraftStore.getState().bySession.s1?.text).toBe("new edit");
+	});
+
+	it("旧发送 ACK 不清除后来带出队保护标记的同内容草稿", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "same" }));
+		const gate = deferred<ReturnType<typeof ok>>();
+		mocks.submitMessage.mockReturnValue(gate.promise);
+		const pending = useComposerSend(makeOptions({ text: "same", slashCommand: null })).handleSend();
+		await vi.waitFor(() => expect(mocks.submitMessage).toHaveBeenCalledTimes(1));
+		const recovery = { messageId: "another", expectedRevision: 8 };
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, recovery }));
+		gate.resolve(ok({ requestId: "r", messageId: "r", disposition: "queued" }));
+		await pending;
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "same", recovery });
+	});
+
+	it("取消排队成功释放匹配保护标记但保留编辑内容", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		useDraftStore.getState().updateDraft("s1", (draft) => ({
+			...draft,
+			text: "keep edit",
+			recovery: { messageId: "m1", expectedRevision: 7 },
+		}));
+		expect(await useComposerSend(makeOptions({})).changePending({ messageId: "m1" }, "discard")).toBe(true);
+		expect(useDraftStore.getState().bySession.s1?.text).toBe("keep edit");
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
+	});
+
+	it("取消失败保留保护标记；取消其他实体不影响当前草稿", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		const recovery = { messageId: "m1", expectedRevision: 7 };
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "keep", recovery }));
+		mocks.changePendingMessage.mockResolvedValueOnce(fail("busy"));
+		const send = useComposerSend(makeOptions({}));
+		expect(await send.changePending({ messageId: "m1" }, "discard")).toBe(false);
+		expect(useDraftStore.getState().bySession.s1?.recovery).toEqual(recovery);
+		expect(await send.changePending({ messageId: "other" }, "discard")).toBe(true);
+		expect(useDraftStore.getState().bySession.s1?.recovery).toEqual(recovery);
+	});
+
+	it("再次取回同一实体（上次出队未确认）：补完出队但不覆盖已编辑内容", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		useDraftStore.getState().updateDraft("s1", (draft) => ({
+			...draft,
+			text: "edited",
+			recovery: { messageId: "m1", expectedRevision: 7 },
+		}));
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({
+				messageId: "m1",
+				snapshot: snap({ revision: 8 }),
+				payload: { text: "old backend payload" },
+			}),
+		);
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" })).toBe(true);
+		expect(mocks.recoverPendingMessage).toHaveBeenCalledTimes(1);
+		// 出队用取回快照的 runtime + 版本做 CAS
+		expect(mocks.changePendingMessage).toHaveBeenCalledWith({
+			sessionId: "s1",
+			runtimeId: "rt1",
+			requestId: expect.any(String),
+			messageId: "m1",
+			expectedRevision: 8,
+			action: "discard",
 		});
+		expect(mocks.toast).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "edited" });
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
+	});
+
+	it("同实体版本过期后明确取回：用最新版本补完出队，仍不覆盖编辑内容", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ revision: 9 }));
+		useDraftStore.getState().updateDraft("s1", (draft) => ({
+			...draft,
+			text: "edited",
+			recovery: { messageId: "m1", expectedRevision: 7 },
+		}));
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({
+				messageId: "m1",
+				snapshot: snap({ revision: 10 }),
+				payload: { text: "old backend payload" },
+			}),
+		);
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" })).toBe(true);
+		expect(mocks.recoverPendingMessage).toHaveBeenCalledWith({
+			sessionId: "s1",
+			runtimeId: "rt1",
+			requestId: expect.any(String),
+			messageId: "m1",
+			expectedRevision: 9,
+		});
+		expect(mocks.changePendingMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ messageId: "m1", expectedRevision: 10, action: "discard" }),
+		);
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "edited" });
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
+	});
+
+	it("取消排队成功后不再阻塞发送：新消息不带旧 recovery 信封", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		useDraftStore.getState().updateDraft("s1", (draft) => ({
+			...draft,
+			text: "retry",
+			recovery: { messageId: "m1", expectedRevision: 7 },
+		}));
+		const send = useComposerSend(makeOptions({ text: "retry", slashCommand: null }));
+		expect(await send.changePending({ messageId: "m1" }, "discard")).toBe(true);
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
+		await send.handleSend();
+		expect(mocks.submitMessage).toHaveBeenCalledTimes(1);
+		expect(mocks.submitMessage.mock.calls[0]![0].recovery).toBeUndefined();
+		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
 	});
 
 	it("stale_revision 拒绝：刷新快照 + 保留原草稿，不暗自重发", async () => {
@@ -826,7 +986,7 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 		expect(entry()?.control?.revision).toBe(8);
 	});
 
-	it("recoverPending：空草稿取回完整载荷并写入草稿（含 recovery 元数据）", async () => {
+	it("recoverPending：空草稿取回完整载荷；出队确认前挂临时保护标记，确认后清除", async () => {
 		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
 		mocks.recoverPendingMessage.mockResolvedValue(
 			ok({
@@ -845,9 +1005,10 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 				},
 			}),
 		);
-		const send = useComposerSend(makeOptions({}));
-		const okResult = await send.recoverPending({ messageId: "m1", preview: "x" });
-		expect(okResult).toBe(true);
+		const gate = deferred<ReturnType<typeof ok>>();
+		mocks.changePendingMessage.mockReturnValue(gate.promise);
+		const pending = useComposerSend(makeOptions({})).recoverPending({ messageId: "m1", preview: "x" });
+		await vi.waitFor(() => expect(mocks.changePendingMessage).toHaveBeenCalledTimes(1));
 		expect(mocks.recoverPendingMessage).toHaveBeenCalledWith({
 			sessionId: "s1",
 			runtimeId: "rt1",
@@ -855,14 +1016,65 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 			messageId: "m1",
 			expectedRevision: 7,
 		});
-		const draft = useDraftStore.getState().bySession.s1;
-		expect(draft).toMatchObject({
+		// 出队未确认前：内容已回填 + 临时保护标记（阻止这段内容被当成新消息发出）
+		const midflight = useDraftStore.getState().bySession.s1;
+		expect(midflight).toMatchObject({
 			text: "原始文本",
 			attachments: ["a.ts"],
 			quotes: ["q"],
 			recovery: { messageId: "m1", expectedRevision: 8 },
 		});
+		expect(midflight?.images).toEqual([{ data: "AAAA", mimeType: "image/png", name: "p.png" }]);
+		gate.resolve(ok({ snapshot: snap({ revision: 9, items: [] }) }));
+		expect(await pending).toBe(true);
+		// 出队确认：只清标记，内容原样留给输入框
+		const draft = useDraftStore.getState().bySession.s1;
+		expect(draft?.recovery).toBeUndefined();
+		expect(draft).toMatchObject({ text: "原始文本", attachments: ["a.ts"], quotes: ["q"] });
+	});
+
+	it("完整取回成功后立即取消排队：草稿保留完整载荷且不留 recovery 关联", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({
+				messageId: "m1",
+				snapshot: snap({ revision: 8 }),
+				payload: {
+					text: "最终文本",
+					images: [{ data: "AAAA", mimeType: "image/png" }],
+					draft: {
+						text: "原始文本",
+						attachments: ["a.ts"],
+						quotes: ["q"],
+						slashCommand: null,
+						imageNames: ["p.png"],
+					},
+				},
+			}),
+		);
+		mocks.changePendingMessage.mockResolvedValue(ok({ snapshot: snap({ revision: 9, items: [] }) }));
+
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1", preview: "x" })).toBe(
+			true,
+		);
+		// 取回即出队：确认用取回快照的 runtime + revision 做 CAS
+		expect(mocks.changePendingMessage).toHaveBeenCalledWith({
+			sessionId: "s1",
+			runtimeId: "rt1",
+			requestId: expect.any(String),
+			messageId: "m1",
+			expectedRevision: 8,
+			action: "discard",
+		});
+		// 出队成功后才留普通草稿：完整载荷在，recovery 保护标记已清
+		const draft = useDraftStore.getState().bySession.s1;
+		expect(draft).toMatchObject({ text: "原始文本", attachments: ["a.ts"], quotes: ["q"] });
 		expect(draft?.images).toEqual([{ data: "AAAA", mimeType: "image/png", name: "p.png" }]);
+		expect(draft?.recovery).toBeUndefined();
+		// 出队后的普通草稿发送时不再携带旧 recovery 信封
+		await useComposerSend(makeOptions({ text: "原始文本", slashCommand: null })).handleSend();
+		expect(mocks.submitMessage).toHaveBeenCalledTimes(1);
+		expect(mocks.submitMessage.mock.calls[0]?.[0].recovery).toBeUndefined();
 	});
 
 	it("旧 host 的 steer/interrupt 拒绝，不假装 legacy prompt 成功", async () => {
@@ -896,9 +1108,11 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 		expect(await pending).toBe(false);
 		expect(useDraftStore.getState().bySession.s1?.text).toBe("typed while waiting");
 		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.recoverDraftConflict");
+		// 冻结项保留（不 discard），下次点击可补完出队
+		expect(mocks.changePendingMessage).not.toHaveBeenCalled();
 	});
 
-	it("recoverPending：已有未保存草稿时拒绝覆盖（toast 提示先处理草稿）", async () => {
+	it("recoverPending：已有未保存草稿时拒绝覆盖，且不发任何请求", async () => {
 		useTranscriptStore.getState().setControlSnapshot("s1", snap());
 		useDraftStore.setState({
 			bySession: {
@@ -910,6 +1124,258 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 		expect(okResult).toBe(false);
 		expect(mocks.recoverPendingMessage).not.toHaveBeenCalled();
 		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.recoverDraftConflict");
+	});
+
+	it.each<[string, Partial<DraftEntry>]>([
+		["正文", { text: "draft" }],
+		["纯空格正文", { text: "   " }],
+		["图片", { images: [{ data: "AAAA", mimeType: "image/png" }] }],
+		["附件", { attachments: ["a.ts"] }],
+		["引用", { quotes: ["q"] }],
+		["斜杠命令", { slashCommand: "compact" }],
+	])("输入框已有%s时拒绝取回且不发请求", async (_label, content) => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap());
+		const draft: DraftEntry = {
+			text: "",
+			images: [],
+			slashCommand: null,
+			attachments: [],
+			quotes: [],
+			...content,
+		};
+		useDraftStore.setState({ bySession: { s1: draft } });
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" })).toBe(false);
+		expect(mocks.recoverPendingMessage).not.toHaveBeenCalled();
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.recoverDraftConflict");
+		expect(useDraftStore.getState().bySession.s1).toEqual(draft);
+	});
+
+	it("重复/并发取回同一会话只发一次请求", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
+		const gate = deferred<ReturnType<typeof ok>>();
+		mocks.recoverPendingMessage.mockReturnValue(gate.promise);
+		const first = useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" });
+		// 另一个实例（重挂载/分栏）同时点取回：不应再发一次请求
+		const second = await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" });
+		expect(second).toBe(false);
+		await vi.waitFor(() => expect(mocks.recoverPendingMessage).toHaveBeenCalledTimes(1));
+		gate.resolve(ok({ messageId: "m1", snapshot: snap({ revision: 8 }), payload: { text: "x" } }));
+		expect(await first).toBe(true);
+		expect(mocks.recoverPendingMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it("取回在途时拒绝发送：不把内容当新消息插进队列", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
+		const gate = deferred<ReturnType<typeof ok>>();
+		mocks.recoverPendingMessage.mockReturnValue(gate.promise);
+		const pending = useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" });
+		await useComposerSend(makeOptions({ text: "急着发", slashCommand: null })).handleSend();
+		expect(mocks.submitMessage).not.toHaveBeenCalled();
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.recoverReleaseRequired");
+		gate.resolve(ok({ messageId: "m1", snapshot: snap({ revision: 8 }), payload: { text: "x" } }));
+		await pending;
+	});
+
+	it("取回只写自己的会话草稿，不串到其他会话", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
+		const other = { text: "s2 的草稿", images: [], slashCommand: null, attachments: [], quotes: [] };
+		useDraftStore.setState({ bySession: { s2: other } });
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({ messageId: "m1", snapshot: snap({ revision: 8 }), payload: { text: "s1 的内容" } }),
+		);
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" })).toBe(true);
+		expect(useDraftStore.getState().bySession.s2).toEqual(other);
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "s1 的内容" });
+	});
+
+	it("取消排队失败：保草稿与保护标记可重试，不落回旧 recovery 提交", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({ messageId: "m1", snapshot: snap({ revision: 8 }), payload: { text: "取回内容" } }),
+		);
+		// 回执失败但权威快照里原项还在：不能当成已出队
+		mocks.getMessageControl.mockResolvedValue(
+			ok(snap({ revision: 9, items: [{ messageId: "m1", state: "recovering" }] })),
+		);
+		mocks.changePendingMessage.mockResolvedValueOnce(fail("busy"));
+		const send = useComposerSend(makeOptions({}));
+		expect(await send.recoverPending({ messageId: "m1" })).toBe(false);
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.retrieveIncomplete");
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({
+			text: "取回内容",
+			recovery: { messageId: "m1", expectedRevision: 8 },
+		});
+		// 重试只补完出队：不再用后端回传载荷覆盖用户内容
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({ messageId: "m1", snapshot: snap({ revision: 10 }), payload: { text: "别覆盖我" } }),
+		);
+		expect(await send.recoverPending({ messageId: "m1" })).toBe(true);
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "取回内容" });
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
+		// 出队已确认：再点发送就是普通新消息，不再碰旧实体
+		await useComposerSend(makeOptions({ text: "取回内容", slashCommand: null })).handleSend();
+		expect(mocks.submitMessage).toHaveBeenCalledTimes(1);
+		expect(mocks.submitMessage.mock.calls[0]?.[0].recovery).toBeUndefined();
+	});
+
+	it("取消排队回执丢失但权威快照证明原项已不在：解除标记按成功处理", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({ messageId: "m1", snapshot: snap({ revision: 8 }), payload: { text: "取回内容" } }),
+		);
+		mocks.changePendingMessage.mockRejectedValueOnce(new Error("ipc lost"));
+		mocks.getMessageControl.mockResolvedValue(ok(snap({ revision: 9, items: [] })));
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" })).toBe(true);
+		expect(mocks.toast).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "取回内容" });
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
+	});
+
+	it("取消排队回执丢失且快照已换 runtime：不假成功，保留标记等重试", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({ messageId: "m1", snapshot: snap({ revision: 8 }), payload: { text: "取回内容" } }),
+		);
+		mocks.changePendingMessage.mockRejectedValueOnce(new Error("ipc lost"));
+		// 换了 runtime：旧实体去向不可知，不能据此解除保护
+		mocks.getMessageControl.mockResolvedValue(ok(snap({ runtimeId: "rt2", items: [] })));
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" })).toBe(false);
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.controlActionFailed");
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({
+			text: "取回内容",
+			recovery: { messageId: "m1", expectedRevision: 8 },
+		});
+	});
+
+	it("出队 stale_revision：保留标记与内容，刷新快照并提示重试", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({ messageId: "m1", snapshot: snap({ revision: 8 }), payload: { text: "取回内容" } }),
+		);
+		mocks.changePendingMessage.mockResolvedValueOnce(fail("stale_revision"));
+		mocks.getMessageControl.mockResolvedValue(
+			ok(snap({ revision: 11, items: [{ messageId: "m1", state: "recovering" }] })),
+		);
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" })).toBe(false);
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.controlStale");
+		expect(entry()?.control?.revision).toBe(11);
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({
+			text: "取回内容",
+			recovery: { messageId: "m1", expectedRevision: 8 },
+		});
+	});
+
+	it("首次取回就 already_committed 且队列已空：不因 items 空而假成功（不回填、不挂标记）", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ revision: 9 }));
+		mocks.getMessageControl.mockResolvedValue(ok(snap({ revision: 10, items: [] })));
+		mocks.recoverPendingMessage.mockResolvedValue(fail("already_committed"));
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" })).toBe(false);
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.recoverReleaseRequired");
+		expect(mocks.changePendingMessage).not.toHaveBeenCalled();
+		// 从未回填过载荷：不能留下看似取回成功的草稿
+		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
+	});
+
+	it("首次取回传输异常且队列看起来为空：不当成取回完成", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ revision: 9 }));
+		mocks.getMessageControl.mockResolvedValue(ok(snap({ revision: 10, items: [] })));
+		mocks.recoverPendingMessage.mockRejectedValue(new Error("ipc lost"));
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" })).toBe(false);
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.controlActionFailed");
+		expect(mocks.changePendingMessage).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
+	});
+
+	it("再次取回同项时标记在等待期间消失：不补标记、不出队、不覆盖", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ revision: 9 }));
+		useDraftStore.getState().updateDraft("s1", (draft) => ({
+			...draft,
+			text: "edited",
+			recovery: { messageId: "m1", expectedRevision: 7 },
+		}));
+		const gate = deferred<ReturnType<typeof ok>>();
+		mocks.recoverPendingMessage.mockReturnValue(gate.promise);
+		const pending = useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" });
+		await vi.waitFor(() => expect(mocks.recoverPendingMessage).toHaveBeenCalledTimes(1));
+		// 等待期间标记被别处清掉（另一入口已确认出队）
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, recovery: undefined }));
+		gate.resolve(ok({ messageId: "m1", snapshot: snap({ revision: 10 }), payload: { text: "别覆盖我" } }));
+		expect(await pending).toBe(false);
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.controlActionFailed");
+		expect(mocks.changePendingMessage).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "edited" });
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
+	});
+
+	it("再次取回同项时标记换成另一实体：不补标记、不出队、不覆盖", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ revision: 9 }));
+		useDraftStore.getState().updateDraft("s1", (draft) => ({
+			...draft,
+			text: "edited",
+			recovery: { messageId: "m1", expectedRevision: 7 },
+		}));
+		const gate = deferred<ReturnType<typeof ok>>();
+		mocks.recoverPendingMessage.mockReturnValue(gate.promise);
+		const pending = useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" });
+		await vi.waitFor(() => expect(mocks.recoverPendingMessage).toHaveBeenCalledTimes(1));
+		useDraftStore
+			.getState()
+			.updateDraft("s1", (draft) => ({ ...draft, recovery: { messageId: "m2", expectedRevision: 11 } }));
+		gate.resolve(ok({ messageId: "m1", snapshot: snap({ revision: 10 }), payload: { text: "别覆盖我" } }));
+		expect(await pending).toBe(false);
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.controlActionFailed");
+		expect(mocks.changePendingMessage).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({
+			text: "edited",
+			recovery: { messageId: "m2", expectedRevision: 11 },
+		});
+	});
+
+	it("首次取回等待期间草稿挂上其它实体的标记：按冲突拒绝，不出队不覆盖", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ revision: 9 }));
+		const gate = deferred<ReturnType<typeof ok>>();
+		mocks.recoverPendingMessage.mockReturnValue(gate.promise);
+		const pending = useComposerSend(makeOptions({})).recoverPending({ messageId: "m1" });
+		await vi.waitFor(() => expect(mocks.recoverPendingMessage).toHaveBeenCalledTimes(1));
+		useDraftStore.getState().updateDraft("s1", () => ({
+			text: "",
+			images: [],
+			slashCommand: null,
+			attachments: [],
+			quotes: [],
+			recovery: { messageId: "m2", expectedRevision: 3 },
+		}));
+		gate.resolve(ok({ messageId: "m1", snapshot: snap({ revision: 10 }), payload: { text: "取回内容" } }));
+		expect(await pending).toBe(false);
+		expect(mocks.toast).toHaveBeenCalledWith("warning", "composer.recoverDraftConflict");
+		expect(mocks.changePendingMessage).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({
+			text: "",
+			recovery: { messageId: "m2", expectedRevision: 3 },
+		});
+	});
+
+	it("旧标记指向的实体已不在队列：权威确认后才允许新的取回", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ phase: "idle" }));
+		useDraftStore.setState({
+			bySession: {
+				s1: {
+					text: "",
+					images: [],
+					slashCommand: null,
+					attachments: [],
+					quotes: [],
+					recovery: { messageId: "ghost", expectedRevision: 3 },
+				},
+			},
+		});
+		mocks.getMessageControl.mockResolvedValue(ok(snap({ revision: 9, items: [] })));
+		mocks.recoverPendingMessage.mockResolvedValue(
+			ok({ messageId: "m2", snapshot: snap({ revision: 10 }), payload: { text: "新内容" } }),
+		);
+		expect(await useComposerSend(makeOptions({})).recoverPending({ messageId: "m2" })).toBe(true);
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "新内容" });
+		expect(useDraftStore.getState().bySession.s1?.recovery).toBeUndefined();
 	});
 });
 

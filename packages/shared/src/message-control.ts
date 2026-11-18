@@ -21,6 +21,11 @@ export interface ControlIdentity {
 export interface MessageSubmitRequest extends ControlIdentity {
 	mode: MessageMode;
 	payload: MessagePayload;
+	/**
+	 * 可选的「取回后编辑重发原实体」关联字段（SDK 仍然支持，并非废弃）。
+	 * 桌面端的正常流程不使用它：取回即出队，重发按普通新消息（新 messageId）提交；
+	 * 仅旧客户端/旧日志仍可能携带。
+	 */
 	recovery?: { messageId: string; expectedRevision: number };
 }
 export interface MessageAck {

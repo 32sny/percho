@@ -2,17 +2,18 @@ import type { ControlledItem } from "@percho/shared";
 import { type MessageKey, useT } from "../../i18n";
 import { UndoIcon } from "../icons";
 
-/** 队列项操作（changePendingMessage 的 action 与 recover 取回） */
+/** 队列项操作（changePendingMessage 的 action，以及本地 recover 取回即出队） */
 export type QueueItemAction = "steer" | "interrupt" | "resend" | "discard" | "recover";
 
 /**
  * 队列项可用操作（纯逻辑，便于单测）：
- * - queued：可改派（steer/interrupt）、取回编辑、明确放弃；已是 steer 的不重复给插话
- * - held（停止/打断后被冻结）：只能明确重发 / 取回 / 放弃，绝不自动继续、不再 steer
- * - recovering：允许再次取回（渲染器重载后本地草稿可能已丢失）；已有草稿由 recoverPending 拒绝覆盖
+ * - queued：可改派（steer/interrupt）、取回编辑、取消排队；已是 steer 的不重复给插话
+ * - held（停止/打断后被冻结）：只能明确重发 / 取回 / 取消排队，绝不自动继续、不再 steer
+ * - recovering：已取回但出队未确认（或旧版本取回过），只能再次取回补完出队或取消排队；
+ *   再次取回不覆盖输入框内容，也不当“重发”用
  */
 export function queueItemActions(item: ControlledItem): QueueItemAction[] {
-	if (item.state === "recovering") return ["recover"];
+	if (item.state === "recovering") return ["recover", "discard"];
 	if (item.state === "held") return ["resend", "recover", "discard"];
 	return [...(item.mode === "steer" ? [] : (["steer"] as const)), "interrupt", "recover", "discard"];
 }
@@ -40,7 +41,10 @@ interface QueueBarProps {
 	onRestore?: () => void;
 }
 
-/** 待发消息条：queued/held/recovering 三态展示与操作；legacy 单文本形态保持原行为 */
+/**
+ * 待发消息条：queued/held/recovering 三态展示与操作；legacy 单文本形态保持原行为。
+ * recovering 的文案是「取回未完成」（可重试），不是「待重发」。
+ */
 export function QueueBar({ items, onAction, legacyText, onRestore }: QueueBarProps) {
 	const t = useT();
 	if (items && items.length > 0) {

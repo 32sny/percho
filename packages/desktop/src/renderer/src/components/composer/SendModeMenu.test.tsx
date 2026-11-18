@@ -35,6 +35,9 @@ describe("SendModeMenu", () => {
 		expect(html).toContain("composer.modeInterruptDesc");
 		// 一次性菜单：不出现「设为默认」类入口
 		expect(html).not.toContain("modeMakeDefault");
+		expect(html.match(/role="menuitem"/g)).toHaveLength(2);
+		expect(html).toContain("rounded-xl bg-surface p-1 shadow-pop");
+		expect(html).not.toContain("border-border");
 	});
 
 	it("禁用态渲染可解释原因（readOnly / compacting / slash）", () => {
@@ -65,8 +68,8 @@ describe("queueItemActions（队列项可用操作）", () => {
 	it("held：重发 / 取回 / 放弃（不再 steer）", () => {
 		expect(queueItemActions(item({ state: "held" }))).toEqual(["resend", "recover", "discard"]);
 	});
-	it("recovering：重载后可再次取回，但不能自动重发", () => {
-		expect(queueItemActions(item({ state: "recovering" }))).toEqual(["recover"]);
+	it("recovering：允许取回或放弃，但不能自动重发", () => {
+		expect(queueItemActions(item({ state: "recovering" }))).toEqual(["recover", "discard"]);
 	});
 });
 
@@ -76,6 +79,7 @@ describe("QueueBar", () => {
 			<QueueBar items={[item({ state: "recovering", imageCount: 1 })]} onAction={() => {}} />,
 		);
 		expect(html).toContain("composer.queueActionRecover");
+		expect(html).toContain("composer.queueActionDiscard");
 		expect(html).not.toContain("composer.queueActionResend");
 	});
 	it("渲染控制项：状态标签 + 预览 + 图片计数", () => {
