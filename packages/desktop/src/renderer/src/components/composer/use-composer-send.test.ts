@@ -750,6 +750,23 @@ describe("useComposerSend 消息控制路径（submitMessage 三态）", () => {
 		expect(request?.recovery).toBeUndefined();
 	});
 
+	it("空草稿仍可通过发送入口核对并解除残留出队标记", async () => {
+		useTranscriptStore.getState().setControlSnapshot("s1", snap({ items: [] }));
+		useDraftStore.getState().updateDraft("s1", (draft) => ({
+			...draft,
+			recovery: { messageId: "m1", expectedRevision: 8 },
+		}));
+		mocks.recoverPendingMessage.mockResolvedValueOnce(fail("already_committed"));
+		mocks.getMessageControl.mockResolvedValueOnce(ok(snap({ revision: 9, items: [] })));
+
+		await useComposerSend(makeOptions({ text: "", slashCommand: null })).handleSend();
+
+		expect(mocks.recoverPendingMessage).toHaveBeenCalledTimes(1);
+		expect(mocks.submitMessage).not.toHaveBeenCalled();
+		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
+		expect(mocks.toast).toHaveBeenCalledWith("info", "composer.recoverReadyToSend");
+	});
+
 	it("出队未确认且核对失败时发送仍被拦下：保留标记与内容、不提交", async () => {
 		useTranscriptStore.getState().setControlSnapshot("s1", snap({ revision: 9 }));
 		const draft = {

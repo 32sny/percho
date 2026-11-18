@@ -554,6 +554,20 @@ export function useComposerSend(options: UseComposerSendOptions) {
 
 	const handleSend = async (mode: MessageMode = "queue") => {
 		const { text, images, attachments, quotes, slashCommand, followUpQueue, agentActive } = options;
+		const draftKey = options.activeSessionId ?? NEW_SESSION_DRAFT_KEY;
+		// 出队未确认的标记必须先于空草稿 / 压缩等发送门禁处理；即使用户清空了回填内容，
+		// 仍须允许通过明确发送操作核对并解除残留保护，否则 QueueBar 消失后会永久卡住。
+		const retrieving = options.activeSessionId ? isRetrieving(options.activeSessionId) : false;
+		if (retrieving) {
+			pushToast("warning", "composer.recoverReleaseRequired");
+			return;
+		}
+		const blockingRecovery = useDraftStore.getState().bySession[draftKey]?.recovery;
+		if (blockingRecovery) {
+			const released = await recoverPending({ messageId: blockingRecovery.messageId });
+			if (released) pushToast("info", "composer.recoverReadyToSend");
+			return;
+		}
 		// 引用胶囊逐条转 blockquote 段落；@ 引用胶囊拼回文本。引用置最前（先给上下文），正文在后
 		const quoteBlock = buildQuoteBlock(quotes);
 		const atText = attachments.map((p) => `@${p}`).join(" ");
@@ -591,23 +605,6 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		// 且 steer/interrupt 不受旧 followUp 上限妨碍
 		if (!controlApi() && followUpQueue.length >= 1 && !content.startsWith("/")) {
 			showFeedback(t("composer.queueFull"), "warn");
-			return;
-		}
-		const draftKey = options.activeSessionId ?? NEW_SESSION_DRAFT_KEY;
-		// 取回在途：原实体正被冻结/出队，不能把旧实体当成新消息提交。
-		const retrieving = options.activeSessionId ? isRetrieving(options.activeSessionId) : false;
-		if (retrieving) {
-			pushToast("warning", "composer.recoverReleaseRequired");
-			return;
-		}
-		// 某次取回还没确认出队（discard 已执行但响应丢失、快照核对失败时 QueueBar 项已消失，
-		// 草稿依旧挂着保护标记）：这时「发送」是用户唯一可点的入口，所以先核对/补完出队。
-		// 本次点击**不发送**：既避免拿旧闭包数据直接提交，也要先确认原项确实不在待发集合里。
-		const blockingRecovery = useDraftStore.getState().bySession[draftKey]?.recovery;
-		if (blockingRecovery) {
-			const released = await recoverPending({ messageId: blockingRecovery.messageId });
-			// 失败时 recoverPending 已经给过具体提示（冲突/未完成/过期），这里不叠加
-			if (released) pushToast("info", "composer.recoverReadyToSend");
 			return;
 		}
 		// 同步锁：`sending` 下一帧才生效，挡不住「draft 页要先 await 转正」这个窗口里的第二次触发
