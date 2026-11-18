@@ -1,0 +1,11 @@
+{
+	"tokenFiles": [
+		"packages/desktop/src/renderer/src/styles/globals.css",
+		"packages/desktop/src/renderer/src/styles/typography.css",
+		"packages/desktop/src/renderer/src/styles/splash.css"
+	],
+	"scan": ["packages/desktop/src/**/*.tsx", "packages/desktop/src/**/*.ts", "packages/desktop/src/**/*.css"],
+	"exclude": ["**/node_modules/**", "**/dist/**", "**/*.test.ts", "**/*.test.tsx"],
+	"rules": ["hex", "font-size", "tailwind-arbitrary"],
+	"emojiContext": "icon|Icon|title=|aria-label|<button|className|tooltip"
+}
