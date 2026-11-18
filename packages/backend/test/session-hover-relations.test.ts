@@ -49,7 +49,7 @@ async function child(name: string) {
 	await writeFile(file, "{}");
 	return file;
 }
-function memory(entries: unknown[], liveRuns: SessionHoverLiveRun[] = [], leaf?: string | null) {
+function memory(entries: unknown[], liveRuns: SessionHoverLiveRun[] = [], leaf?: string | null, offset = 0) {
 	return previewLoadedSession(
 		ID,
 		env.dir,
@@ -61,6 +61,7 @@ function memory(entries: unknown[], liveRuns: SessionHoverLiveRun[] = [], leaf?:
 			getLeafId: () => (leaf === undefined ? ((entries.at(-1) as { id: string })?.id ?? null) : leaf),
 		} as Parameters<typeof previewLoadedSession>[3],
 		liveRuns,
+		offset,
 	);
 }
 
@@ -86,6 +87,41 @@ describe("悬停关系的当前分支、安全投影与统一计数", () => {
 		expect(result.relations?.children.map((c) => c.agent)).toEqual(["latest", "scout"]);
 		const sameTimes = await memory([user(), tool("a", "user", [run(a)], 1), tool("b", "a", [run(b)], 1)]);
 		expect(sameTimes.relations?.children.map((c) => c.sessionFile)).toEqual([b, a]);
+	});
+
+	it("分页前对全量 valid 聚合角色：大小写不敏感去重、label 首现、count 全量、status 取最新", async () => {
+		const files = await Promise.all(Array.from({ length: 9 }, (_, i) => child(`role${i}`)));
+		// 旧的在前，valid 里最新在前（索引 8 → 0）
+		const spec = [
+			["fixer", 0],
+			["Fixer", 0],
+			["scout", 0],
+			["FIXER", 1],
+			["scout", 0],
+			["oracle", 0],
+			["fixer", 1],
+			["Oracle", 0],
+			["scout", 0],
+		] as const;
+		const entries = [
+			user(),
+			...files.map((file, i) => {
+				const [agent, exitCode] = spec[i] ?? ["subagent", 0];
+				return tool(`r${i}`, i ? `r${i - 1}` : "user", [run(file, agent, { exitCode })], i);
+			}),
+		];
+		const first = await memory(entries);
+		expect(first.relations?.children).toHaveLength(6);
+		expect(first.relations?.hidden).toBe(3);
+		// 计数按全量 valid（9 条）算，不受当前页/offset 影响；status 取该角色最新一项
+		expect(first.relations?.roleCounts).toEqual([
+			{ label: "scout", count: 3, status: "done" },
+			{ label: "Oracle", count: 2, status: "done" },
+			{ label: "fixer", count: 4, status: "error" },
+		]);
+		const second = await memory(entries, [], undefined, 6);
+		expect(second.relations?.children).toHaveLength(3);
+		expect(second.relations?.roleCounts).toEqual(first.relations?.roleCounts);
 	});
 
 	it("隐藏集合与实时项重叠不加计数，真正新增才加一，streaming最新在前", async () => {

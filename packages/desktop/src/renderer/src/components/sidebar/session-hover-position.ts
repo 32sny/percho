@@ -1,6 +1,6 @@
 import type { MenuAnchor, MenuSize, ViewportSize } from "../ui/place-menu";
 
-export const SESSION_HOVER_WIDTH = 360;
+export const SESSION_HOVER_WIDTH = 348;
 const MARGIN = 8;
 const GAP = 8;
 

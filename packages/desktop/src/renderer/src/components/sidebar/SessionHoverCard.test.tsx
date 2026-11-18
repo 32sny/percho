@@ -15,6 +15,7 @@ const harness = vi.hoisted(() => ({
 		moreError: false,
 		expanded: false,
 		loadMore: vi.fn(),
+		expand: vi.fn(),
 		collapse: vi.fn(),
 	},
 	target: undefined as unknown,
@@ -36,13 +37,18 @@ vi.mock("../../i18n", async () => {
 	const { zh } = await import("../../i18n/zh");
 	const { en } = await import("../../i18n/en");
 	return {
-		useT: () => (key: string) =>
-			key
+		useT: () => (key: string, params?: Record<string, string | number>) => {
+			const node = key
 				.split(".")
 				.reduce<unknown>(
 					(value, part) => (value as Record<string, unknown>)[part],
 					harness.language === "zh" ? zh : en,
-				),
+				);
+			const template = typeof node === "string" ? node : key;
+			return params
+				? template.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? `{${name}}`))
+				: template;
+		},
 		useI18nStore: (select: (state: { language: string }) => unknown) =>
 			select({ language: harness.language }),
 	};
@@ -158,26 +164,36 @@ describe("悬停卡信息与可访问结构（SSR，非视觉验收）", () => {
 		expect(html).toContain('aria-modal="false"');
 		expect(html).toContain('aria-labelledby="hover-card-title"');
 		expect(html).toContain("select-text");
-		expect(html).toContain("overflow-y-auto");
 		expect(html).toContain("overscroll-contain");
 		expect(html).toContain("overflow-wrap:anywhere");
 		expect(html).toContain('aria-label="复制完整标题"');
-		expect(html).not.toMatch(/truncate|line-clamp|role="tooltip"/);
+		// 标题本身不截断（只允许元信息/首问/关系行 truncate）
+		expect(html).not.toContain("line-clamp");
+		expect(html).toContain(title);
 	});
 
-	it("使用宿主主题 token 和低于设置弹窗的 z-30，不添加动画", () => {
+	it("无边框浮层：无整卡滚动条、无关闭按钮、复制钮走 Tooltip 而非原生 title", () => {
 		const html = render();
-		for (const token of ["bg-surface", "border-border", "text-ink", "shadow-pop", "z-30"])
+		for (const token of ["bg-surface", "text-ink", "shadow-pop", "z-30", "rounded-xl"])
 			expect(html).toContain(token);
-		expect(html).not.toMatch(/animate-|z-50|z-\[999/);
+		// 只允许状态 glyph 之类的圆点，不再有整卡/区块边框与整卡 overflow-y-auto
+		expect(html).not.toContain("border-border");
+		expect(html).not.toContain("overflow-y-auto");
+		expect(html).not.toContain("animate-");
+		// 关闭 X 已删除（外部 onClose/Esc 保留），复制提示复用 Tooltip
+		expect(html).not.toContain('aria-label="关闭"');
+		expect(html).toContain('role="tooltip"');
+		expect(html).not.toContain('title="复制完整标题"');
 	});
 
-	it("提问与已保存标题相同或 empty 时隐藏重复区块", () => {
-		expect(render(meta(), preview("已保存的标题"))).not.toContain("首条提问（当前分支首行）");
-		expect(render(meta(), { status: "empty", sessionId: "A" })).not.toContain("首条提问");
-		const html = render(meta(), preview("不同的原始提问"));
-		expect(html).toContain("首条提问（当前分支首行）");
-		expect(html).toContain("不同的原始提问");
+	it("首问胶囊：标题相同或 empty 时不重复，普通提问单行显示", () => {
+		expect(render(meta(), preview("已保存的标题"))).not.toContain("首问");
+		expect(render(meta(), { status: "empty", sessionId: "A" })).not.toContain("首问");
+		const html = render(meta(), preview("不同的原始提问\n第二行"));
+		expect(html).toContain("首问");
+		expect(html).toContain("bg-hover");
+		expect(html).toContain("rounded-lg");
+		expect(html).toContain("不同的原始提问 第二行");
 		expect(html).toContain("已保存的标题");
 	});
 
@@ -205,15 +221,38 @@ describe("悬停卡信息与可访问结构（SSR，非视觉验收）", () => {
 		expect(html).not.toContain('role="alert"');
 	});
 
-	it("只显示目标已有模型，缺失模型与时间不借用或伪造", () => {
+	it("只显示目标已有模型（尾段 modelId），缺失模型与时间不借用或伪造", () => {
 		const html = render(meta({ createdAt: 0, modifiedAt: undefined }));
 		expect(html).not.toContain("DO-NOT-BORROW-CURRENT-MODEL");
 		expect(html).not.toContain(">模型<");
 		expect(html).not.toContain("<time");
 		const known = render(meta({ modelLabel: "旧标签", model: { provider: "目标", modelId: "当前模型" } }));
-		expect(known).toContain("目标/当前模型");
+		expect(known).toContain(">当前模型<");
+		expect(known).not.toContain("目标/当前模型");
 		expect(known).not.toContain("旧标签");
 		expect(render(meta({ modelLabel: "已有模型标签" }))).toContain("已有模型标签");
+	});
+
+	it("未加载历史会话用 preview.model，主目录折叠为 ~ 且元信息单行", () => {
+		const html = render(
+			meta({ cwd: "C:/Users/Administrator/Desktop/Percho", name: "标题", modelLabel: undefined }),
+			{ ...preview("提问"), model: "anthropic/claude-opus-4-6" },
+		);
+		expect(html).toContain("claude-opus-4-6");
+		expect(html).not.toContain("anthropic/");
+		expect(html).toContain("~/Desktop/Percho");
+		expect(html).not.toContain("C:/Users/Administrator");
+		// 完整路径不进 title/aria（只用文本节点展示折叠结果）
+		expect(html).not.toContain('title="C:');
+		expect(html).not.toContain('aria-label="C:');
+	});
+
+	it("Windows 反斜杠目录同样折叠为 ~/…，不显示成 ~\\\\…", () => {
+		const html = render(
+			meta({ cwd: "C:\\Users\\Administrator\\Desktop\\Percho", name: "标题", modelLabel: undefined }),
+		);
+		expect(html).toContain("~/Desktop/Percho");
+		expect(html).not.toContain("C:\\Users");
 	});
 
 	it("done 是完成未读，状态优先级遵从实时 store", () => {

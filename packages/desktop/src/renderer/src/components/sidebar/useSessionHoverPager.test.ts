@@ -163,6 +163,36 @@ describe("悬停分页控制器与实际单在途缓存", () => {
 		expect(count(pager)).toBe(6);
 	});
 
+	it("expanded 是独立意图：没有 hidden 也能展开，loadMore 保持展开，collapse 回到首页", async () => {
+		const { pager } = setup();
+		await flush();
+		expect(pager.getSnapshot().expanded).toBe(false);
+		// 首屏 6 条、还有 3 条 hidden：展开不要求先翻页，也不改 offset
+		pager.expand();
+		expect(pager.getSnapshot().expanded).toBe(true);
+		expect(count(pager)).toBe(6);
+		expect(pager.getSnapshot().preview?.relations?.hidden).toBe(3);
+		pager.loadMore();
+		await flush();
+		expect(pager.getSnapshot().expanded).toBe(true);
+		expect(count(pager)).toBe(9);
+		pager.collapse();
+		expect(pager.getSnapshot().expanded).toBe(false);
+		expect(count(pager)).toBe(6);
+		expect(pager.getSnapshot().preview?.relations?.offset).toBe(0);
+	});
+
+	it("重复 expand 不重复发布；换目标后回到收起态", async () => {
+		const { pager } = setup();
+		await flush();
+		pager.expand();
+		const expanded = pager.getSnapshot();
+		pager.expand();
+		expect(pager.getSnapshot()).toBe(expanded);
+		pager.setTarget(target("other"));
+		expect(pager.getSnapshot().expanded).toBe(false);
+	});
+
 	it("相同语义 target 不重置展开，也不重新请求", async () => {
 		const { pager, fetch } = setup();
 		await flush();

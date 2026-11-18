@@ -381,6 +381,17 @@ export const en: Messages = {
 		copyFailed: "Could not copy. Select the text and copy it manually.",
 		loading: "Reading the first question…",
 		firstQuestion: "First question (current branch, first line)",
+		/** Compact label at the left of the first-question pill (legacy key kept for other callers) */
+		firstQuestionShort: "First question",
+		/** Prefix of the collapsed "Latest <Agent> <task>" direct row */
+		latest: "Latest",
+		/** Collapsed trigger to expand all roles; {count} = total sub-sessions */
+		all: "All {count}",
+		/** Same trigger after expanding */
+		collapse: "Collapse",
+		/** Accessible hint for the expand/collapse trigger (the glyph is decorative) */
+		expandAllHint: "Expand all sub-sessions ({count} total)",
+		collapseAllHint: "Collapse sub-session list",
 		model: "Model",
 		directory: "Directory",
 		created: "Created",

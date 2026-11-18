@@ -47,6 +47,31 @@ describe("悬停关系分页纯逻辑", () => {
 		expect(mergeSessionHoverPage(first, page(6, 3, 9, "r1"), "parent-B", 6)).toBeNull();
 	});
 
+	it("roleCounts 是首屏全量统计：追加后页保留原聚合，不覆盖", () => {
+		const first = page(0, 6, 9, "r1");
+		if (!first.relations) throw new Error("fixture missing relations");
+		const withRoles: SessionHoverPreviewResult = {
+			...first,
+			relations: {
+				...first.relations,
+				roleCounts: [
+					{ label: "Fixer", count: 8, status: "done" },
+					{ label: "Oracle", count: 1, status: "running" },
+				],
+			},
+		};
+		const merged = mergeSessionHoverPage(null, withRoles, "source", 0);
+		expect(merged?.children).toHaveLength(6);
+		const next = mergeSessionHoverPage(merged, page(6, 3, 9, "r1"), "source", 6);
+		expect(next?.first.relations?.roleCounts).toEqual([
+			{ label: "Fixer", count: 8, status: "done" },
+			{ label: "Oracle", count: 1, status: "running" },
+		]);
+		// 收起态只切可见 children，不重算全量聚合
+		expect(visibleSessionHoverChildren(next, false).children).toHaveLength(6);
+		expect(visibleSessionHoverChildren(next, true).children).toHaveLength(9);
+	});
+
 	it("legacy 首屏可見，但沒有 revision 的舊頁不能合併新後頁", () => {
 		const legacy = mergeSessionHoverPage(null, page(0, 6, 9), "source", 0);
 		expect(legacy?.children).toHaveLength(6);

@@ -89,6 +89,8 @@ export function createSessionHoverPager(cache: Cache) {
 	let sourceKey = "";
 	let requestedKey = "";
 	let offset = 0;
+	// 展开是独立于 offset 的用户意图：点「全部 N」即使没有 hidden 也要展开当前累计页。
+	let expanded = false;
 	let pages: SessionHoverPages | null = null;
 	let view = EMPTY;
 	let lastSnapshot: SessionHoverPreviewSnapshot | null = null;
@@ -108,7 +110,6 @@ export function createSessionHoverPager(cache: Cache) {
 	}
 	function display(loadingMore = false, moreError = false): PageView {
 		if (!pages) return EMPTY;
-		const expanded = offset > 0;
 		const visible = visibleSessionHoverChildren(pages, expanded);
 		return {
 			preview: pages.first.relations
@@ -130,6 +131,7 @@ export function createSessionHoverPager(cache: Cache) {
 	function resetToFirst() {
 		if (!base) return;
 		offset = 0;
+		expanded = false;
 		pages = null;
 		preserveFirstPending = false;
 		lastSnapshot = null;
@@ -142,6 +144,7 @@ export function createSessionHoverPager(cache: Cache) {
 		sourceKey = "";
 		requestedKey = "";
 		offset = 0;
+		expanded = false;
 		pages = null;
 		lastSnapshot = null;
 		preserveFirstPending = false;
@@ -163,7 +166,8 @@ export function createSessionHoverPager(cache: Cache) {
 				return;
 			}
 			if (offset === 0 && !preserveFirstPending) pages = null;
-			publish(offset > 0 ? display(true) : preserveFirstPending ? display() : EMPTY);
+			// 待首屏时仍保留用户已表达的展开意图，页到了直接按展开态渲染。
+			publish(offset > 0 ? display(true) : preserveFirstPending ? display() : { ...EMPTY, expanded });
 			return;
 		}
 		preserveFirstPending = false;
@@ -203,6 +207,7 @@ export function createSessionHoverPager(cache: Cache) {
 			base = first;
 			sourceKey = key;
 			offset = 0;
+			expanded = false;
 			pages = null;
 			preserveFirstPending = false;
 			lastSnapshot = null;
@@ -215,14 +220,27 @@ export function createSessionHoverPager(cache: Cache) {
 				publish(display(false, true));
 				return;
 			}
+			expanded = true;
 			offset = pages.children.length;
 			preserveFirstPending = false;
 			lastSnapshot = null;
 			if (view.moreError) cache.invalidate(base.sessionId, false);
 			request();
 		},
+		/** 原地展开：不要求已有 hidden，保留当前累计 children，只是把可见集合从首页切成全部累计。 */
+		expand() {
+			if (!base || expanded) return;
+			expanded = true;
+			publish(pages ? display(view.loadingMore, view.moreError) : { ...EMPTY, expanded });
+		},
 		collapse() {
-			if (!base || !pages) return;
+			if (!base) return;
+			expanded = false;
+			if (!pages) {
+				// 首屏还没到就收起：只回到收起态，不动在途请求。
+				publish({ ...EMPTY, expanded });
+				return;
+			}
 			offset = 0;
 			pages = mergeSessionHoverPage(null, pages.first, sourceKey, 0);
 			preserveFirstPending = true;
@@ -240,5 +258,10 @@ export function useSessionHoverPages(target: SessionHoverPreviewTarget) {
 	useLayoutEffect(() => {
 		pager.setTarget(target);
 	}, [pager, target]);
-	return { ...view, loadMore: pager.loadMore, collapse: pager.collapse };
+	return {
+		...view,
+		loadMore: pager.loadMore,
+		expand: pager.expand,
+		collapse: pager.collapse,
+	};
 }

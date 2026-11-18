@@ -88,33 +88,38 @@ app.whenReady().then(async()=>{
   await wait("!!document.querySelector('#row button')");
   await new Promise(r=>setTimeout(r,500));
   await js("document.querySelector('#after').focus();document.querySelector('#row button').focus()");
-  await wait("!!document.querySelector('[data-session-hover-card] li button')");
-  assert(await js("document.querySelectorAll('[data-session-hover-card] li').length===6 && document.body.textContent.includes('还有 3')"),'six rows and hidden count');
+  await wait("!!document.querySelector('[data-session-hover-card] button[aria-expanded]') && !!document.querySelector('[data-session-hover-card] section ul li')");
+  assert(await js("document.querySelector('[data-session-hover-card] section ul li') && document.body.textContent.includes('全部 9')"),'collapsed: role chip + all-N toggle');
+  assert(await js("!![...document.querySelectorAll('[data-session-hover-card] button')].find(b=>(b.getAttribute('aria-label')||'').startsWith('打开子会话'))"),'collapsed: latest run direct row');
   // 不等待 TTL、不关闭卡片：父变化使已缓存子关系失效，负结果也能恢复。
   await js('window.updateParent(false)');
-  await wait("document.querySelectorAll('[data-session-hover-card] li').length===6 && ![...document.querySelectorAll('[data-session-hover-card] button')].some(b=>(b.getAttribute('aria-label')||'').startsWith('返回父会话'))");
+  await wait("!!document.querySelector('[data-session-hover-card]') && ![...document.querySelectorAll('[data-session-hover-card] button')].some(b=>(b.getAttribute('aria-label')||'').startsWith('返回父会话'))");
   assert(true,'parent invalidation removes cached child parent entry without waiting for TTL');
   await js('window.updateParent(true)');
   await wait("[...document.querySelectorAll('[data-session-hover-card] button')].some(b=>(b.getAttribute('aria-label')||'').startsWith('返回父会话'))");
   assert(true,'negative parent dependency restores the entry on a later parent change');
-  // 显示更多 → 9 行 → 收起 → 6 行；键盘 Enter 操作，焦点在卡片内合理归还、不关卡。
+  // 全部 9 → 6 行 → 显示更多 → 9 行 → 收起 → 收起态；键盘 Enter 操作，焦点在卡片内合理归还。
+  await js("[...document.querySelectorAll('[data-session-hover-card] button')].find(b=>b.textContent.includes('全部 9')).focus()");
+  await key('Enter');
+  await wait("document.querySelectorAll('[data-session-hover-card] ul[id$=children-list] > li').length===6");
+  assert(await js("[...document.querySelectorAll('[data-session-hover-card] button')].some(b=>b.textContent.includes('显示更多'))"),'expand keeps pagination entry');
   await js("[...document.querySelectorAll('[data-session-hover-card] button')].find(b=>b.textContent.includes('显示更多')).focus()");
   await key('Enter');
-  await wait("document.querySelectorAll('[data-session-hover-card] li').length===9");
+  await wait("document.querySelectorAll('[data-session-hover-card] ul[id$=children-list] > li').length===9");
   assert(await js("window.requests.some(r=>r.childrenOffset===6)"),'show more requests page at offset 6');
-  assert(await js("document.activeElement?.textContent==='收起子会话列表' && !!document.querySelector('[data-session-hover-card]')"),'focus moves to collapse button after last page, card stays open');
+  assert(await js("document.activeElement?.textContent?.includes('收起') && !!document.querySelector('[data-session-hover-card]')"),'focus moves to collapse button after last page, card stays open');
   await key('Enter');
-  await wait("document.querySelectorAll('[data-session-hover-card] li').length===6");
-  assert(await js("document.activeElement?.textContent?.includes('显示更多')"),'focus returns to show-more button after collapse');
+  await wait("!document.querySelector('[data-session-hover-card] ul[id$=children-list]')");
+  assert(await js("document.activeElement?.textContent?.includes('全部')"),'focus returns to expand toggle after collapse');
   await key('Escape');
   await wait("!document.querySelector('[data-session-hover-card]')");
   await js("document.querySelector('#after').focus();document.querySelector('#row button').focus()");
   await wait("!!document.querySelector('[data-session-hover-card]')");
-  assert(await js("(()=>{const d=document.querySelector('[data-session-hover-card] .bg-err');return !!d && !['transparent','rgba(0, 0, 0, 0)'].includes(getComputedStyle(d).backgroundColor)})()"),'error dot has a real theme color');
+  assert(await js("(()=>{const d=document.querySelector('[data-session-hover-card] .bg-accent')||document.querySelector('[data-session-hover-card] .bg-err');return !!d && !['transparent','rgba(0, 0, 0, 0)'].includes(getComputedStyle(d).backgroundColor)})()"),'status dot has a real theme color');
   assert(await js("document.body.textContent.includes('已卸载父会话的历史标题')"),'parent title from history');
   assert(await js("!document.body.innerHTML.includes('secret-child') && !document.body.innerHTML.includes('secret-parent')"),'no navigation paths in DOM');
-  assert(await js("(()=>{const b=document.querySelector('[data-session-hover-card] li button');return document.getElementById(b.getAttribute('aria-describedby')).textContent==='运行中'})()"),'accessible status description');
-  assert(await js("(()=>{const p=document.querySelector('[data-session-hover-card] .line-clamp-2');const s=getComputedStyle(p);return s.webkitLineClamp==='2' && s.display!=='block'})()"),'built CSS two-line clamp');
+  assert(await js("(()=>{const b=[...document.querySelectorAll('[data-session-hover-card] button')].find(x=>(x.getAttribute('aria-label')||'').startsWith('打开子会话'));return [...b.querySelectorAll('.sr-only')].some(n=>n.textContent==='运行中')})()"),'accessible status description');
+  assert(await js("(()=>{const b=[...document.querySelectorAll('[data-session-hover-card] button')].find(x=>(x.getAttribute('aria-label')||'').startsWith('打开子会话'));const p=b&&b.querySelector('span.truncate');const s=p&&getComputedStyle(p);return !!s&&s.whiteSpace==='nowrap'&&s.textOverflow==='ellipsis'})()"),'single-line truncation in built CSS');
   await wait("(()=>{const e=document.querySelector('[data-session-hover-card]');if(!e||getComputedStyle(e).visibility==='hidden')return false;const r=e.getBoundingClientRect();return r.x>=0&&r.y>=0&&r.right<=innerWidth&&r.bottom<=innerHeight})()");
   assert(await js("(()=>{const r=document.querySelector('[data-session-hover-card]').getBoundingClientRect();return r.x>=0&&r.y>=0&&r.right<=innerWidth&&r.bottom<=innerHeight})()"),'600px viewport placement');
   await key('Tab');
@@ -123,7 +128,7 @@ app.whenReady().then(async()=>{
   assert(await js("document.activeElement.getAttribute('aria-label')==='复制完整标题'"),'Tab reaches first action');
   await key('Tab',['shift']);
   assert(await js("document.activeElement===document.querySelector('#row button')"),'Shift+Tab returns anchor');
-  await js("document.querySelector('[data-session-hover-card] li button').focus()");
+  await js("[...document.querySelectorAll('[data-session-hover-card] button')].find(b=>(b.getAttribute('aria-label')||'').startsWith('打开子会话')).focus()");
   await key('Enter');
   await wait('window.navigations.length===1');
   assert(await js("window.navigations[0].parent.sessionId==='A'"),'Enter navigates with hovered parent');

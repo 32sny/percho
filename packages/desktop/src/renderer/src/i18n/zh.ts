@@ -369,6 +369,17 @@ export const zh = {
 		copyFailed: "复制失败，请选中文字后复制。",
 		loading: "正在读取首条提问…",
 		firstQuestion: "首条提问（当前分支首行）",
+		/** 悬停卡首问胶囊左侧的极简标签（旧 key 保留给其他调用） */
+		firstQuestionShort: "首问",
+		/** 收起态「最新 <Agent> <摘要>」直达行的前缀 */
+		latest: "最新",
+		/** 收起态展开全量角色的触发钮；{count} = 全量子会话数 */
+		all: "全部 {count}",
+		/** 展开后同一触发钮的收起文案 */
+		collapse: "收起",
+		/** 底部展开/收起触发钮的无障碍补充（视觉上已带 ▾/▴） */
+		expandAllHint: "展开全部子会话（共 {count} 个）",
+		collapseAllHint: "收起子会话列表",
 		model: "模型",
 		directory: "目录",
 		created: "创建",

@@ -65,6 +65,17 @@
 - 会话芯片只留三项：打开所在会话（`SessionChatIcon`）/ 查看转录文件（`FileTextIcon`）/ 复制路径（`CopyIcon`）——会话不是本地文件，不给「在访达中显示」（只会指向 Temp 目录）。
 - 原文不变：复制与撤回仍用 `message.text`，芯片只是展示层转译。
 
+## 会话悬停卡（SESSION-HOVER-01）
+
+- 浮层无边框、无关闭 `×`：`rounded-xl bg-surface p-3.5 shadow-pop`，整卡不挂固定滚动条；Esc / 移开仍由 Provider 关闭，卡片内只留复制幽灵钮（`Tooltip` + `align="end"`，不用原生 `title`）。
+- 标题完整不截断（`text-ui-13 font-medium leading-[1.48]`）；下一行单行元信息 `text-ui-11 font-mono text-ink-faint`：状态 glyph + 文案 · 模型尾段 · 目录。模型只显示 `modelId`，目录把主目录折叠成 `~` 并统一 `/`，完整路径不写进 title/aria。
+- 首问是 `rounded-lg bg-hover` 胶囊（原型 chip-bg = `#f4f4f5`，项目没有 `surface-2` token，不要用 `bg-surface-2`）：左侧 11px 固定标签，右侧 `text-ui-115 text-ink-dim` 单行截断；与已保存标题相同或 `empty` 时不重复渲染。
+- 关系区默认收起：`.fade-rule` → 全量角色胶囊（`size-1.5` glyph + `Agent ×N`，胶囊同用 `bg-hover`）→ 右侧「全部 N ▾」→ 最新 1 条直达行。角色计数由后端在分页 slice 之前对全量有效子会话聚合，前端不重算 `hidden` / `total`。
+- 点「全部 N」原地展开：`grid-cols-[64px_1fr_14px]` 的 24px 单行三列（状态 / Agent / 摘要截断 / ↗），滚动区 `max-h-36 overflow-y-auto` + `.edge-fade` + `useEdgeFade`；「显示更多 (N)」继续分页，「收起」回默认态，文案与 `aria-expanded` 同步。
+- 底部时间栏 `text-ui-11 font-mono text-ink-faint`：左创建、右最后活动；无有效时间不渲染该行、不伪造。
+- 承接定稿原型的固定尺寸只有 `leading-[1.48]`、`grid-cols-[64px_1fr_14px]` 与列表行 7px 状态点（`size-1.75`），元信息行状态点是 6px 空心环（`size-1.5 border-[1.25px] border-border-strong`）；未新增色值或字号档。
+- 实机像素验收：`node scripts/verify-session-hover-pixels.mjs`（真实 Electron + 构建 CSS，与定稿原型并排截图 + 计算样式对比，产物在 `.local/design/session-hover/verify/`）。
+
 ## 消息与图片的特殊边界
 
 - UI 历史来自完整分支，而非压缩后的模型上下文，见 [架构](architecture.md)。

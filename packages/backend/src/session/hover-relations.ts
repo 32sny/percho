@@ -9,6 +9,7 @@ import {
 	type SessionHoverRelationChild,
 	type SessionHoverRelationParent,
 	type SessionHoverRelations,
+	type SessionHoverRoleCount,
 } from "@percho/shared";
 import {
 	checkMemoryBudget,
@@ -94,6 +95,24 @@ function mergeLiveRelations(
 		});
 	}
 	return [...streaming.values()].reverse().concat([...byPath.values()].reverse());
+}
+
+/**
+ * 全量角色聚合（必须在分页 slice 之前做完）：大小写不敏感去重，label 保留首次出现的展示形式，
+ * status 取该角色最新一项 —— `valid` 的顺序就是「最新在前」（合并后的 live/历史顺序）。
+ */
+function aggregateRoleCounts(valid: readonly SessionHoverRelationChild[]): SessionHoverRoleCount[] {
+	const byRole = new Map<string, SessionHoverRoleCount>();
+	for (const child of valid) {
+		if (typeof child.agent !== "string") continue;
+		const label = child.agent;
+		const key = label.toLowerCase();
+		if (!key.trim()) continue;
+		const existing = byRole.get(key);
+		if (existing) existing.count += 1;
+		else byRole.set(key, { label, count: 1, status: child.status });
+	}
+	return [...byRole.values()];
 }
 
 export interface HoverParentResolution {
@@ -307,9 +326,11 @@ export async function projectHoverRelations(
 		);
 		hash.update("\n");
 	}
+	const roleCounts = aggregateRoleCounts(valid);
 	const page = valid.slice(offset, offset + SESSION_HOVER_PAGE_SIZE);
 	return {
 		children: page,
+		roleCounts,
 		hidden: Math.max(0, valid.length - offset - page.length),
 		offset,
 		total: valid.length,

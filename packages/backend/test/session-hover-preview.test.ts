@@ -30,6 +30,21 @@ const user = (id: string, parentId: string | null, content: unknown) => ({
 	timestamp: "2026-01-01T00:00:00Z",
 	message: { role: "user", content, timestamp: 1 },
 });
+const modelChange = (id: string, parentId: string | null, provider: unknown, modelId: unknown) => ({
+	type: "model_change",
+	id,
+	parentId,
+	timestamp: "2026-01-01T00:00:00Z",
+	provider,
+	modelId,
+});
+const assistant = (id: string, parentId: string | null, provider: unknown, model: unknown) => ({
+	type: "message",
+	id,
+	parentId,
+	timestamp: "2026-01-01T00:00:00Z",
+	message: { role: "assistant", content: [], provider, model },
+});
 const ok = (text: string) => ({
 	status: "ok",
 	sessionId: ID,
@@ -138,6 +153,60 @@ describe("PiBackend.getSessionHoverPreview 只读窄预览", () => {
 			user("now", "blank", [{ type: "text", text: "当前分支\n后续" }]),
 		]);
 		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(ok("当前分支"));
+	});
+
+	it("模型取当前分支最后一次有效 model_change（provider/modelId）", async () => {
+		history([
+			user("u", null, "提问"),
+			modelChange("m1", "u", "anthropic", "claude-opus-4-6"),
+			modelChange("m2", "m1", "openai", "gpt-5.1"),
+			// 非空字符串之外一律跳过，不能把用户内容/畸形字段当模型
+			modelChange("bad", "m2", "", 42),
+			user("later", "bad", "后续"),
+		]);
+		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual({
+			...ok("提问"),
+			model: "openai/gpt-5.1",
+		});
+	});
+
+	it("没有 model_change 时回退到最后一条 assistant 的 provider/model", async () => {
+		history([
+			user("u", null, "提问"),
+			assistant("a1", "u", "anthropic", "claude-sonnet-4-5"),
+			assistant("a2", "a1", "openai", "gpt-5"),
+		]);
+		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual({ ...ok("提问"), model: "openai/gpt-5" });
+	});
+
+	it("用户消息里的 provider/model 字段不会冒充模型", async () => {
+		history([
+			{
+				...user("u", null, "提问"),
+				message: { role: "user", content: "提问", provider: "evil", model: "FAKE-MODEL" },
+			},
+		]);
+		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual(ok("提问"));
+	});
+
+	it("empty 与不可安全投影的结果也保留模型，不因首问降级丢字段", async () => {
+		history([
+			user("u", null, [{ type: "image", data: "AAAA" }]),
+			modelChange("m", "u", "anthropic", "claude-opus-4-6"),
+		]);
+		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual({
+			status: "empty",
+			sessionId: ID,
+			model: "anthropic/claude-opus-4-6",
+		});
+		history([
+			user("u2", null, '<skill name="p" location="/secret">\n机密正文'),
+			modelChange("m2", "u2", "openai", "gpt-5"),
+		]);
+		expect(await backend.getSessionHoverPreview(ID, CWD)).toEqual({
+			...unavailable("unsafe_projection"),
+			model: "openai/gpt-5",
+		});
 	});
 
 	it("Skill 只返回安全命令，不返回正文/路径/sourceText", async () => {

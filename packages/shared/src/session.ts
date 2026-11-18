@@ -174,8 +174,17 @@ export interface SessionHoverRelationParent {
 	name?: string;
 }
 
+/** 全量角色聚合（分页 slice 之前统计）：label 用首次出现的展示形式，status 取该角色最新一项。 */
+export interface SessionHoverRoleCount {
+	label: string;
+	count: number;
+	status: SessionHoverRelationChild["status"];
+}
+
 export interface SessionHoverRelations {
 	children: SessionHoverRelationChild[];
+	/** 全量 valid 的角色聚合，与当前页 children 无关；旧后端可能不返回。 */
+	roleCounts?: SessionHoverRoleCount[];
 	hidden: number;
 	parent?: SessionHoverRelationParent;
 	offset?: number;
@@ -192,6 +201,8 @@ export interface SessionHoverPreviewRequest {
 
 interface SessionHoverPreviewBase {
 	sessionId: string;
+	/** 当前分支最后一次有效模型（`provider/modelId`）；未加载历史会话也能显示。 */
+	model?: string;
 	relations?: SessionHoverRelations;
 	/** 仅用于缓存失效：含已知父候选，即使关系验证后为空；不是导航授权。 */
 	dependencySessionIds?: string[];

@@ -10,8 +10,39 @@ import {
 	type Reason,
 	readFileHoverHistory,
 	readLoadedHoverHistory,
+	type TreeEntry,
 } from "./hover-history";
 import { projectHoverRelations, resolveHoverParent } from "./hover-relations";
+
+/** 只接受非空字符串：模型字段不能把用户内容/未校验对象当成模型名。 */
+function nonEmpty(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const text = value.trim();
+	return text ? text : undefined;
+}
+
+/**
+ * 当前分支最后一次有效模型。真实会话格式是 `model_change` entry（provider + modelId）；
+ * 旧会话没有该 entry 时，兼容回退到最后一条 assistant 消息的 provider + model。
+ */
+function branchModel(branch: readonly TreeEntry[]): string | undefined {
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (entry?.type !== "model_change") continue;
+		const provider = nonEmpty(entry.provider);
+		const modelId = nonEmpty(entry.modelId);
+		if (provider && modelId) return `${provider}/${modelId}`;
+	}
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (entry?.type !== "message" || !object(entry.message)) continue;
+		if (entry.message.role !== "assistant") continue;
+		const provider = nonEmpty(entry.message.provider);
+		const model = nonEmpty(entry.message.model);
+		if (provider && model) return `${provider}/${model}`;
+	}
+	return undefined;
+}
 
 function firstQuestion(history: HoverHistorySnapshot): SessionHoverPreviewResult {
 	const sessionId = history.sessionId;
@@ -43,8 +74,10 @@ async function queryPreview(
 		const parent = await resolveHoverParent(history, getLoadedSession);
 		dependencySessionIds = parent.dependencySessionIds;
 		const relations = await projectHoverRelations(history, liveRuns, offset, parent.parent);
+		const model = branchModel(history.branch);
 		return {
 			...firstQuestion(history),
+			...(model ? { model } : {}),
 			...(relations ? { relations } : {}),
 			...(dependencySessionIds.length ? { dependencySessionIds } : {}),
 		};
