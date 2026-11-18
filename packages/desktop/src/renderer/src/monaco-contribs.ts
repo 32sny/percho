@@ -10,11 +10,17 @@
  * getWorker 会自动让位（源码 preloadMonacoWorkers 顶部 guard），本模块在 main.tsx 早期
  * 引入，先于懒加载的 stream-monaco 执行。
  *
- * 只注册 editor + typescript 两个 worker：只读代码块的语法高亮由 shiki 承担（主线程），
- * worker 只服务 language service（补全/诊断），只读展示用不到；json/css/html 等语言
- * label 落到 editor worker 兆底即可，避免打包 5 个 worker 膨胀产物。
+ * 注册 editor + 全部语言 worker（ts/json/css/html）：worker 承载的是 language service
+ *（校验/诊断/颜色/折叠/符号等请求），editor worker 只实现通用文本模型协议，
+ * 不含这些请求的 handler。若 json/css/html 的 label 落到 editor worker 兜底，
+ * 主线程语言服务请求会在 worker 内报 Missing requestHandler: doValidation /
+ * findDocumentColors / getFoldingRanges / findDocumentSymbols，功能整体失效。
+ * 因此按 label 路由到对应语言 worker。
  */
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
+import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
+import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 
 declare global {
@@ -28,6 +34,9 @@ declare global {
 
 self.MonacoEnvironment = {
 	getWorker(_workerId: string, label: string) {
+		if (label === "json") return new jsonWorker();
+		if (label === "css" || label === "scss" || label === "less") return new cssWorker();
+		if (label === "html" || label === "handlebars" || label === "razor") return new htmlWorker();
 		if (label === "typescript" || label === "javascript") return new tsWorker();
 		return new editorWorker();
 	},
