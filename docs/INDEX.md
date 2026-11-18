@@ -10,6 +10,7 @@
 | 界面风格、字号、浮层、共享组件 | [UI 规范](ui.md) |
 | CDP、截图、交互验收、测试实例管理 | [UI 调试](ui-debugging.md) |
 | SDK 行为、升级、资源释放、上下文 | [SDK 集成](sdk.md) |
+| SDK 升级迁移与验收（阶段门、分片、切换判定） | [SDK 升级手册](SDK-UPGRADE-PLAYBOOK.md) |
 | pi 扩展在 GUI 中实际支持哪些交互 | [扩展 UI](extension-ui.md) |
 | 构建、打包、验包 | [构建发布](build-release.md) |
 | 发版正文版式与发布顺序 | [Release Notes 版式](release-notes.md) |
@@ -21,7 +22,14 @@
 以下路径相对各包的 `src/`；renderer 路径相对 `packages/desktop/src/renderer/src/`。先从入口跟调用链，不在此维护完整导出清单。
 
 | 想改什么 | 从哪里开始 |
-|---|---|
+| --- | --- |
+| 后续功能取舍与阶段顺序 | `docs/PLAN-percho-feature-catalog.md` 是唯一阶段顺序真源；`docs/PLAN-percho-follow-up-roadmap.md` 只提供契约与实施细节 |
+| Pi SDK 升级与自研补丁重移植 | 方案 `docs/PLAN-sdk-1.5.1-upgrade.md`；补丁 `patches/`；适配 `backend/pi-backend.ts`、`backend/session/message-control.ts` |
+| 会话左右分屏 | 方案 `docs/PLAN-session-split-panes.md`；入口 renderer `App.tsx`、`components/session/` |
+| 按轮撤销文件改动 | 方案 `docs/PLAN-turn-checkpoint-undo.md`；入口 `components/diff/` |
+| ⌘K 全局搜索 | 方案 `docs/PLAN-global-search.md` |
+| 项目文件树与只读查看 | 方案 `docs/PLAN-project-file-tree-readonly.md`；后端 `project/files.ts` |
+| 文档治理与多 Agent 协作基建 | 方案 `docs/PLAN-doc-governance-dsh-adoption.md`（纯文档与只读门禁，不改产品代码） |
 | 跨进程 API、事件和共享类型 | shared `ipc-channels.ts`、`ipc.ts`；desktop `main/ipc/`、`preload/index.ts` |
 | 会话创建、打开、关闭、分叉、撤回、重试 | backend `pi-backend.ts` → `session/`；renderer `stores/sessions.ts` |
 | 导航、并发装载、历史就绪 | renderer `stores/session-navigation.ts`、`session-loading.ts`、`session-history.ts` |
@@ -33,7 +41,7 @@
 | 消息气泡、Markdown、Mermaid、工具卡 | renderer `components/chat/`；流式合流 `stores/event-conflator.ts` |
 | 输入、发送、停止、排队、斜杠与 @ 补全 | renderer `components/composer/`、`stores/drafts.ts`；backend `slash-commands.ts` |
 | 图片附件与历史图资源 | renderer `lib/image-attachment.ts`、`lib/image-fit.ts`、`components/chat/history-image/`、`ImagePreview.tsx` |
-| 错误卡、分类、手动重试 | shared `errors.ts`、`transcript/llm-errors.ts`；renderer `stores/session-retry.ts`、`components/chat/ErrorNote.tsx` |
+| 错误卡、分类、手动重试 | shared `errors.ts`、`transcript/llm-errors.ts`、`transcript/control-errors.ts`；renderer `stores/session-retry.ts`、`components/chat/ErrorNote.tsx` |
 | 轮次计时、文件变更、diff 侧栏 | shared `transcript/turn-*`；renderer `components/chat/TurnDiffChip.tsx`、`components/diff/` |
 | 工具权限、项目边界、信任 | backend `permissions/`、`project/trust*.ts`、`project/workspace-store.ts` |
 | provider、登录、模型可见性、子代理偏好 | backend `settings/`；shared `model-visibility.ts`；renderer `stores/settings.ts`、`components/settings/providers/` |

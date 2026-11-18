@@ -2,7 +2,7 @@
 类型: 流程规范
 状态: 有效
 创建: 2026-10-25
-更新: 2026-10-25
+更新: 2026-11-15
 适用: Percho GitHub Release 正文版式、生成方式与发布顺序
 ---
 
@@ -72,7 +72,7 @@ node scripts/release-notes.mjs --from v0.7.2      # 指定 compare 起点
 
 1. 本地准备：版本号三处同步（根 `package.json`、`packages/desktop/package.json`、`package-lock.json` 只改版本行），commit `🔖 release: vX.Y.Z`。
 2. 合并前本地过一遍：`npm run lint`、`npm run typecheck`、`npm run test`、`npm run build`。保留真实退出码。
-3. 打**注解** tag（与历史一致）：`git tag -a vX.Y.Z -m "<一句话主题>"`。
+3. 打**注解** tag（与历史一致）：`git tag -a vX.Y.Z -m "<一句话主题>"`。tag 指向版本字段正确、CI 已验证的最终完整提交，不要求该提交标题必须为 `release:`。若版本提交后又有必要修正，核对差异与新 SHA 的检查后再标记；已发布 tag 不为美化标题而移动。
 4. push `main`，再 push tag。推送 tag 触发 `release.yml`：三平台构建 → 自动用默认正文建 Release 并上传资产。
 5. **等 workflow 完成后再编辑正文**：到 Release 页面点 Edit，用第四节生成的骨架替换。
    **不要提前手动「Draft a new release」**：`release.yml` 的 publish 步骤是 `gh release create`，同名 Release 已存在会失败。
@@ -81,8 +81,10 @@ node scripts/release-notes.mjs --from v0.7.2      # 指定 compare 起点
 
 - 资产齐全：15 个（三平台安装包 + zip/dmg + `.blockmap` + `latest*.yml` 更新元数据）。
 - 自动更新链路：`latest.yml` / `latest-mac.yml` / `latest-linux.yml` 里的版本字段等于本次版本号。
-- 正文：只有一条 Full Changelog、有 Downloads 表、无误报的"验证"项。
+- 正文：只有一条 Full Changelog、有 Downloads 表、无误报的"验证"项。修改后从 GitHub 重新读取正文，与预期文本逐字比较；本地草稿保存不等于远端已更新。
 - 发现正文写错直接 Edit 修改，不回改历史版本正文。
+
+跨项目 PR、required checks、原生平台 CI、慢任务诊断与 tag 读回流程，按需读取中枢 `E:/输出项目库/Yu-AI工程/2-资产/checklist/GitHub三平台CI与PR发布清单.md`；本项目具体误判与纠正证据保存在 [Memory](Memory.md)。
 
 ## 七、历史版式差异（仅作参考，不作为模板）
 
