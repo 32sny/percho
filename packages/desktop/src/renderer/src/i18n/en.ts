@@ -596,10 +596,12 @@ export const en: Messages = {
 				"{modelId} reports several different context windows; not filled in, please confirm manually",
 			discoverAdopt: "Use API values",
 			thinkingLevels: "Levels",
-			thinkingLevelsPlaceholder: "low, high, max",
-			thinkingLevelsHint:
-				"Comma separated: minimal / low / medium / high / xhigh / max; leave empty to follow the default (minimal..high)",
-			allowThinkingOff: "Can disable",
+			thinkingLevelsHint: "Pick the thinking levels to enable; pick none to follow the default (minimal..high)",
+			thinkingLevelsEmpty: "none = default",
+			thinkingOff: "off",
+			presetsAbility: "abilities",
+			presetWindow: "window",
+			presetOutput: "output",
 			discoverLimitConflict: "limit conflict",
 			discoverReasons: {
 				invalidUrl: "Unusable base URL: http(s) only, no credentials, query or fragment",

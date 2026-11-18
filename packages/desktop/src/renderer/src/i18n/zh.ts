@@ -578,10 +578,12 @@ export const zh = {
 			discoverLimitAmbiguous: "「{modelId}」的接口给了多个不同的总窗口，未自动填入，请手动确认",
 			discoverAdopt: "采用接口值",
 			thinkingLevels: "档位",
-			thinkingLevelsPlaceholder: "low, high, max",
-			thinkingLevelsHint:
-				"逗号分隔，可填 minimal / low / medium / high / xhigh / max；留空跟随默认（最小~高）",
-			allowThinkingOff: "可关闭",
+			thinkingLevelsHint: "点选要启用的思考档位；一个都不选则跟随默认（最小~高）",
+			thinkingLevelsEmpty: "未选 = 跟随默认",
+			thinkingOff: "关闭",
+			presetsAbility: "能力",
+			presetWindow: "窗口",
+			presetOutput: "输出",
 			discoverLimitConflict: "上限冲突",
 			discoverReasons: {
 				invalidUrl: "基址不可用：只支持 http(s)，且不能带账号、查询串或锚点",

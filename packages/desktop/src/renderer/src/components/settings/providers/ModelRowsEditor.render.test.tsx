@@ -41,16 +41,25 @@ describe("ModelRowsEditor 渲染", () => {
 	it("勾了思考才出现档位输入行", () => {
 		const thinking = render([{ ...EMPTY_MODEL_ROW, id: "m-1", reasoning: true }]);
 		expect(thinking).toContain("档位");
-		expect(thinking).toContain("可关闭");
-		expect(thinking).toContain("low, high, max"); // placeholder
+		expect(thinking).toContain("关闭"); // off 是 chip，不再是勾选框
+		expect(thinking).toContain("xhigh"); // 档位 chip
+		expect(thinking).toContain("未选 = 跟随默认");
 
 		const plain = render([{ ...EMPTY_MODEL_ROW, id: "m-1", reasoning: false }]);
-		expect(plain).not.toContain("可关闭");
+		expect(plain).not.toContain("未选 = 跟随默认");
 	});
 
 	it("操作行有自动获取，取回后给出去向提示", () => {
 		const html = render([{ ...EMPTY_MODEL_ROW, id: "m-1" }], 3);
 		expect(html).toContain("自动获取");
 		expect(html).toContain("取到 3 个模型");
+	});
+
+	it("窗口/输出有常用值 chip", () => {
+		const html = render([{ ...EMPTY_MODEL_ROW, id: "m-1" }]);
+		expect(html).toContain("窗口");
+		expect(html).toContain("1M");
+		expect(html).toContain("输出");
+		expect(html).toContain("32k");
 	});
 });
