@@ -1,6 +1,7 @@
 import type { DiscoveredModelSummary } from "@percho/shared";
 import { useT } from "../../../i18n";
-import { CloseIcon } from "../../icons";
+import { InfoIcon, PlusIcon, RefreshIcon, TrashIcon } from "../../icons";
+import { Switch } from "../../ui/Switch";
 import { Tooltip } from "../../ui/Tooltip";
 import { type ModelDiscoveryState, ModelDiscoveryStatus, ModelIdPicker } from "./ModelIdPicker";
 import {
@@ -13,8 +14,12 @@ import {
 	splitPastedModelIds,
 } from "./model-rows";
 
-const inputClass =
-	"w-full rounded-lg border border-border px-2.5 py-1.5 text-ui-12 outline-none focus:border-ink-faint disabled:cursor-not-allowed disabled:text-ink-faint";
+const modelIdInputClass =
+	"h-7 w-full min-w-0 rounded-lg bg-transparent font-mono text-ui-13 font-medium text-ink-2 outline-none transition-colors hover:bg-hover focus:bg-hover";
+const tokenInputClass =
+	"h-7 min-w-0 rounded-lg bg-hover px-2 font-mono text-ui-12 font-medium text-ink-2 outline-none transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-strong";
+const ghostButtonClass =
+	"rounded-lg px-2.5 py-1.5 text-ui-12 text-ink-faint transition-colors hover:bg-hover hover:text-ink-2";
 
 /** 上下文窗口 / 最大输出的常用值：点一下填入，仍可直接手打（1024000 这类非整千值） */
 const WINDOW_PRESETS = ["128k", "256k", "512k", "1M"] as const;
@@ -22,7 +27,87 @@ const OUTPUT_PRESETS = ["4k", "8k", "16k", "32k"] as const;
 /** 可直接选的思考档位（off 用「关闭」单独表达，因为它控制的是能不能关思考） */
 const THINKING_LEVEL_OPTIONS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
-/** 模型行编辑器：一个模型一张卡；ctx/out 留空跟随 SDK 默认（128k/16k），非法值红框且禁止保存 */
+/** 安静的多选 chip：常态仅文字，hover / 选中才出现胶囊底。 */
+function ChoiceChip({
+	active,
+	label,
+	onClick,
+	surfaceActive = false,
+}: {
+	active: boolean;
+	label: string;
+	onClick: () => void;
+	/** 灰色设置带内用 surface 托起选中项，普通卡片上沿用 hover。 */
+	surfaceActive?: boolean;
+}) {
+	return (
+		<button
+			type="button"
+			aria-pressed={active}
+			className={`rounded-full px-1 py-1 font-mono text-ui-11 leading-tight transition-colors ${
+				active
+					? `${surfaceActive ? "bg-surface" : "bg-hover"} font-medium text-ink-2`
+					: "text-ink-faint hover:bg-hover hover:text-ink-2"
+			}`}
+			onClick={onClick}
+		>
+			{label}
+		</button>
+	);
+}
+
+function isPreset(text: string, preset: string) {
+	const value = parseTokenCount(text);
+	return value !== null && value === parseTokenCount(preset);
+}
+
+/** B 版数值字段：标签、可编辑值和快捷值共享一条基线，窄处仅在字段内部换行。 */
+function TokenField({
+	label,
+	tooltip,
+	value,
+	placeholder,
+	presets,
+	onValue,
+}: {
+	label: string;
+	tooltip: string;
+	value: string;
+	placeholder: string;
+	presets: readonly string[];
+	onValue: (value: string) => void;
+}) {
+	const invalid = value.trim() !== "" && parseTokenCount(value) === null;
+	return (
+		<div className="min-w-0">
+			<div className="flex min-w-0 items-center gap-1">
+				<Tooltip label={tooltip} align="start" className="w-8 shrink-0">
+					<span className="text-ui-12 text-ink-dim">{label}</span>
+				</Tooltip>
+				<input
+					className={`${tokenInputClass} w-28 shrink-0 ${invalid ? "text-err" : ""}`}
+					aria-label={tooltip}
+					aria-invalid={invalid}
+					placeholder={placeholder}
+					value={value}
+					onChange={(e) => onValue(e.target.value)}
+				/>
+				<fieldset aria-label={label} className="flex min-w-0 flex-1 flex-wrap items-center gap-0">
+					{presets.map((preset) => (
+						<ChoiceChip
+							key={preset}
+							active={isPreset(value, preset)}
+							label={preset}
+							onClick={() => onValue(preset)}
+						/>
+					))}
+				</fieldset>
+			</div>
+		</div>
+	);
+}
+
+/** 模型行编辑器：一个模型一张白底阴影卡；ctx/out 留空跟随 SDK 默认，非法值禁止保存。 */
 export function ModelRowsEditor({
 	rows,
 	onChange,
@@ -72,207 +157,193 @@ export function ModelRowsEditor({
 		onChange(next);
 	};
 
-	/** 开关型 chip（能力、档位）：选中填实色，未选中只留文字 */
-	const chip = (active: boolean, label: string, onClick: () => void) => (
-		<button
-			type="button"
-			aria-pressed={active}
-			className={`rounded-md px-1.5 py-0.5 text-ui-10 leading-tight transition-colors ${
-				active ? "bg-ink text-surface" : "text-ink-dim hover:bg-hover hover:text-ink"
-			}`}
-			onClick={onClick}
-		>
-			{label}
-		</button>
-	);
-
-	/** 常用值 chip：比开关 chip 弱一档，避免和「能力/档位」抢视线 */
-	const presetChip = (active: boolean, label: string, onClick: () => void) => (
-		<button
-			type="button"
-			aria-pressed={active}
-			className={`rounded-md border px-1.5 py-0.5 text-ui-10 leading-tight transition-colors ${
-				active
-					? "border-ink-faint bg-hover text-ink"
-					: "border-border text-ink-faint hover:border-ink-faint hover:text-ink-dim"
-			}`}
-			onClick={onClick}
-		>
-			{label}
-		</button>
-	);
-
-	const isPreset = (text: string, preset: string) => {
-		const value = parseTokenCount(text);
-		return value !== null && value === parseTokenCount(preset);
-	};
-
-	/** 一个数值字段：标签 + 输入 + 常用值 */
-	const field = (
-		label: string,
-		tooltip: string,
-		value: string,
-		placeholder: string,
-		presets: readonly string[],
-		onValue: (value: string) => void,
-	) => {
-		const invalid = value.trim() !== "" && parseTokenCount(value) === null;
-		return (
-			<div className="min-w-0">
-				<div className="flex items-center gap-1.5">
-					<Tooltip label={tooltip} className="w-8 shrink-0">
-						<span className="text-ui-10 text-ink-faint">{label}</span>
-					</Tooltip>
-					<input
-						className={`${inputClass} ${invalid ? "border-red-400" : ""}`}
-						aria-invalid={invalid}
-						placeholder={placeholder}
-						value={value}
-						onChange={(e) => onValue(e.target.value)}
-					/>
-				</div>
-				<div className="mt-1 flex flex-wrap items-center gap-0.5">
-					{presets.map((preset) => presetChip(isPreset(value, preset), preset, () => onValue(preset)))}
-				</div>
-			</div>
-		);
-	};
-
 	return (
 		<div className="col-span-2">
-			{rows.map((row, i) => {
-				const { levels } = parseThinkingLevels(row.thinkingLevels);
-				const toggleLevel = (level: string) =>
-					setRow(i, {
-						thinkingLevels: (levels.includes(level)
-							? levels.filter((item) => item !== level)
-							: [...levels, level]
-						).join(", "),
-					});
-				return (
-					// 行随增删变化，无稳定 id，用序号做 key（局部编辑器，重排场景不存在）
-					// biome-ignore lint/suspicious/noArrayIndexKey: 行编辑器无稳定标识
-					<div key={i} className="mb-2 rounded-xl border border-border p-3">
-						<div className="flex items-center gap-1.5">
-							<ModelIdPicker
-								className={`${inputClass} min-w-0`}
-								placeholder={t("settings.providers.customModelId")}
-								value={row.id}
-								onValue={(value) => setRow(i, { id: value })}
-								onPaste={onIdPaste(i)}
-								onPick={(model) => onPickModel?.(i, model)}
-								candidates={discovery?.models ?? []}
-								status={discovery?.status ?? "idle"}
-								reason={discovery?.reason}
-							/>
-							<button
-								type="button"
-								aria-label={t("settings.providers.removeModelRow")}
-								className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-faint transition-colors hover:bg-hover hover:text-ink-dim"
-								onClick={() => removeRow(i)}
-							>
-								<CloseIcon size={9} />
-							</button>
-						</div>
-
-						<div className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-2">
-							{field(
-								t("settings.providers.presetWindow"),
-								t("settings.providers.customModelCtx"),
-								row.contextWindow,
-								"128k",
-								WINDOW_PRESETS,
-								(value) => setRow(i, { contextWindow: value }),
-							)}
-							{field(
-								t("settings.providers.presetOutput"),
-								t("settings.providers.customModelOut"),
-								row.maxTokens,
-								"16k",
-								OUTPUT_PRESETS,
-								(value) => setRow(i, { maxTokens: value }),
-							)}
-						</div>
-
-						<div className="mt-2.5 flex items-center gap-1.5">
-							<span className="w-8 shrink-0 text-ui-10 text-ink-faint">
-								{t("settings.providers.presetsAbility")}
-							</span>
-							<div className="flex flex-wrap items-center gap-1">
-								{chip(row.reasoning, t("settings.providers.customModelReasoning"), () =>
-									setRow(i, { reasoning: !row.reasoning }),
+			<div className="@container space-y-1">
+				{rows.map((row, i) => {
+					const { levels } = parseThinkingLevels(row.thinkingLevels);
+					const toggleLevel = (level: string) =>
+						setRow(i, {
+							thinkingLevels: (levels.includes(level)
+								? levels.filter((item) => item !== level)
+								: [...levels, level]
+							).join(", "),
+						});
+					const discovered = discovery?.models.some((model) => model.id === row.id) ?? false;
+					return (
+						// 行随增删变化，无稳定 id，用序号做 key（局部编辑器，重排场景不存在）
+						<article
+							// biome-ignore lint/suspicious/noArrayIndexKey: 行编辑器无稳定标识
+							key={i}
+							aria-label={row.id || t("settings.providers.customModelId")}
+							className="rounded-xl bg-surface px-3 py-2 shadow-soft"
+						>
+							<header className="flex min-w-0 items-center gap-2">
+								<span aria-hidden="true" className="w-7 shrink-0 font-mono text-ui-11 text-ink-faint">
+									{String(i + 1).padStart(2, "0")}
+								</span>
+								<ModelIdPicker
+									className={modelIdInputClass}
+									placeholder={t("settings.providers.customModelId")}
+									value={row.id}
+									onValue={(value) => setRow(i, { id: value })}
+									onPaste={onIdPaste(i)}
+									onPick={(model) => onPickModel?.(i, model)}
+									candidates={discovery?.models ?? []}
+									status={discovery?.status ?? "idle"}
+									reason={discovery?.reason}
+								/>
+								{discovered && (
+									<span className="shrink-0 text-ui-11 text-ink-faint">
+										{t("settings.providers.customModelAutoSource")}
+									</span>
 								)}
-								{chip(row.imageInput, t("settings.providers.customModelImage"), () =>
-									setRow(i, { imageInput: !row.imageInput }),
-								)}
-							</div>
-						</div>
-
-						{row.reasoning && (
-							<div className="mt-2 flex items-center gap-1.5">
-								<Tooltip label={t("settings.providers.thinkingLevelsHint")} className="w-8 shrink-0">
-									<span className="text-ui-10 text-ink-faint">{t("settings.providers.thinkingLevels")}</span>
+								<Tooltip label={t("settings.providers.removeModelRow")} align="end">
+									<button
+										type="button"
+										aria-label={t("settings.providers.removeModelRow")}
+										className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-faint transition-colors hover:bg-hover hover:text-ink-2"
+										onClick={() => removeRow(i)}
+									>
+										<TrashIcon size={13} />
+									</button>
 								</Tooltip>
-								<div className="flex flex-wrap items-center gap-1">
-									{chip(row.allowThinkingOff, t("settings.providers.thinkingOff"), () =>
-										setRow(i, { allowThinkingOff: !row.allowThinkingOff }),
-									)}
-									{THINKING_LEVEL_OPTIONS.map((level) =>
-										chip(levels.includes(level), level, () => toggleLevel(level)),
-									)}
-									{levels.length === 0 && (
-										<span className="ml-1 text-ui-10 text-ink-faint">
-											{t("settings.providers.thinkingLevelsEmpty")}
-										</span>
-									)}
-								</div>
-							</div>
-						)}
-					</div>
-				);
-			})}
+							</header>
 
-			<div className="flex items-center gap-3">
-				<button
-					type="button"
-					className="rounded-md px-1.5 py-1 text-ui-11 text-ink-dim transition-colors hover:bg-hover"
-					onClick={() => onChange([...rows, { ...EMPTY_MODEL_ROW }])}
-				>
-					{t("settings.providers.addModelRow")}
-				</button>
-				{rows.some((row) => row.id.trim()) && (
+							<div className="mt-1 grid grid-cols-1 gap-1.5 @lg:grid-cols-2 @lg:gap-3">
+								<TokenField
+									label={t("settings.providers.presetWindow")}
+									tooltip={t("settings.providers.customModelCtx")}
+									value={row.contextWindow}
+									placeholder="128k"
+									presets={WINDOW_PRESETS}
+									onValue={(value) => setRow(i, { contextWindow: value })}
+								/>
+								<TokenField
+									label={t("settings.providers.presetOutput")}
+									tooltip={t("settings.providers.customModelOut")}
+									value={row.maxTokens}
+									placeholder="16k"
+									presets={OUTPUT_PRESETS}
+									onValue={(value) => setRow(i, { maxTokens: value })}
+								/>
+							</div>
+
+							<div className="fade-rule mt-1" />
+							<div className="mt-1 grid grid-cols-12 items-center gap-x-1.5 gap-y-0 rounded-lg bg-hover px-2 py-1">
+								<div className="col-span-2 text-ui-11 text-ink-faint">
+									{t("settings.providers.presetsAbility")}
+								</div>
+								<div className="col-span-10 flex min-w-0 items-center gap-3">
+									<span className="flex items-center gap-1.5 whitespace-nowrap text-ui-12 text-ink-2">
+										<Switch
+											compact
+											checked={row.reasoning}
+											aria-label={t("settings.providers.customModelReasoning")}
+											onCheckedChange={(reasoning) => setRow(i, { reasoning })}
+										/>
+										{t("settings.providers.customModelReasoning")}
+									</span>
+									<span className="flex items-center gap-1.5 whitespace-nowrap text-ui-12 text-ink-2">
+										<Switch
+											compact
+											checked={row.imageInput}
+											aria-label={t("settings.providers.customModelImage")}
+											onCheckedChange={(imageInput) => setRow(i, { imageInput })}
+										/>
+										{t("settings.providers.customModelImage")}
+									</span>
+								</div>
+
+								{row.reasoning && (
+									<>
+										<div className="col-span-2 text-ui-11 text-ink-faint">
+											{t("settings.providers.thinkingLevels")}
+										</div>
+										<div className="col-span-10 flex min-w-0 items-center justify-between gap-1">
+											<fieldset
+												aria-label={t("settings.providers.thinkingLevels")}
+												className="flex min-w-0 items-center gap-0"
+											>
+												<ChoiceChip
+													surfaceActive
+													active={row.allowThinkingOff}
+													label={t("settings.providers.thinkingOff")}
+													onClick={() => setRow(i, { allowThinkingOff: !row.allowThinkingOff })}
+												/>
+												{THINKING_LEVEL_OPTIONS.map((level) => (
+													<ChoiceChip
+														key={level}
+														surfaceActive
+														active={levels.includes(level)}
+														label={level}
+														onClick={() => toggleLevel(level)}
+													/>
+												))}
+											</fieldset>
+											{levels.length === 0 && (
+												<span className="shrink-0 whitespace-nowrap text-ui-11 text-ink-faint">
+													{t("settings.providers.thinkingLevelsEmpty")}
+												</span>
+											)}
+										</div>
+									</>
+								)}
+							</div>
+						</article>
+					);
+				})}
+			</div>
+
+			<div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-hover px-2 py-1">
+				<div className="flex flex-wrap items-center gap-1">
 					<button
 						type="button"
-						className="rounded-md px-1.5 py-1 text-ui-11 text-ink-dim transition-colors hover:bg-hover"
-						onClick={() => onChange([{ ...EMPTY_MODEL_ROW }])}
+						className={`${ghostButtonClass} inline-flex items-center gap-1.5 font-medium text-ink-2`}
+						onClick={() => onChange([...rows, { ...EMPTY_MODEL_ROW }])}
 					>
-						{t("settings.providers.clearModelRows")}
+						<PlusIcon size={14} />
+						{t("settings.providers.addModelRow")}
 					</button>
-				)}
-				{discovery && (
-					<Tooltip
-						label={
-							canDiscover
-								? t("settings.providers.discoverModels")
-								: t("settings.providers.discoverNotFetched")
-						}
-					>
+					{rows.some((row) => row.id.trim()) && (
 						<button
 							type="button"
-							className="rounded-md px-1.5 py-1 text-ui-11 text-ink-dim transition-colors hover:bg-hover disabled:opacity-40 disabled:hover:bg-transparent"
-							disabled={!canDiscover || discovery.status === "loading"}
-							onClick={onDiscover}
+							className={ghostButtonClass}
+							onClick={() => onChange([{ ...EMPTY_MODEL_ROW }])}
 						>
-							{discovery.status === "loading"
-								? t("settings.providers.discovering")
-								: t("settings.providers.discoverModels")}
+							{t("settings.providers.clearModelRows")}
 						</button>
-					</Tooltip>
+					)}
+					{discovery && (
+						<Tooltip
+							label={
+								canDiscover
+									? t("settings.providers.discoverModels")
+									: t("settings.providers.discoverNotFetched")
+							}
+						>
+							<button
+								type="button"
+								className={`${ghostButtonClass} inline-flex items-center gap-1.5 disabled:opacity-40 disabled:hover:bg-transparent`}
+								disabled={!canDiscover || discovery.status === "loading"}
+								onClick={onDiscover}
+							>
+								<RefreshIcon size={13} />
+								{discovery.status === "loading"
+									? t("settings.providers.discovering")
+									: t("settings.providers.discoverModels")}
+							</button>
+						</Tooltip>
+					)}
+				</div>
+				{discovery && (
+					<div className="min-w-0 text-right">
+						<ModelDiscoveryStatus discovery={discovery} />
+					</div>
 				)}
 			</div>
-			{discovery && <ModelDiscoveryStatus discovery={discovery} />}
 			{limitNotice && (
-				<p className="mt-1 flex flex-wrap items-center gap-2 text-ui-11 leading-relaxed text-ink-faint">
+				<p className="mt-2 flex flex-wrap items-center gap-2 text-ui-11 leading-relaxed text-ink-faint">
 					<span>
 						{limitNotice.notice.ambiguousContext
 							? t("settings.providers.discoverLimitAmbiguous", { modelId: limitNotice.modelId })
@@ -291,7 +362,7 @@ export function ModelRowsEditor({
 					{!limitNotice.notice.ambiguousContext && onAdoptLimits && (
 						<button
 							type="button"
-							className="rounded-md px-1.5 py-0.5 text-ui-11 text-ink-dim transition-colors hover:bg-hover"
+							className="rounded-lg px-2 py-1 text-ui-11 text-ink-dim transition-colors hover:bg-hover"
 							onClick={onAdoptLimits}
 						>
 							{t("settings.providers.discoverAdopt")}
@@ -299,11 +370,19 @@ export function ModelRowsEditor({
 					)}
 				</p>
 			)}
-			<p className="mt-1 text-ui-10 leading-relaxed text-ink-faint">
-				{t("settings.providers.customModelsHint")}
-			</p>
+			<div className="mt-1 flex items-center justify-end">
+				<Tooltip label={t("settings.providers.customModelsDetails")} align="end">
+					<button
+						type="button"
+						aria-label={t("settings.providers.customModelsHelpInfo")}
+						className="flex shrink-0 items-center rounded-full text-ink-faint transition-colors hover:text-ink-dim"
+					>
+						<InfoIcon size={13} />
+					</button>
+				</Tooltip>
+			</div>
 			{rows.every((row) => !row.id.trim()) && (
-				<p className="mt-1 text-ui-10 leading-relaxed text-ink-dim">
+				<p className="mt-2 text-ui-11 leading-relaxed text-ink-dim">
 					{t("settings.providers.customModelsEmptyHint")}
 				</p>
 			)}

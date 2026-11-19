@@ -580,7 +580,8 @@ export const en: Messages = {
 			customModelOut: "Max output tokens; blank = SDK default 16k",
 			customModelReasoning: "Think",
 			customModelImage: "Image",
-			addModelRow: "+ Add model",
+			customModelAutoSource: "Auto-discovered",
+			addModelRow: "Add model",
 			clearModelRows: "Clear model list",
 			discoverModels: "Fetch models",
 			discovering: "Fetching…",
@@ -596,7 +597,8 @@ export const en: Messages = {
 				"{modelId} reports several different context windows; not filled in, please confirm manually",
 			discoverAdopt: "Use API values",
 			thinkingLevels: "Levels",
-			thinkingLevelsHint: "Pick the thinking levels to enable; pick none to follow the default (minimal..high)",
+			thinkingLevelsHint:
+				"Pick the thinking levels to enable; pick none to follow the default (minimal..high)",
 			thinkingLevelsEmpty: "none = default",
 			thinkingOff: "off",
 			presetsAbility: "abilities",
@@ -621,6 +623,11 @@ export const en: Messages = {
 			removeModelRow: "Remove row",
 			customModelsHint:
 				"One model per row; paste a comma/newline-separated list to split into rows; enable Think to unlock thinking levels for that model. Leave empty to reuse the provider\u2019s official model list (only baseUrl is overridden; thinking/window metadata stays official)",
+			customModelsHelp:
+				"One model per row; paste a comma/newline-separated list. Enable Think to configure levels.",
+			customModelsHelpInfo: "View model list instructions",
+			customModelsDetails:
+				"Leave models empty to keep the official list; only baseUrl is overridden, while thinking and limits stay official.",
 			customModelsEmptyHint:
 				"Currently empty: on save the provider keeps its official model list and only baseUrl is overridden. This fits overriding a built-in provider ID (e.g. openai / anthropic); a brand-new ID needs at least one model",
 			submitting: "Saving…",

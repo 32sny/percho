@@ -563,7 +563,8 @@ export const zh = {
 			customModelOut: "最大输出 tokens，留空默认 16k",
 			customModelReasoning: "思考",
 			customModelImage: "图像",
-			addModelRow: "+ 添加模型",
+			customModelAutoSource: "自动提取",
+			addModelRow: "添加模型",
 			clearModelRows: "清空模型列表",
 			discoverModels: "自动获取",
 			discovering: "获取中…",
@@ -603,6 +604,9 @@ export const zh = {
 			removeModelRow: "删除此行",
 			customModelsHint:
 				"每行一个模型，可粘贴逗号/换行分隔的列表自动拆行；「思考」开启后该模型才可选思考深度。模型留空 = 沿用该 provider 的官方模型列表（仅覆写 baseUrl，思考/窗口等元数据保持不变）",
+			customModelsHelp: "每行一个模型，可粘贴逗号/换行分隔列表；开启「思考」后可配置档位。",
+			customModelsHelpInfo: "查看模型列表填写说明",
+			customModelsDetails: "模型留空 = 沿用官方模型列表；仅覆写 baseUrl，思考/窗口等元数据保持不变。",
 			customModelsEmptyHint:
 				"当前为空：保存后沿用官方模型列表，仅覆写 baseUrl；此方式适用于 ID 为内置 provider（如 openai / anthropic）的覆写场景，全新 ID 需要至少一个模型",
 			submitting: "保存中…",
