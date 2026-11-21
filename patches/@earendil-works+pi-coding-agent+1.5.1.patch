@@ -1,5 +1,5 @@
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts
-index 8b6a584..f1c3064 100644
+index 8b6a584..4af64fe 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts
 @@ -25,6 +25,7 @@ import type { ResourceLoader } from "./resource-loader.ts";
@@ -67,13 +67,14 @@ index 8b6a584..f1c3064 100644
      /**
       * Prepare a run and return its starting messages: compact first when needed, emit
       * before_agent_start, apply the run's prompt options and tool loadout, and build the starting
-@@ -567,7 +596,14 @@ export declare class AgentSession {
+@@ -567,7 +596,15 @@ export declare class AgentSession {
       * @throws Error if streaming and no streamingBehavior specified
       * @throws Error if no model selected or no API key available (when not streaming)
       */
 -    prompt(text: string, options?: PromptOptions): Promise<void>;
 +    prompt(text: string, options?: PromptOptions & {
 +        controlMessageId?: string;
++        draft?: { text: string; document?: unknown; attachments: string[]; quotes: string[]; slashCommand: string | null; imageNames?: string[] };
 +    }): Promise<void>;
 +    enableMessageControl(): MessageControlHandle;
 +    /** Percho patch: retry the terminal failure using durable context omission, without user input. */
@@ -2076,7 +2077,7 @@ index f527dee..12af6dc 100644
      appendEntry: AppendEntryHandler;
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.d.ts
 new file mode 100644
-index 0000000..37b6baa
+index 0000000..1a81f26
 --- /dev/null
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.d.ts
 @@ -0,0 +1,17 @@
@@ -2096,13 +2097,13 @@ index 0000000..37b6baa
 +export interface RecoverPendingMessageResult { payload: MessagePayload; messageId: string; snapshot: ControlSnapshot }
 +export interface StopMessageControlResult { operationId: string; snapshot: ControlSnapshot }
 +export interface MessageControlUpdate { snapshot: ControlSnapshot; receipt?: { messageId: string; requestId: string; status: "committed" | "handled" | "failed"; error?: string } }
-+export interface MessageControlHandle { submit(request: MessageSubmitRequest, source?: "user" | "extension" | "system"): Promise<ControlResult<MessageAck>>; getSnapshot(): ControlSnapshot; changePending(request: ChangePendingMessageRequest): Promise<ControlResult<ChangePendingMessageResult>>; recover(request: PendingMessageRequest): ControlResult<RecoverPendingMessageResult>; stop(identity: ControlIdentity): ControlResult<StopMessageControlResult>; subscribe(listener: (update: MessageControlUpdate) => void): () => void; readonly signal: AbortSignal | undefined; waitForIdle(): Promise<void>; dispose(): void }
++export interface MessageControlHandle { submit(request: MessageSubmitRequest, source?: "user" | "extension" | "system", options?: { expandPromptTemplates?: boolean }): Promise<ControlResult<MessageAck>>; getSnapshot(): ControlSnapshot; changePending(request: ChangePendingMessageRequest): Promise<ControlResult<ChangePendingMessageResult>>; recover(request: PendingMessageRequest): ControlResult<RecoverPendingMessageResult>; stop(identity: ControlIdentity): ControlResult<StopMessageControlResult>; subscribe(listener: (update: MessageControlUpdate) => void): () => void; readonly signal: AbortSignal | undefined; waitForIdle(): Promise<void>; dispose(): void }
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.js b/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.js
 new file mode 100644
-index 0000000..0b59388
+index 0000000..4c79d78
 --- /dev/null
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/core/message-control.js
-@@ -0,0 +1,641 @@
+@@ -0,0 +1,643 @@
 +import { AsyncLocalStorage } from "node:async_hooks";
 +import { randomUUID } from "node:crypto";
 +
@@ -2159,7 +2160,9 @@ index 0000000..0b59388
 +                sendAfterStop: this.operation.sendAfterStop, startedAt: this.operation.startedAt, slow: this.operation.slow } } : {}),
 +            items: [...this.records.values()].filter(r => !r.committed && !r.consumed).map(r => ({
 +                messageId: r.id, source: r.source, mode: r.mode, state: r.state,
-+                preview: r.payload.text.slice(0, 240), imageCount: r.payload.images?.length ?? 0,
++                preview: (r.payload.draft
++                    ? (r.payload.draft.text || (r.payload.draft.slashCommand ? `/${r.payload.draft.slashCommand}` : r.payload.draft.attachments?.map(a => `@${a}`).join(" ") || r.payload.draft.quotes?.[0] || ""))
++                    : r.payload.text).slice(0, 240), imageCount: r.payload.images?.length ?? 0,
 +            })),
 +        };
 +    }
@@ -2230,7 +2233,7 @@ index 0000000..0b59388
 +        if (this.publicHandle) return this.publicHandle;
 +        const self = this;
 +        return this.publicHandle = {
-+            submit: (request, source = "user") => self.submit(request, source),
++            submit: (request, source = "user", options) => self.submit(request, source, options),
 +            getSnapshot: () => self.snapshot(),
 +            changePending: request => self.changePending(request),
 +            recover: request => self.recover(request),
@@ -2709,7 +2712,7 @@ index 0000000..0b59388
 +        const nested = scope?.owner === this;
 +        const source = nested || options.source === "extension" ? "extension" : "user";
 +        const request = { sessionId: this.session.sessionId, runtimeId: this.runtimeId, requestId: randomUUID(),
-+            mode: nested && scope.epoch !== this.epoch ? "queue" : options.streamingBehavior === "steer" ? "steer" : "queue", payload: { text, images: options.images } };
++            mode: nested && scope.epoch !== this.epoch ? "queue" : options.streamingBehavior === "steer" ? "steer" : "queue", payload: { text, images: options.images, ...(options.draft ? { draft: options.draft } : {}) } };
 +        return this.submit(request, source, { expandPromptTemplates: options.expandPromptTemplates }).then(result => {
 +            if (!result.ok) throw new Error(result.error.message);
 +            options.preflightResult?.(result.value.disposition === "held" ? "queued" : result.value.disposition);
