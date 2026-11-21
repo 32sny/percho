@@ -31,6 +31,13 @@ export interface PreparedComposerInput {
 	sourceHash?: string;
 }
 
+export interface StructuredSubmission {
+	prepared: PreparedComposerInput;
+	text: string;
+	cleanText: string;
+	expandPromptTemplates: boolean;
+}
+
 export function canonicalComposerJson(value: unknown): string {
 	if (typeof value === "string") return JSON.stringify(value.replace(/\r\n?/g, "\n").normalize("NFC"));
 	if (Array.isArray(value)) {
@@ -338,6 +345,40 @@ export class ComposerInputBridge {
 			: rawModelText;
 		const transportText = encode(modelText, { document, definitions, sourceHash });
 		return { document, modelText, transportText, ...(sourceHash ? { sourceHash } : {}) };
+	}
+
+	async prepareSubmission(
+		loader: ResourceLoader,
+		rawDocument: ComposerDocument,
+		options?: {
+			slashCommand?: string | null;
+			promptTemplates?: ReadonlyArray<PromptTemplate>;
+			isRemote?: boolean;
+			expectedSourceHash?: string;
+			isExtensionCommand?: (commandName: string) => boolean;
+		},
+	): Promise<StructuredSubmission> {
+		const prepared = await this.prepare(loader, rawDocument, options);
+		const rawModelText = composerDocumentModelText(prepared.document);
+		const slashCommand = options?.slashCommand ?? null;
+		const commandCandidate = slashCommand
+			? rawModelText
+				? `/${slashCommand} ${rawModelText}`
+				: `/${slashCommand}`
+			: rawModelText;
+		const trimmed = commandCandidate.trimStart();
+		let extensionCommand = false;
+		if (trimmed.startsWith("/")) {
+			const spaceIndex = trimmed.indexOf(" ");
+			const commandName = spaceIndex === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIndex);
+			extensionCommand = Boolean(commandName && options?.isExtensionCommand?.(commandName));
+		}
+		return {
+			prepared,
+			text: extensionCommand ? commandCandidate : prepared.transportText,
+			cleanText: composerDocumentText(prepared.document),
+			expandPromptTemplates: extensionCommand,
+		};
 	}
 }
 

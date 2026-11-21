@@ -254,18 +254,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	 * 受理成功后清草稿：只有当前内容仍等于本次发出的快照才清（ACK 等待期间用户新写的内容
 	 * 属于下一条草稿，必须原样保留）。dequeue 保护标记不在这里处理。
 	 */
-	const clearSentDraft = (
-		draftKey: string,
-		sent: {
-			document?: ComposerDocument;
-			text: string;
-			images: ImageInput[];
-			attachments: string[];
-			quotes: string[];
-			slashCommand: string | null;
-			draftVersion: number;
-		},
-	) => {
+	const clearSentDraft = (draftKey: string, sent: ComposerSendSnapshot) => {
 		const current = useDraftStore.getState().bySession[draftKey];
 		// 等待旧发送 ACK 时可能取回了另一项，即使内容碰巧相同也不能清掉新取回稿。
 		if (current?.recovery) return;
@@ -280,7 +269,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		};
 		if (
 			!samePayload(currentPayload, {
-				document: normalizeComposerDocument(sent.document ?? composerDocumentFromText(sent.text)),
+				document: normalizeComposerDocument(sent.draftDocument ?? composerDocumentFromText(sent.text)),
 				text: sent.text,
 				images: sent.images,
 				attachments: sent.attachments,
@@ -300,8 +289,6 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			slashCommand: null,
 		}));
 	};
-
-	type SentPayload = ComposerSendSnapshot;
 
 	const restoreLegacyQueueDraft = (
 		sessionId: string,
@@ -335,7 +322,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	 * 真正的一轮发送（同步锁内）。从「确保有会话」到 prompt 落地都可能 await，
 	 * 调用方必须先抢 `sendGuard` 再进来（见 handleSend 尾部的注释）。
 	 */
-	const sendNow = async (sent: SentPayload): Promise<void> => {
+	const sendNow = async (sent: ComposerSendSnapshot): Promise<void> => {
 		const { draftKey, content, images, mode } = sent;
 		let sessionId = options.activeSessionId;
 		if (content.startsWith("/") && images.length === 0) {
@@ -427,7 +414,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	}: {
 		sessionId: string;
 		draftKey: string;
-		sent: SentPayload;
+		sent: ComposerSendSnapshot;
 	}): Promise<void> => {
 		const { content, images, wasActive } = sent;
 		const session = useTranscriptStore.getState().bySession[sessionId];
@@ -463,15 +450,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			if (images.length > 0 && !handled && ack?.disposition !== "started") {
 				pushToast("warning", "composer.legacyImageDraftRetained");
 			} else {
-				clearSentDraft(draftKey, {
-					document: sent.draftDocument,
-					text: sent.text,
-					images: sent.images,
-					attachments: sent.attachments,
-					quotes: sent.quotes,
-					slashCommand: sent.slashCommand,
-					draftVersion: sent.draftVersion,
-				});
+				clearSentDraft(draftKey, sent);
 			}
 			const queued = ack?.disposition === "queued";
 			useTranscriptStore.getState().settlePromptActivity(sessionId, activityToken, handled || queued);
@@ -502,7 +481,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			sessionId: string;
 			draftKey: string;
 			runtimeId: string;
-			sent: SentPayload;
+			sent: ComposerSendSnapshot;
 		},
 	): Promise<void> => {
 		const { content, text, images, attachments, quotes, wasActive, mode, slashCommand } = sent;
@@ -595,15 +574,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			}
 			// 成功回执后才消费草稿；ACK 期间用户改了内容则保留新输入。
 			pendingTx.current = null;
-			clearSentDraft(draftKey, {
-				document: sent.draftDocument,
-				text,
-				images,
-				attachments,
-				quotes,
-				slashCommand,
-				draftVersion: sent.draftVersion,
-			});
+			clearSentDraft(draftKey, sent);
 			const ack = res.value;
 			// handled 只表示输入被扩展消费，不能推断全会话空闲（保护 optimisticActivityToken 修复语义）：
 			// 仅回滚本次乐观所有权；queued/held 未开工同样回滚；started/interrupting 保持等真实事件。

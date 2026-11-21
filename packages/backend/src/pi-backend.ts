@@ -74,7 +74,6 @@ import type {
 	TrustRequest,
 } from "@percho/shared";
 import {
-	composerDocumentModelText,
 	composerDocumentText,
 	extractTodos,
 	formatSkillCommand,
@@ -183,15 +182,6 @@ import { makeTodoReminderExtension } from "./tools/todo-reminder";
 import { makeWebFetchTool } from "./tools/webfetch";
 
 const log = createLogger("backend");
-
-function isExtensionCommand(session: AgentSession, text: string): boolean {
-	const trimmed = text.trimStart();
-	if (!trimmed.startsWith("/")) return false;
-	const spaceIndex = trimmed.indexOf(" ");
-	const commandName = spaceIndex === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIndex);
-	if (!commandName) return false;
-	return Boolean(session.extensionRunner?.getCommand(commandName));
-}
 
 function projectControlSnapshot(snapshot: ControlSnapshot): ControlSnapshot {
 	return {
@@ -1389,7 +1379,8 @@ export class PiBackend {
 		];
 		if (
 			request.mode !== "queue" &&
-			commandCandidates.some((value) => typeof value === "string" && value.trimStart().startsWith("/"))
+			(Boolean(request.payload.draft?.slashCommand) ||
+				commandCandidates.some((value) => typeof value === "string" && value.trimStart().startsWith("/")))
 		)
 			return failure(
 				"command_mode_unsupported",
@@ -1401,24 +1392,17 @@ export class PiBackend {
 			const bridge = composerInputBridge(entry.session.resourceLoader);
 			if (!bridge) return failure("invalid_payload", "Composer input adapter is unavailable", snapshot);
 			return bridge.submit(request, async () => {
-				let prepared: Awaited<ReturnType<typeof bridge.prepare>>;
+				let submission: Awaited<ReturnType<typeof bridge.prepareSubmission>>;
 				try {
-					prepared = await bridge.prepare(entry.session.resourceLoader, structuredDocument, {
+					submission = await bridge.prepareSubmission(entry.session.resourceLoader, structuredDocument, {
 						slashCommand: request.payload.draft?.slashCommand,
 						promptTemplates: entry.session.promptTemplates,
+						isExtensionCommand: (name) => Boolean(entry.session.extensionRunner?.getCommand(name)),
 					});
 				} catch (err) {
 					return failure("invalid_payload", err instanceof Error ? err.message : String(err), snapshot);
 				}
-				const rawModelText = composerDocumentModelText(prepared.document);
-				const slashCommand = request.payload.draft?.slashCommand;
-				const commandCandidate = slashCommand
-					? rawModelText
-						? `/${slashCommand} ${rawModelText}`
-						: `/${slashCommand}`
-					: rawModelText;
-				const extensionCommand = isExtensionCommand(entry.session, commandCandidate);
-				const cleanText = composerDocumentText(prepared.document);
+				const prepared = submission.prepared;
 				const preservedDraft = request.payload.draft
 					? {
 							...request.payload.draft,
@@ -1427,7 +1411,7 @@ export class PiBackend {
 								: {}),
 						}
 					: {
-							text: cleanText,
+							text: submission.cleanText,
 							document: prepared.document,
 							attachments: [],
 							quotes: [],
@@ -1437,14 +1421,14 @@ export class PiBackend {
 					...request,
 					payload: {
 						...request.payload,
-						text: extensionCommand ? commandCandidate : prepared.transportText,
+						text: submission.text,
 						document: prepared.document,
 						draft: preservedDraft,
 					},
 				};
 				const result =
 					(await entry.messageControlAdapter?.submit(forwardedRequest, {
-						expandPromptTemplates: extensionCommand,
+						expandPromptTemplates: submission.expandPromptTemplates,
 					})) ?? failure("not_found", "Message control is unavailable");
 				return projectControlResult(result);
 			});
@@ -1520,16 +1504,7 @@ export class PiBackend {
 			decoded?.document ?? result.value.payload.document ?? result.value.payload.draft?.document;
 		const cleanText = document ? composerDocumentText(document) : result.value.payload.text;
 		const existingDraft = result.value.payload.draft;
-		const draftDocument = existingDraft?.document
-			? parseComposerDocument(existingDraft.document)
-			: existingDraft && (existingDraft.attachments.length > 0 || existingDraft.quotes.length > 0)
-				? undefined
-				: document;
-		const draftText = draftDocument
-			? composerDocumentText(draftDocument)
-			: existingDraft
-				? existingDraft.text
-				: cleanText;
+		const draftDocument = existingDraft?.document ? parseComposerDocument(existingDraft.document) : undefined;
 		return {
 			ok: true,
 			value: {
@@ -1543,7 +1518,7 @@ export class PiBackend {
 						? {
 								draft: {
 									...existingDraft,
-									text: draftText,
+									text: draftDocument ? composerDocumentText(draftDocument) : existingDraft.text,
 									...(draftDocument ? { document: draftDocument } : {}),
 								},
 							}
@@ -1599,16 +1574,15 @@ export class PiBackend {
 		if (document) {
 			const bridge = composerInputBridge(entry.session.resourceLoader);
 			if (!bridge) throw new Error("Composer input adapter is unavailable");
-			const prepared = await bridge.prepare(entry.session.resourceLoader, document, {
+			const submission = await bridge.prepareSubmission(entry.session.resourceLoader, document, {
 				promptTemplates: entry.session.promptTemplates,
+				isExtensionCommand: (name) => Boolean(entry.session.extensionRunner?.getCommand(name)),
 			});
-			const rawModelText = composerDocumentModelText(prepared.document);
-			const extensionCommand = isExtensionCommand(entry.session, rawModelText);
-			acceptedText = extensionCommand ? rawModelText : prepared.transportText;
-			expandPromptTemplates = extensionCommand;
+			acceptedText = submission.text;
+			expandPromptTemplates = submission.expandPromptTemplates;
 			draft = {
-				text: composerDocumentText(prepared.document),
-				document: prepared.document,
+				text: submission.cleanText,
+				document: submission.prepared.document,
 				attachments: [],
 				quotes: [],
 				slashCommand: null,

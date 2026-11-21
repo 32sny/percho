@@ -12,7 +12,6 @@ import {
 	$isElementNode,
 	$isRangeSelection,
 	$isTextNode,
-	type LexicalEditor,
 	type LexicalNode,
 } from "lexical";
 import { $createReferenceNode, ReferenceNode } from "./ReferenceNode";
@@ -240,11 +239,4 @@ export function replaceComposerText(text: string, selection?: ComposerSelection)
 
 export function setComposerSelection(start: number, end: number): void {
 	$selectComposerRange(start, end);
-}
-
-export function updateComposerText(editor: LexicalEditor, text: string, selection?: ComposerSelection): void {
-	editor.update(() => replaceComposerText(text, selection), {
-		tag: "composer-external-sync",
-		discrete: true,
-	});
 }
