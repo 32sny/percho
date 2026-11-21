@@ -1,4 +1,4 @@
-import type { InlineExtension, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import type { InlineExtension, McpRuntimeSnapshot, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { DefaultResourceLoader, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createLogger } from "../log";
 import type { PermissionConfirm, PermissionModeRef } from "../permissions/extension";
@@ -22,7 +22,10 @@ const log = createLogger("backend");
  */
 export function composeExtensionFactories(
 	ours: InlineExtension[],
-	deps: { openUrl?: (url: string) => void | Promise<void> },
+	deps: {
+		openUrl?: (url: string) => void | Promise<void>;
+		mcpObserver?: () => (snapshot: McpRuntimeSnapshot) => void;
+	},
 ): InlineExtension[] {
 	return [...ours, ...builtinExtensions(deps)];
 }
@@ -67,7 +70,12 @@ export class ProjectResourceLoader {
 	 */
 	async load(
 		cwd: string,
-		options?: { askTrust?: boolean; confirm?: PermissionConfirm; modeRef?: PermissionModeRef },
+		options?: {
+			askTrust?: boolean;
+			confirm?: PermissionConfirm;
+			modeRef?: PermissionModeRef;
+			mcpObserver?: () => (snapshot: McpRuntimeSnapshot) => void;
+		},
 	): Promise<{
 		settingsManager: SettingsManager;
 		resourceLoader: DefaultResourceLoader;
@@ -81,7 +89,7 @@ export class ProjectResourceLoader {
 			settingsManager,
 			extensionFactories: composeExtensionFactories(
 				[composerInputExtension(), ...this.deps.buildExtensions(cwd, options?.confirm, options?.modeRef)],
-				{ openUrl: this.deps.openUrl },
+				{ openUrl: this.deps.openUrl, mcpObserver: options?.mcpObserver },
 			),
 			additionalSkillPaths: this.deps.desktopIntegration?.additionalSkillPaths,
 			// appendSystemPrompt 会替换文件发现；override 在发现后合并，保留 SDK 信任/优先级规则。

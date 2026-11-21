@@ -17,8 +17,9 @@ import type { PermissionAction, PermissionRules } from "./pattern";
  * 改自研工具的 annotations 不会改变本机弹窗行为（要改行为请改这里的判定或 permissions.json 规则）。
  */
 
-/** SDK 自带工具名（`builtin:<name>`，1.0.4 实测清单）：命中即走硬编码分类，不受声明层影响。
- *  名单先于 sourceInfo 判定 —— 元数据缺失时内置工具也不会误弹窗。 */
+/** SDK 自带工具名（`builtin:<name>`）：命中即走硬编码分类，不受声明层影响。
+ *  名单先于 sourceInfo 判定 —— 元数据缺失时内置工具也不会误弹窗。
+ *  `tool_search` 只检索工具元数据并激活声明，不执行外部操作；激活后的 MCP 工具调用时仍走声明层检查。 */
 const SDK_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"read",
 	"bash",
@@ -28,6 +29,7 @@ const SDK_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"grep",
 	"find",
 	"ls",
+	"tool_search",
 ]);
 
 /** SDK 内置 MCP 扩展的 sourceInfo path（该扩展注册的工具都来自**用户装的外部 server**） */

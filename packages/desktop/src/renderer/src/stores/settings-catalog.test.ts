@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
 	getPermissionConfig: vi.fn(),
 	getContextManagerConfig: vi.fn(),
 	getChannelWatchConfig: vi.fn(),
+	getCodemodeConfig: vi.fn(),
 	lanGetStatus: vi.fn(),
 	getModelPrefs: vi.fn(),
 	loadModels: vi.fn(),
@@ -71,6 +72,7 @@ beforeEach(async () => {
 	api.getPermissionConfig.mockResolvedValue({ enabled: true });
 	api.getContextManagerConfig.mockResolvedValue({ mode: "evaporation" });
 	api.getChannelWatchConfig.mockResolvedValue({ enabled: true });
+	api.getCodemodeConfig.mockResolvedValue({ enabled: true, only: false });
 	api.lanGetStatus.mockResolvedValue(null);
 	api.getModelPrefs.mockResolvedValue({ hiddenModels: {}, subagentModels: {} });
 	api.getLoadedResources.mockResolvedValue({

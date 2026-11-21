@@ -1,8 +1,8 @@
 ---
 类型: 技术方案
-状态: 后续契约待实施前复核；P1随v0.7.6发布，P2–P8未实施；WIN-LINK-01已登记
+状态: 后续契约待实施前复核；P1随v0.7.6发布，P2长会话同步已完成；MCP/Code Mode适配在工作树实施、待完整验收；P3–P8未实施；WIN-LINK-01已登记
 创建: 2026-11-03
-更新: 2026-11-17
+更新: 2026-11-21
 适用: Percho 后续功能路线：MonoCode 借鉴项、项目文件树、内置编辑器与 AgentTeam 能力
 ---
 
@@ -10,7 +10,9 @@
 
 > 本文是实施前审查方案，不代表已经开始修改源码、配置或执行器开关。
 >
-> **发布后状态（2026-11-15）**：SDK 1.5.1已随v0.7.6发布（`4794b98`），四架构CI及三平台Release通过；下文0.7.5/1b92149与“P1验收中”是历史取证背景，不再表示当前状态。上游0.6.6–0.6.8已做路线级重评，具体功能开工前仍须核对适配与冲突；P2–P8尚未实施。
+> **当前状态更新（2026-11-21）**：P2 长会话同步已完成。MCP 按需发现 / 工具搜索 / Code Mode 本地适配已获准并在未提交工作树实施，完整验收证据与未完项以 `HANDOVER.md` 最新断点为准；P3–P8 仍未实施。以下具体契约池仍需对应阶段再核，不能把本轮 MCP 适配扩张成其他截图或功能的授权。
+>
+> **发布后状态（2026-11-15）**：SDK 1.5.1已随v0.7.6发布（`4794b98`），四架构CI及三平台Release通过；下文0.7.5/1b92149与“P1验收中”是历史取证背景，不再表示当前状态。上游0.6.6–0.6.8已做路线级重评，具体功能开工前仍须核对适配与冲突；P2此前实施状态以当前状态更新为准。
 > **排序已修订**：全局阶段顺序以 [功能取舍清单](PLAN-percho-feature-catalog.md) 为准；本文只维护功能契约、依赖、文件范围与测试细节，不维护第二套批次号。
 > 当前基线（2026-11-15修订）：Percho `0.7.5`，HEAD `1b92149`；dev 依赖已按 P1 切换至 SDK 1.5.1（固定上游 v0.6.8=`87476fa1f884d3590e58400b4099212593a5a047`，验收中，见 [升级计划§19.13](PLAN-sdk-1.5.1-upgrade.md)）。旧“本地 `upstream/main` 快照 `1145c7a`（领先 36 / 落后 34）”属旧快照历史记录，不是当前状态；P2–P8 未执行，GC宿主租约缺口已定向验证并最小修复（见升级计划§19.14）。
 > 关联资料：`docs/PLAN-percho-feature-catalog.md`、`docs/PLAN-sdk-1.5.1-upgrade.md`、`docs/PLAN-session-split-panes.md`、`docs/PLAN-project-file-tree-readonly.md`、`docs/PLAN-global-search.md`、`docs/PLAN-turn-checkpoint-undo.md`，以及 `HANDOVER.md`。
@@ -24,7 +26,7 @@
 当前覆盖状态：
 
 1. SDK、分屏、文件树、全局搜索、checkpoint 均已有仓库内单项方案。
-2. 上游同步以 catalog P2 为准：路线级重评已完成，具体模块的适配、冲突处理与回归清单仍须在开工前核对；P1（SDK 1.5.1）已随v0.7.6发布。
+2. 上游同步：路线级重评已完成；长会话批次已完成。MCP / Code Mode 本地适配正在本次授权工作树内实施与验收；其余上游功能按 catalog 分批，不视为完成。
 3. Windows聊天文件链接无响应已登记为 `WIN-LINK-01`，详细范围见[文件树计划的已登记缺陷](PLAN-project-file-tree-readonly.md#13-已登记缺陷windows-聊天文件链接无响应win-link-01)：先修现有系统打开链路，再接P4项目内预览；当前只记待办，不实施。
 4. A2、A5、A6、A7 与 B1-B11 保留在本文作为契约池；是否进入当前阶段只看 catalog。
 
@@ -66,7 +68,7 @@
 - 不卸载 pi-subagents、PiFlow 或修改外部执行器定义。
 - 不把外部 Agent 的 `worktree`、`schedule`、workflow 能力描述成 Percho 原生已实现。
 - 不引入 MonoCode 的多 provider/harness 适配、Mono 常驻 agent、远程 SSH、手机原生 App 或 issue Inbox。
-- 不在本轮实施任何源码、配置、依赖、数据库、Git 提交或发布动作。
+- 其余事项不因路线编号或本批 MCP/Code Mode 适配而自动授权实施、提交或发布。
 
 ## 二、现有实现定位
 
@@ -174,7 +176,7 @@ App
 - 验收：空闲隐藏下拉；菜单恰好两项，↑/Enter触发queue、两项菜单分别触发steer/interrupt且每次仅提交一次；独立停止不发送且保草稿；IME/多图预处理/ACK前后草稿保护不回归；readonly、手动压缩、准备期与auto压缩组合逐项验证。增加浅/深主题、窄窗口/长模型名、浮层裁切/点击命中、Tooltip与键盘可达性验收。
 - **已实施范围**：`Composer.tsx`、`ModelPicker.tsx`、`SendModeMenu.tsx`、菜单契约测试、中英文 i18n 与本 `docs/ui.md` 配方。↑与 Enter 默认 queue；菜单各自一次性 steer / interrupt；独立停止不发送草稿。菜单通过 Portal、`placeMenu` 视口夹紧，支持外部点击、Escape、方向键、Home/End、Tab 关闭和 Escape 焦点归还。图片预处理等待增加同步锁，并校验等待期间切会话不会改发另一份草稿。
 - **验证证据**：桌面 typecheck、6实现文件 Biome 通过；相关6个测试文件122项通过（发送 ACK、同步防重、压缩门禁、菜单契约与字号守卫）；隔离 Electron 真实组件实测空闲/忙碌/只读状态、深色菜单两项与视口边界/点击命中、首项/方向键焦点与Escape归还、queue/steer/interrupt各单次、Enter默认queue、停止保非空草稿、手动压缩禁菜单/自动压缩放行、preparing占位、464px窄窗长模型名无横向溢出；延迟图片时切会话不发送新会话且保留原图片，同会话重复触发只提交一次完整带图信封。日志 `.local/tmp/composer-send/ui-final.log`，独立复核PASS。未执行真实模型、安装或实机IME；Cmd+Enter实际源码原有仅Ctrl判断，本次未扩展快捷键。全仓样式守护仍有LAN等既存命中，本次无新增硬编码字号/色值。
-- MCP `fetch: MCP connection closed` 是独立连接问题，根因未核实；本条不承诺靠上游MCP同步解决，不授权修改MCP配置。
+- MCP `fetch: MCP connection closed` 仍是与本次上游同步相独立的连接问题，根因未核实；本次适配不宣称已修复此警告。2026-11-15时未获授权修改MCP配置；2026-11-21用户另行批准的适配范围及验收状态以 HANDOVER 最新断点为准。
 
 ### 已确认交互待办：会话悬停预览卡（SESSION-HOVER-01）
 

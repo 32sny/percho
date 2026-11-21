@@ -257,19 +257,23 @@ export const PACKAGES_CHANNELS = {
 	listConfiguredPackages: ch("packages:listConfigured")<void, ConfiguredPackageInfo[]>(),
 } as const;
 
-/** MCP 域：官方内置扩展的 mcp.json 读写（连接/展开交给官方；工具运行态走 mcp.tools:changed 事件） */
+/** MCP 域：官方内置扩展的 mcp.json 读写与运行态操作 */
 export const MCP_CHANNELS = {
 	/** 读全局 + 项目级 mcp.json（项目级只在受信项目读，与官方 trust-manager 同款） */
-	mcpConfigList: ch("mcp:configList")<{ cwd?: string }, McpConfigListResult>(),
+	mcpConfigList: ch("mcp:configList")<{ cwd?: string; instanceId?: string | null }, McpConfigListResult>(),
 	/** 新增/编辑一个 server（新建默认写 exposure: "deferred"；新建文件时顶层写 autoEnableCodemode: false） */
 	mcpConfigUpsert: ch("mcp:configUpsert")<McpUpsertInput, McpMutationResult>(),
-	/** 重连：reload 会话让官方 mcp 扩展重读配置并重连（面板「重连」入口） */
-	mcpConfigReload: ch("mcp:configReload")<{ cwd?: string }, McpMutationResult>(),
-	/** 删除一个 server（按 name + scope）；运行中的会话跳过重连并回报 */
+	/** 批量导入 JSON 配置（原子校验并写入全局 mcp.json） */
+	mcpConfigImport: ch("mcp:configImport")<{ json: string; cwd?: string }, McpMutationResult>(),
+	/** 删除一个 server（按 name + scope） */
 	mcpConfigRemove: ch("mcp:configRemove")<
 		{ scope: "user" | "project"; cwd?: string; name: string },
 		McpMutationResult
 	>(),
+	/** 对指定运行实例中的单台 server 发起原生重连（/mcp reconnect <name>） */
+	mcpReconnect: ch("mcp:reconnect")<{ instanceId: string; name: string }, void>(),
+	/** 对指定运行实例中的单台 server 发起 OAuth 登录（/mcp login <name>） */
+	mcpLogin: ch("mcp:login")<{ instanceId: string; name: string }, void>(),
 } as const;
 
 /** LAN 观察域：本机服务开关与远程控制开关 */
@@ -367,6 +371,10 @@ export const SETTINGS_CHANNELS = {
 	/** channel-watch 跨会话频道唤醒开关 */
 	getChannelWatchConfig: ch("channelWatch:getConfig")<void, ChannelWatchConfigInfo>(),
 	setChannelWatchEnabled: ch("channelWatch:setEnabled")<{ enabled: boolean }, void>(),
+	/** Code Mode 开关与独占模式配置 */
+	getCodemodeConfig: ch("codemode:getConfig")<void, { enabled: boolean; only: boolean }>(),
+	setCodemodeEnabled: ch("codemode:setEnabled")<{ enabled: boolean }, void>(),
+	setCodemodeOnly: ch("codemode:setOnly")<{ only: boolean }, void>(),
 	/** 项目信任请求应答（选项下标） */
 	respondTrust: ch("trust:respond")<{ requestId: string; answer: TrustAnswer }, void>(),
 } as const;

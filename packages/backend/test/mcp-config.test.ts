@@ -104,18 +104,15 @@ describe("mcp.json 读写（spec §4.8）", () => {
 		expect(modern?.transport).toEqual({ kind: "url", url: "https://a.example/mcp" });
 	});
 
-	it("运行态工具按 server 合并进视图", async () => {
+	it("配置读取不推断运行工具；工具库存只由运行态快照投影", async () => {
 		writeFileSync(
 			join(agentDir.value, "mcp.json"),
 			JSON.stringify({ mcpServers: { demo: { command: "node" } } }),
 		);
 
-		const result = await listMcpServers({
-			projectTrusted: false,
-			toolsByServer: new Map([["demo", [{ name: "mcp__demo__echo", readOnly: true }]]]),
-		});
+		const result = await listMcpServers({ projectTrusted: false });
 
-		expect(result.global[0]?.tools).toEqual([{ name: "mcp__demo__echo", readOnly: true }]);
+		expect(result.global[0]?.tools).toEqual([]);
 	});
 
 	it("项目级配置只在受信项目读；写入项目级在未受信时被拒", async () => {
@@ -147,7 +144,9 @@ describe("mcp.json 读写（spec §4.8）", () => {
 
 		const result = await listMcpServers({ projectTrusted: false });
 
-		expect(result.global).toEqual([]);
+		expect(result.global).toMatchObject([
+			{ name: "bad", transport: { kind: "unknown" }, tools: [], error: expect.stringContaining("bad") },
+		]);
 		expect(result.errors[0]).toContain("bad");
 	});
 
@@ -163,6 +162,6 @@ describe("mcp.json 读写（spec §4.8）", () => {
 	it("server 名非法被拒（它是工具名前缀，必须安全）", async () => {
 		await expect(
 			upsertMcpServer({ scope: "user", name: "a b/c", command: "node" }, { projectTrusted: false }),
-		).rejects.toThrow("只能包含字母");
+		).rejects.toThrow(/invalid server name/i);
 	});
 });

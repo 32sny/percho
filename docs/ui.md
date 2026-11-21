@@ -93,4 +93,13 @@
 - markstream/Monaco/Mermaid 的接入限制先查 `Markdown.tsx`、`MermaidBlock.tsx` 与现有测试；不要复制库内部实现。
 - Monaco 只读代码块仍可能启动语言服务。`monaco-contribs.ts` 必须为 JSON、CSS/SCSS/LESS、HTML/Handlebars/Razor 与 JS/TS 分配对应语言 Worker，不能用 editor Worker 代替已注册的语言服务；Worker 使用 Vite `?worker` 导入。
 
+## MCP 与 Code Mode
+
+- MCP 设置按运行实例展示连接状态与工具库存；状态用轻量 glyph，不以工具数量反推连接是否成功。实例选择器在存在多个会话时显式显示，重连/登录作用于选中实例。
+- 配置保存只改配置文件，并提示需要重启后生效；单台重连不要求重启，不能把两种操作混为“刷新全部”。
+- Exposure 编辑仅提供 `deferred` / `codemode` / `direct` / `hidden` 四档；无法识别的旧值需保留并显示诊断，不能静默回落后覆盖。
+- Code Mode 启用和独占模式是两项独立开关，沿用 GeneralPanel 现有 `Switch`、`text-ui-*` 与语义 token。工具卡对 `tool_search` 查询和 `codemode` 脚本只展示受限的首行摘要，避免把完整脚本/参数展开成默认视觉噪声。
+
+- **用户选择的UI设计先看原型、再由生产代码语义化落地**：浮层优先无边框阴影层级，颜色只用 globals.css 的语义 token，字号只用 `text-ui-*`。实机布局与深浅主题需按对应组件验收。
+
 实机调试与验收方法见 [UI 调试](ui-debugging.md)。

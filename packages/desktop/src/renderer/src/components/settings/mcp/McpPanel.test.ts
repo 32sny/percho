@@ -7,7 +7,9 @@ vi.hoisted(() => {
 	vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 	vi.stubGlobal("navigator", { language: "zh-CN" });
 });
-vi.mock("../../../api", () => ({ getPi: () => ({ onMcpServersChanged: () => () => {} }) }));
+vi.mock("../../../api", () => ({
+	getPi: () => ({ onMcpServersChanged: () => () => {}, mcpConfigList: async () => null }),
+}));
 
 import { useMcpStore } from "../../../stores/mcp";
 import { McpPanel } from "./McpPanel";
@@ -19,7 +21,13 @@ import { McpPanel } from "./McpPanel";
 describe("McpPanel 初始态渲染冒烟", () => {
 	beforeEach(() => {
 		vi.stubGlobal("React", React);
-		useMcpStore.setState({ config: null, loading: false, status: {}, lastReload: null });
+		useMcpStore.setState({
+			config: null,
+			loading: false,
+			restartRequired: false,
+			selectedInstanceId: undefined,
+			reconnectActions: {},
+		});
 	});
 
 	it("空态可渲染：标题 + 添加按钮 + 空态说明", async () => {

@@ -4,12 +4,14 @@ import { registerInvokeHandlers } from "./invoke";
 
 /** 设置域：provider 设置 + 权限门控配置 + 项目信任应答 */
 export function registerSettingsIpc(backend: PiBackend): void {
-	// MCP 域（spec §5）：官方内置 mcp 扩展的 mcp.json 读写（连接/展开交给官方）
+	// MCP 域（spec §5）：官方内置 mcp 扩展的 mcp.json 读写与运行态操作
 	registerInvokeHandlers(MCP_CHANNELS, {
-		mcpConfigList: ({ cwd }) => backend.getMcpConfig({ cwd }),
+		mcpConfigList: (input) => backend.getMcpConfig(input),
 		mcpConfigUpsert: (input) => backend.upsertMcpServer(input),
+		mcpConfigImport: (input) => backend.importMcpServers(input),
 		mcpConfigRemove: (input) => backend.removeMcpServer(input),
-		mcpConfigReload: ({ cwd }) => backend.reloadMcpServers({ cwd }),
+		mcpReconnect: (input) => backend.reconnectMcpServer(input),
+		mcpLogin: (input) => backend.mcpLogin(input),
 	});
 
 	registerInvokeHandlers(SETTINGS_CHANNELS, {
@@ -46,6 +48,9 @@ export function registerSettingsIpc(backend: PiBackend): void {
 		setContextManagerMode: ({ mode }) => backend.setContextManagerMode(mode),
 		getChannelWatchConfig: () => backend.getChannelWatchConfig(),
 		setChannelWatchEnabled: ({ enabled }) => backend.setChannelWatchEnabled(enabled),
+		getCodemodeConfig: () => backend.getCodemodeConfig(),
+		setCodemodeEnabled: ({ enabled }) => backend.setCodemodeEnabled(enabled),
+		setCodemodeOnly: ({ only }) => backend.setCodemodeOnly(only),
 		respondTrust: ({ requestId, answer }) => backend.respondTrust(requestId, answer),
 	});
 }

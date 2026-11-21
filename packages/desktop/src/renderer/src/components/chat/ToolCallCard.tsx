@@ -83,6 +83,19 @@ const rowResizeObserver =
 				}
 			});
 
+/** 折叠摘要上限：脚本正文（codemode.code）绝不能整段显示，只取第一行 */
+const SUMMARY_LIMIT = 120;
+
+function firstLine(value: string): string {
+	const line = value.split(/\r?\n/, 1)[0] ?? "";
+	return line.length > SUMMARY_LIMIT ? `${line.slice(0, SUMMARY_LIMIT)}…` : line;
+}
+
+/** 流式参数里的 `\n` / `\"` 还是转义态：解码后才能按「第一行」截断 */
+function unescapeJsonString(value: string): string {
+	return value.replace(/\\r/g, "").replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
 export function summarizeArgs(args: string): string {
 	if (!args || args === "{}") return "";
 	try {
@@ -93,14 +106,23 @@ export function summarizeArgs(args: string): string {
 		if (typeof filePath === "string") return filePath;
 		const url = parsed.url;
 		if (typeof url === "string") return url;
+		// tool_search 的 query 与 codemode 的 code：都只取首行，避免长脚本拉开摡叠行
+		const query = parsed.query;
+		if (typeof query === "string") return firstLine(query);
+		const code = parsed.code;
+		if (typeof code === "string") return firstLine(code);
 	} catch {
 		// 流式中的不完整 JSON：按优先级正则抽取字段值（值允许未闭合，随流式增长原地更新）
 		for (const key of ["command", "cmd", "filePath", "path", "file", "url"]) {
 			const value = args.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`))?.[1];
 			if (value) return value;
 		}
+		for (const key of ["query", "code"]) {
+			const value = args.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`))?.[1];
+			if (value) return firstLine(unescapeJsonString(value));
+		}
 	}
-	const trimmed = args.slice(0, 120);
+	const trimmed = args.slice(0, SUMMARY_LIMIT);
 	return trimmed.length < args.length ? `${trimmed}…` : trimmed;
 }
 

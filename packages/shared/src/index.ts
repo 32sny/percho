@@ -8,6 +8,7 @@ export * from "./ipc-channels";
 export * from "./lan";
 export * from "./marquee-motion";
 export * from "./mcp";
+export * from "./mcp-runtime";
 export * from "./message-control";
 export * from "./model-visibility";
 export * from "./packages";

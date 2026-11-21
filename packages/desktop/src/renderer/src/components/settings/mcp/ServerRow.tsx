@@ -1,10 +1,7 @@
-import type { McpServerView } from "@percho/shared";
+import { isMcpReconnectable, type McpServerView, parseMcpToolName } from "@percho/shared";
 import { useState } from "react";
-import { getPi } from "../../../api";
 import { useT } from "../../../i18n";
-import { useMcpStore } from "../../../stores/mcp";
-import { useSessionsStore } from "../../../stores/sessions";
-import { selectTranscript, useTranscriptStore } from "../../../stores/transcript";
+import { mcpActionKey, useMcpStore } from "../../../stores/mcp";
 import { ChevronRightIcon } from "../../icons";
 import { serverState, toolsSummary, transportSummary } from "./pure";
 
@@ -13,9 +10,9 @@ function StateDot({ state }: { state: ReturnType<typeof serverState> }) {
 	const cls =
 		state === "connected"
 			? "bg-emerald-500"
-			: state === "error"
+			: state === "error" || state === "failed"
 				? "bg-err"
-				: state === "disabled"
+				: state === "disabled" || state === "overridden"
 					? "bg-ink-faint/60"
 					: "border-[1.5px] border-ink-faint bg-transparent";
 	return <span className={`mt-[3px] h-[7px] w-[7px] shrink-0 rounded-full ${cls}`} />;
@@ -25,18 +22,50 @@ function StateDot({ state }: { state: ReturnType<typeof serverState> }) {
 function StateWord({ state }: { state: ReturnType<typeof serverState> }) {
 	const t = useT();
 	if (state === "connected") return null;
-	const key =
-		state === "needs-auth"
-			? "settings.mcp.state.needAuth"
-			: state === "error"
-				? "settings.mcp.state.error"
-				: state === "disabled"
-					? "settings.mcp.state.disabled"
-					: "settings.mcp.state.idle";
+	const keys = {
+		"needs-auth": "settings.mcp.state.needAuth",
+		error: "settings.mcp.state.error",
+		idle: "settings.mcp.state.idle",
+		disabled: "settings.mcp.state.disabled",
+		"not-started": "settings.mcp.state.not-started",
+		unknown: "settings.mcp.state.unknown",
+		connecting: "settings.mcp.state.connecting",
+		disconnected: "settings.mcp.state.disconnected",
+		failed: "settings.mcp.state.failed",
+		closed: "settings.mcp.state.closed",
+		overridden: "settings.mcp.state.overridden",
+	} as const;
 	return (
-		<span className={`shrink-0 text-ui-11 ${state === "error" ? "text-err" : "text-ink-faint"}`}>
-			{t(key)}
+		<span
+			className={`shrink-0 text-ui-11 ${
+				state === "error" || state === "failed" ? "text-err" : "text-ink-faint"
+			}`}
+		>
+			{t(keys[state])}
 		</span>
+	);
+}
+
+/** 工具清单展开区：名称 + 只读/会确认（工具数已说明，这里不再重复） */
+function ToolsPanel({ tools, readOnly }: { tools: McpServerView["tools"]; readOnly: number }) {
+	const t = useT();
+	return (
+		<div className="mb-1 ml-[15px] mt-2 rounded-[10px] bg-hover px-3 py-2.5">
+			<div className="mb-1.5 flex flex-wrap gap-x-2 text-ui-11 text-ink-faint">
+				<span>{t("settings.mcp.toolsTitle", { count: tools.length })}</span>
+				{readOnly > 0 && <span>{t("settings.mcp.toolsReadOnly", { count: readOnly })}</span>}
+			</div>
+			<div className="flex flex-col gap-1">
+				{tools.map((tool) => (
+					<div key={tool.name} className="flex items-center gap-2 font-mono text-ui-115 text-ink-dim">
+						<span className="text-ink-2">{parseMcpToolName(tool.name)?.tool ?? tool.name}</span>
+						<span className="font-sans text-ui-11 text-ink-faint">
+							{tool.readOnly ? t("settings.mcp.toolReadOnly") : t("settings.mcp.toolWrite")}
+						</span>
+					</div>
+				))}
+			</div>
+		</div>
 	);
 }
 
@@ -50,18 +79,34 @@ export function ServerRow({
 	onEdit: (server: McpServerView) => void;
 }) {
 	const t = useT();
-	const { upsert, remove, reload } = useMcpStore();
+	const { upsert, remove, reconnect, login, config, selectedInstanceId, reconnectActions } = useMcpStore();
 	const [toolsOpen, setToolsOpen] = useState(false);
 	const [reasonOpen, setReasonOpen] = useState(false);
 	const [confirming, setConfirming] = useState(false);
 	const [loginWaiting, setLoginWaiting] = useState(false);
+	const [loginError, setLoginError] = useState<string>();
+	const [saveError, setSaveError] = useState<string>();
 	const state = serverState(server);
 	const summary = toolsSummary(server.tools);
 	const command = transportSummary(server);
-	const activeId = useSessionsStore((s) => s.activeSessionId);
-	const running = useTranscriptStore((s) =>
-		activeId ? selectTranscript(s, activeId).phase === "streaming" : false,
+	const configuredEnabled = server.configuredEnabled ?? server.enabled;
+	/** 只有能对上「配置行 ←→ 运行态 server」时才允许重连/登录（项目覆盖项没有自己的运行目标） */
+	const instance = config?.runtime?.instances.find(
+		(item) => item.instanceId === selectedInstanceId && item.cwd === config.contextCwd,
 	);
+	const path = server.source === "user" ? config?.globalPath : config?.projectPath;
+	const live =
+		instance?.available && path
+			? instance.servers.find((item) => item.name === server.name && (item.override ?? item.source) === path)
+			: undefined;
+	const ownsLiveTarget = !!live && state !== "overridden";
+	const action =
+		ownsLiveTarget && selectedInstanceId
+			? reconnectActions[mcpActionKey(selectedInstanceId, server.name)]
+			: undefined;
+	const reconnecting = action?.pending ?? false;
+	const reconnectError = action?.error;
+	const canReconnect = ownsLiveTarget && isMcpReconnectable(live?.state);
 	const transportWord =
 		server.transport.kind === "stdio"
 			? t("settings.mcp.transportStdio")
@@ -92,13 +137,17 @@ export function ServerRow({
 				</span>
 				<span className="shrink-0 whitespace-nowrap text-ui-11 text-ink-faint">{transportWord}</span>
 				<StateWord state={state} />
+				{/* 配置已落盘但连接还是旧的：把「待重启」放在状态词后面，避免误读成连不上 */}
+				{configuredEnabled && state === "disabled" && config?.restartRequired && (
+					<span className="shrink-0 text-ui-11 text-ink-faint">{t("settings.mcp.waitingForRestart")}</span>
+				)}
 				<span className="flex-1" />
 				{summary && (
 					<button type="button" className={`${ghost} shrink-0`} onClick={() => setToolsOpen((v) => !v)}>
 						{t("settings.mcp.toolsCount", { count: summary.count })}
 					</button>
 				)}
-				{state === "error" && (
+				{(state === "error" || state === "failed" || (state === "disconnected" && server.error)) && (
 					<button
 						type="button"
 						className={`${ghostStrong} flex shrink-0 items-center gap-1 whitespace-nowrap`}
@@ -115,31 +164,47 @@ export function ServerRow({
 						type="button"
 						className={`${ghostStrong} shrink-0`}
 						onClick={() => {
-							// 真实动作：官方 notify 给了授权页 URL 就打开系统浏览器；没有就展开说明文字
-							if (server.authUrl) void getPi().openExternal({ url: server.authUrl });
 							setLoginWaiting(true);
+							setLoginError(undefined);
+							void login(server.name)
+								.catch((error: unknown) => {
+									setLoginError(error instanceof Error ? error.message : String(error));
+								})
+								.finally(() => setLoginWaiting(false));
 						}}
 					>
 						{t("settings.mcp.login")}
 					</button>
 				)}
-				{/* hover / 键盘聚焦才显形的操作组 */}
-				<span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
-					{server.enabled ? (
+				{/* hover / 键盘聚焦才显形的操作组；重连中保持可见（否则按钮会闪掉） */}
+				<span
+					className={`flex shrink-0 items-center gap-0.5 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100 ${
+						reconnecting ? "opacity-100" : "opacity-0"
+					}`}
+				>
+					{canReconnect || reconnecting ? (
 						<button
 							type="button"
 							className={ghost}
-							disabled={running}
-							title={running ? t("settings.mcp.reconnectRunning") : undefined}
-							onClick={() => void reload(cwd)}
+							disabled={!canReconnect || reconnecting}
+							onClick={() => {
+								// RPC 错误由 store 按目标实例保留，行内展示。
+								void reconnect(server.name).catch(() => {});
+							}}
 						>
-							{t("settings.mcp.reconnect")}
+							{t(reconnecting ? "settings.mcp.reconnecting" : "settings.mcp.reconnect")}
 						</button>
-					) : (
+					) : null}
+					{!configuredEnabled && (
 						<button
 							type="button"
 							className={ghost}
-							onClick={() => void upsert({ scope: server.source, cwd, name: server.name, enabled: true })}
+							onClick={() => {
+								setSaveError(undefined);
+								void upsert({ scope: server.source, cwd, name: server.name, enabled: true }).catch(
+									(error: unknown) => setSaveError(error instanceof Error ? error.message : String(error)),
+								);
+							}}
 						>
 							{t("settings.mcp.enable")}
 						</button>
@@ -162,36 +227,11 @@ export function ServerRow({
 					{command}
 				</p>
 			)}
-			{(server.description || (summary && summary.readOnly > 0) || (running && server.enabled)) && (
-				<div className="mt-0.5 flex items-center gap-2 pl-[15px] text-ui-11 text-ink-faint">
-					{server.description && <span className="truncate">{server.description}</span>}
-					{server.description && summary && summary.readOnly > 0 && (
-						<span className="text-ink-faint/60">·</span>
-					)}
-					{summary && summary.readOnly > 0 && (
-						<span>{t("settings.mcp.toolsReadOnly", { count: summary.readOnly })}</span>
-					)}
-					{running && server.enabled && <span>{t("settings.mcp.reconnectDisabledHint")}</span>}
-				</div>
+			{server.description && (
+				<p className="mt-0.5 truncate pl-[15px] text-ui-11 text-ink-faint">{server.description}</p>
 			)}
 
-			{toolsOpen && summary && (
-				<div className="mb-1 ml-[15px] mt-2 rounded-[10px] bg-hover px-3 py-2.5">
-					<div className="mb-1.5 text-ui-11 text-ink-faint">
-						{t("settings.mcp.toolsTitle", { count: summary.count })}
-					</div>
-					<div className="flex flex-col gap-1">
-						{server.tools.map((tool) => (
-							<div key={tool.name} className="flex items-center gap-2 font-mono text-ui-115 text-ink-dim">
-								<span className="text-ink-2">{tool.name.replace(/^mcp__[^_]+__/, "")}</span>
-								<span className="font-sans text-ui-11 text-ink-faint">
-									{tool.readOnly ? t("settings.mcp.toolReadOnly") : t("settings.mcp.toolWrite")}
-								</span>
-							</div>
-						))}
-					</div>
-				</div>
-			)}
+			{toolsOpen && summary && <ToolsPanel tools={server.tools} readOnly={summary.readOnly} />}
 
 			{reasonOpen && server.error && (
 				<div className="mb-1 ml-[15px] mt-2 rounded-[10px] bg-hover px-3 py-2.5">
@@ -201,24 +241,12 @@ export function ServerRow({
 				</div>
 			)}
 
-			{(loginWaiting || (state === "needs-auth" && reasonOpen)) && (
-				<div className="mb-1 ml-[15px] mt-2 flex items-start gap-2 rounded-[10px] bg-hover px-3 py-2.5 text-ui-115 text-ink-dim">
-					{loginWaiting && (
-						<span className="mt-[3px] h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-ink-faint border-t-ink-2" />
-					)}
-					<div className="flex-1 leading-relaxed">
-						{server.authUrl ? (
-							<>
-								<span>{t("settings.mcp.loginWaiting")}</span>
-								<p className="mt-1 break-all font-mono text-ui-11 text-ink-faint">{server.authUrl}</p>
-							</>
-						) : (
-							<span>{t("settings.mcp.loginManual")}</span>
-						)}
-					</div>
-					<button type="button" className={ghost} onClick={() => setLoginWaiting(false)}>
-						{t("settings.mcp.cancel")}
-					</button>
+			{reconnectError && <p className="mt-2 pl-[15px] text-ui-115 text-err">{reconnectError}</p>}
+			{saveError && <p className="mt-2 pl-[15px] text-ui-115 text-err">{saveError}</p>}
+
+			{(loginWaiting || loginError) && (
+				<div className="mb-1 ml-[15px] mt-2 rounded-[10px] bg-hover px-3 py-2.5 text-ui-115 text-ink-dim">
+					{loginError ?? t("settings.mcp.loginWaiting")}
 				</div>
 			)}
 
@@ -235,7 +263,10 @@ export function ServerRow({
 						className="rounded-full px-2 py-0.5 text-ui-11 text-err transition-colors hover:bg-hover"
 						onClick={() => {
 							setConfirming(false);
-							void remove({ scope: server.source, cwd, name: server.name });
+							setSaveError(undefined);
+							void remove({ scope: server.source, cwd, name: server.name }).catch((error: unknown) =>
+								setSaveError(error instanceof Error ? error.message : String(error)),
+							);
 						}}
 					>
 						{t("settings.mcp.deleteNow")}

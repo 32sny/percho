@@ -370,14 +370,33 @@ describe("permission-gate 扩展", () => {
 		expect(confirms).toHaveLength(0);
 	});
 
-	it("codemode 默认动作是 ask（1.0.4 新增内置扩展的默认规则）", async () => {
+	it("codemode 与 tool_search 默认动作是 allow（内部工具仍逐个走权限门控，显式规则可覆盖）", async () => {
 		const dir = makeAgentDir();
 		const { call, confirms } = makeHarness(dir, true, {
-			tools: [toolInfo("codemode", { path: "builtin:codemode" })],
+			tools: [
+				toolInfo("codemode", { path: "builtin:codemode" }),
+				toolInfo("tool_search", { path: "builtin:tool-search" }),
+			],
 		});
 
 		await expect(call("codemode", { code: "1" })).resolves.toBeUndefined();
-		expect(confirms).toHaveLength(1);
+		await expect(call("tool_search", { query: "docs" })).resolves.toBeUndefined();
+		expect(confirms).toHaveLength(0);
+
+		const strictDir = makeAgentDir();
+		writeFileSync(
+			join(strictDir, "permissions.json"),
+			JSON.stringify({ rules: { codemode: "ask", tool_search: "deny" } }),
+		);
+		const strict = makeHarness(strictDir, true, {
+			tools: [
+				toolInfo("codemode", { path: "builtin:codemode" }),
+				toolInfo("tool_search", { path: "builtin:tool-search" }),
+			],
+		});
+		await expect(strict.call("codemode", { code: "1" })).resolves.toBeUndefined();
+		await expect(strict.call("tool_search", { query: "docs" })).resolves.toMatchObject({ block: true });
+		expect(strict.confirms).toHaveLength(1);
 	});
 
 	it("MCP 工具也吃显式规则：规则 allow 时不弹窗、规则 deny 时直接 block", async () => {

@@ -12,6 +12,9 @@ const piMock = vi.hoisted(() => ({
 	listSubagents: vi.fn(() => Promise.resolve([])),
 	getContextManagerConfig: vi.fn(() => Promise.resolve({ mode: "evaporation" })),
 	setContextManagerMode: vi.fn(() => Promise.resolve()),
+	getCodemodeConfig: vi.fn(() => Promise.resolve({ enabled: true, only: false })),
+	setCodemodeEnabled: vi.fn(() => Promise.resolve()),
+	setCodemodeOnly: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("../api", () => ({ getPi: () => piMock }));
 
@@ -20,6 +23,8 @@ import { useSettingsStore } from "./settings";
 function resetStore() {
 	useSettingsStore.setState({
 		contextManagerMode: null,
+		codemodeEnabled: null,
+		codemodeOnly: null,
 		error: null,
 		loading: false,
 	});
@@ -57,5 +62,47 @@ describe("settings store：contextManagerMode（乐观更新 + 失败回滚）",
 		await useSettingsStore.getState().setContextManagerMode("off");
 		expect(useSettingsStore.getState().contextManagerMode).toBe("evaporation");
 		expect(useSettingsStore.getState().error).toBe("disk full");
+	});
+});
+
+describe("settings store：Code Mode 开关（乐观更新 + 失败回滚）", () => {
+	it("加载：getCodemodeConfig 的 enabled/only 一起进 store", async () => {
+		piMock.getCodemodeConfig.mockResolvedValue({ enabled: true, only: true });
+		await useSettingsStore.getState().refresh();
+		expect(useSettingsStore.getState().codemodeEnabled).toBe(true);
+		expect(useSettingsStore.getState().codemodeOnly).toBe(true);
+	});
+
+	it("加载失败不置值（保持 null，静默）", async () => {
+		piMock.getCodemodeConfig.mockRejectedValue(new Error("boom"));
+		await useSettingsStore.getState().refresh();
+		expect(useSettingsStore.getState().codemodeEnabled).toBeNull();
+		expect(useSettingsStore.getState().codemodeOnly).toBeNull();
+	});
+
+	it("切换成功：写入对应的 enabled / only", async () => {
+		useSettingsStore.setState({ codemodeEnabled: true, codemodeOnly: false });
+		await useSettingsStore.getState().setCodemodeEnabled(false);
+		expect(piMock.setCodemodeEnabled).toHaveBeenCalledWith({ enabled: false });
+		expect(useSettingsStore.getState().codemodeEnabled).toBe(false);
+
+		await useSettingsStore.getState().setCodemodeOnly(true);
+		expect(piMock.setCodemodeOnly).toHaveBeenCalledWith({ only: true });
+		expect(useSettingsStore.getState().codemodeOnly).toBe(true);
+		expect(useSettingsStore.getState().error).toBeNull();
+	});
+
+	it("切换失败：分别回滚到上一状态并记录错误", async () => {
+		useSettingsStore.setState({ codemodeEnabled: true, codemodeOnly: false });
+		piMock.setCodemodeEnabled.mockRejectedValueOnce(new Error("disk full"));
+		await useSettingsStore.getState().setCodemodeEnabled(false);
+		expect(useSettingsStore.getState().codemodeEnabled).toBe(true);
+		expect(useSettingsStore.getState().error).toBe("disk full");
+
+		useSettingsStore.setState({ codemodeOnly: false, error: null });
+		piMock.setCodemodeOnly.mockRejectedValueOnce(new Error("read-only fs"));
+		await useSettingsStore.getState().setCodemodeOnly(true);
+		expect(useSettingsStore.getState().codemodeOnly).toBe(false);
+		expect(useSettingsStore.getState().error).toBe("read-only fs");
 	});
 });

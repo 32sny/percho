@@ -37,6 +37,16 @@
 - 压缩来源标记覆盖配对的开始/结束事件，不在更早的中间事件清理，否则结束文案会把自动覆盖成手动。
 - 蒸发与压缩护栏各自拥有配置与纯函数核心；调参使用 `scripts/replay-evaporation.mts` / `replay-compaction-bound.mts`，不要复制一份近似线上算法来证明线上正确。
 
+## MCP 运行态与 Code Mode（1.5.1 本地适配）
+
+Percho 继续使用 SDK 1.5.1 的 `createMcpExtension`、`createCodemodeExtension` 与 `createToolSearchExtension`；它们负责发现和实际调用，宿主只做配置、权限、状态投影与 UI。后端依赖精确锁定 `@earendil-works/pi-mcp@1.5.1`，避免安装树意外漂移。
+
+- SDK MCP observer 通过 `onStatus` 推送 `starting` / `running` / `closed` 快照，细化每台 server 的 `connecting`、`connected`、`failed`、`disconnected`、`needs-auth` 等状态、工具清单和诊断。错误回调不得破坏连接生命周期，工具库存也不能替代连接状态。
+- `McpRuntimeStore` 按每次 SDK 扩展装载的 owner 绑定一个 session 实例；完整事件带 `epoch + revision + instances`，实例包含 `instanceId/sessionId/cwd`。关闭时撤销实例，忽略已失效 observer 的迟到快照。renderer 以配置文件来源路径和选定实例投影状态，不从 `mcp__...` 工具名猜 server 身份。
+- MCP 配置增删改/导入只原子写入配置，不重载或中断已有会话；成功后置 `restartRequired`，需要重启 Percho 生效。需要即时恢复某台连接时，调用 SDK 对所选实例执行原生 `/mcp reconnect <name>`；不发模型请求、不重载整会话。OAuth 登录同样走 SDK `/mcp login`。
+- MCP exposure 只接受 SDK 定义的 `deferred`、`codemode`、`direct`、`hidden`。非法旧值在面板保留并诊断，不静默保存为其他模式。
+- Code Mode 默认启用；其权限门默认 `allow`，因为它是代码执行容器，但执行脚本内每个实际工具仍各自通过原有权限规则和项目边界。`tool_search` 默认放行只允许搜索/激活工具声明，不等价于授权调用 MCP 或其他工具。用户可独立关闭 Code Mode 或启用独占模式；这两项配置不覆盖用户已有的默认工具选择。
+- SDK Patch 除原有 Percho 自研修改外，额外导出 MCP 状态快照与配置校验入口；`patches/@earendil-works+pi-coding-agent+1.5.1.patch` 是源码真源，node_modules 仅是 patch-package 生成结果。
 ## SDK 升级清单
 
 > 💡 **【核心结论 / 决策要点】** 本节是升级要点速查；完整的阶段门、分片测试、命令模板与切换判定见 [SDK 升级迁移与验收手册](SDK-UPGRADE-PLAYBOOK.md)（沉淀自 1.0.4 → 1.4.0 → 1.5.1 实践）。

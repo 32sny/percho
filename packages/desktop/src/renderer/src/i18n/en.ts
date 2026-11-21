@@ -338,6 +338,8 @@ export const en: Messages = {
 			glob: "Glob",
 			grep: "Grep",
 			webfetch: "Webfetch",
+			tool_search: "Search tools",
+			codemode: "Run script",
 			show_image: "Show_image",
 			todo: "Todo",
 			subagent: "Subagent",
@@ -508,6 +510,12 @@ export const en: Messages = {
 			off: "Disables all context management: no active compression/evaporation; the SDK's native compaction kicks in near the window limit. Long sessions may pause for compaction.",
 		},
 		channelWatch: "Cross-session channel collaboration (channel-watch)",
+		codemode: "Code Mode",
+		codemodeHint:
+			"Lets the model run multi-step work as one codemode script; turning it off hides the tool. Applies to new sessions and sessions reopened after closing.",
+		codemodeOnly: "Code Mode only",
+		codemodeOnlyHint:
+			"Regular tools stay out of the model tool list and are only reachable from codemode scripts (strict context saving; the model must write a script first). Applies to new sessions and sessions reopened after closing.",
 		channelWatchHint:
 			"After a session subscribes to a channel it watches .local/agent-work/channel/<topic>/ for file updates; writes from another session wake this session to pick them up (per the HANDOFF.md protocol). Subscriptions persist via appendEntry and restore on session reopen; built-in loop protection. On by default, fully effective for trusted projects.",
 		topBar: "Show sessions in the top bar",
@@ -681,12 +689,24 @@ export const en: Messages = {
 			title: "MCP",
 			hint: "The built-in mcp extension handles connections; this edits mcp.json only (env vars are expanded by the official extension)",
 			summary: "{connected} connected · {total} server(s) · {tools} tool(s)",
+			context: "Project directory",
+			sessionLabel: "Session",
+			chooseSession: "Choose a session",
+			instanceEnded: "The selected session instance ended — choose another",
+			noInstance: "No running instance for this project yet",
 			state: {
 				connected: "Connected",
 				idle: "Not connected",
 				disabled: "Disabled",
 				error: "Failed",
 				needAuth: "Sign-in required",
+				"not-started": "Not started",
+				unknown: "Unknown",
+				connecting: "Connecting",
+				disconnected: "Disconnected",
+				failed: "Failed",
+				closed: "Closed",
+				overridden: "Overridden by project config",
 			},
 			viewReason: "Why?",
 			hideReason: "Hide",
@@ -694,10 +714,7 @@ export const en: Messages = {
 			reasonHint:
 				"Common causes: the command is not an absolute path (a GUI process has a narrower PATH), wrong args/package, or the server needs authorization.",
 			login: "Sign in",
-			loginWaiting:
-				"Authorization page opened in your browser — it takes effect once authorized (the official extension handles the callback prompt)",
-			loginManual:
-				"The official extension did not provide an authorization URL; a remote server may need an interactive sign-in — follow the official notification.",
+			loginWaiting: "Sign-in started: it takes effect once authorization finishes in your browser.",
 			toolReadOnly: "read-only",
 			toolWrite: "write · asks first",
 			toolsCount: "{count} tool(s)",
@@ -706,12 +723,13 @@ export const en: Messages = {
 			deleteAsk: "Remove {name}? The mcp.json entry is removed immediately.",
 			deleteNow: "Remove",
 			enable: "Enable",
-			reconnectDisabledHint: "Reconnect disabled (this session is running)",
-			configFiles: "Config files",
-			pathGlobal: "Global",
-			pathProject: "Project",
-			reloadExplain:
-				"Reconnect reloads sessions so the official mcp extension re-reads the config; sessions that are running are skipped (so the current turn is not interrupted) and pick it up when idle.",
+			restartRequired:
+				"Configuration saved — restart Percho to apply; existing connections stay as they are.",
+			waitingForRestart: "Restart pending",
+			reconnecting: "Reconnecting…",
+			details: "Details",
+			pathGlobal: "Global config",
+			pathProject: "Project config",
 			searchPlaceholder: "Search servers",
 			emptyTitle: "No MCP servers yet",
 			emptyDesc:
@@ -719,18 +737,16 @@ export const en: Messages = {
 			pasteJson: "Paste JSON config",
 			pasteJsonTitle: "Paste JSON config",
 			pasteJsonHint:
-				'Accepts a {"mcpServers": {…}} snippet or plain {"<name>": {command|url}}; only command (or url) is required, the rest gets defaults.',
+				'Accepts a {"mcpServers": {…}} snippet or plain {"<name>": {command|url}}; imported into the global mcp.json and applied after restarting Percho.',
 			pasteJsonSave: "Import",
 			groupGlobal: "Global",
 			groupProject: "This project",
 			projectUntrusted:
 				"Project is not trusted, so .pi/mcp.json is not read; trust the project to manage its servers here.",
 			projectNeedsCwd: "No open session: project-level config is not editable.",
-			runningNotice:
-				"This session is running: reconnecting would interrupt it. Saved changes take effect when idle — or reconnect after the turn ends.",
-			gotIt: "Got it",
 			addServer: "Add server",
 			editServer: "Edit server",
+			back: "Back",
 			name: "Name",
 			nameHint: "Tool-name prefix: mcp__<name>__<tool> (letters, digits, . _ -)",
 			scope: "Write to",
@@ -745,12 +761,12 @@ export const en: Messages = {
 			args: "Args",
 			url: "URL",
 			description: "Description",
+			inheritedSettings: "Connection settings inherited from the global config (read-only)",
 			exposure: "Tool exposure",
 			exposureShort: {
 				deferred: "Deferred",
 				codemode: "Scripts only",
 				direct: "Direct",
-				"model-only": "Model only",
 				hidden: "Hidden",
 			},
 			exposureExplain: {
@@ -759,21 +775,18 @@ export const en: Messages = {
 				codemode:
 					"Scripts only (codemode): callable from codemode scripts, invisible to the model (good for bulky tools).",
 				direct: "Direct: tools go straight into the model tool list — simplest, costs the most context.",
-				"model-only": "Model only: visible to the model, not callable from scripts.",
 				hidden: "Hidden: registered but exposed to neither model nor scripts (temporarily disable a server).",
 			},
+			exposureInvalid:
+				"The stored exposure is not recognized (the raw value is kept); pick one of the four to replace it.",
 			advancedHint:
-				"Need env vars, working directory and other advanced options? Edit mcp.json directly (paths are under Config files in the footer).",
+				"Need env vars, working directory and other advanced options? Edit mcp.json directly; expand Details in the list to see the config paths.",
 			needName: "Server name is required",
 			needTransport: "Fill command (stdio) or url (remote)",
 			loading: "Loading…",
 			cancel: "Cancel",
 			save: "Save",
-			reloadApplied: "Reconnected {count} idle session(s)",
-			reloadSkipped:
-				"Saved: {count} running session(s) were not reconnected (takes effect when idle); {reloaded} reconnected",
 			reconnect: "Reconnect",
-			reconnectRunning: "This session is running — reconnecting would interrupt it; retry when the turn ends",
 			edit: "Edit",
 			remove: "Remove",
 			enabled: "Enabled",
@@ -781,9 +794,6 @@ export const en: Messages = {
 			transportStdio: "stdio",
 			transportUrl: "Remote",
 			transportUnknown: "Incomplete config",
-			noActiveSession:
-				"No open session: connection state and tool inventory are reported from sessions (open one or hit Reconnect).",
-			reloadFailed: "Reconnect failed",
 		},
 		extensions: {
 			title: "Extensions",

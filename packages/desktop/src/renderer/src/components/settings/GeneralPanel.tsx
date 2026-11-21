@@ -15,6 +15,10 @@ export function GeneralPanel() {
 	const setContextManagerMode = useSettingsStore((s) => s.setContextManagerMode);
 	const channelWatchEnabled = useSettingsStore((s) => s.channelWatchEnabled);
 	const setChannelWatchEnabled = useSettingsStore((s) => s.setChannelWatchEnabled);
+	const codemodeEnabled = useSettingsStore((s) => s.codemodeEnabled);
+	const setCodemodeEnabled = useSettingsStore((s) => s.setCodemodeEnabled);
+	const codemodeOnly = useSettingsStore((s) => s.codemodeOnly);
+	const setCodemodeOnly = useSettingsStore((s) => s.setCodemodeOnly);
 
 	return (
 		<div className="flex flex-col gap-6">
@@ -62,6 +66,28 @@ export function GeneralPanel() {
 				<p className="mt-0.5 text-ui-11 leading-relaxed text-ink-faint">
 					{contextManagerMode ? t(`settings.contextManagerHint.${contextManagerMode}`) : ""}
 				</p>
+			</div>
+			<div>
+				<div className="flex items-center justify-between gap-4">
+					<h3 className="text-ui-13 font-medium text-ink">{t("settings.codemode")}</h3>
+					<Switch
+						checked={codemodeEnabled === true}
+						disabled={codemodeEnabled === null}
+						onCheckedChange={(enabled) => void setCodemodeEnabled(enabled)}
+					/>
+				</div>
+				<p className="mt-0.5 text-ui-11 leading-relaxed text-ink-faint">{t("settings.codemodeHint")}</p>
+			</div>
+			<div>
+				<div className="flex items-center justify-between gap-4">
+					<h3 className="text-ui-13 font-medium text-ink">{t("settings.codemodeOnly")}</h3>
+					<Switch
+						checked={codemodeOnly === true}
+						disabled={codemodeEnabled !== true || codemodeOnly === null}
+						onCheckedChange={(only) => void setCodemodeOnly(only)}
+					/>
+				</div>
+				<p className="mt-0.5 text-ui-11 leading-relaxed text-ink-faint">{t("settings.codemodeOnlyHint")}</p>
 			</div>
 			<div>
 				<div className="flex items-center justify-between gap-4">

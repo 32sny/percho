@@ -12,6 +12,8 @@ const BUILTIN_TOOL_NAMES = new Set<string>([
 	"glob",
 	"grep",
 	"webfetch",
+	"tool_search",
+	"codemode",
 	"show_image",
 	"todo",
 	"subagent",

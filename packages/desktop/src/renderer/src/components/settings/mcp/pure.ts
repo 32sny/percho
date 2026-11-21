@@ -1,21 +1,21 @@
-import type { McpServerView, McpToolView, McpUpsertInput } from "@percho/shared";
+import type { McpServerView, McpToolView } from "@percho/shared";
 
 /** 行的状态（设计稿 §3 状态矩阵）—— 只用一枚 7px 圆点表达，不叠色块 */
-export type ServerState = "connected" | "idle" | "disabled" | "error" | "needs-auth";
+export type ServerState = NonNullable<McpServerView["state"]> | "idle" | "error";
 
 /**
  * 状态判定（面板的核心语义，纯函数便于单测）：
- * - `error` / `needsAuth` 来自官方 notify（后端解析后随视图带过来）；
- * - `enabled:false` → 停用（哪怕之前连过）；
- * - 有工具 → 已连上；否则 = 未连上（没开会话 / 正在连 / deferred 未激活，用户视角一样：暂时没有可用工具）。
+ * - **连接状态只看显式 `state`**，不再从工具数量推断（deferred 未激活也报告 not-started/unknown）；
+ * - 旧配置夹具缺 `state` 时兼容 `enabled` / `needsAuth` / `error`，再否则 "idle"。
  */
 export function serverState(
-	server: Pick<McpServerView, "enabled" | "tools" | "error" | "needsAuth">,
+	server: Pick<McpServerView, "enabled" | "tools" | "error" | "needsAuth" | "state">,
 ): ServerState {
+	if (server.state) return server.state;
 	if (!server.enabled) return "disabled";
 	if (server.needsAuth) return "needs-auth";
 	if (server.error) return "error";
-	return server.tools.length > 0 ? "connected" : "idle";
+	return "idle";
 }
 
 /** 工具摘要：「N 个工具 · 只读 M 个」；无工具给 null（交给状态词） */
@@ -63,44 +63,4 @@ export const SEARCH_THRESHOLD = 8;
 /** 是否需要显示搜索框 */
 export function showSearch(servers: McpServerView[]): boolean {
 	return servers.length > SEARCH_THRESHOLD;
-}
-
-/** 解析粘进来的 `{ "mcpServers": { … } }` 片段 → 一条可保存的输入（设计稿决策点 8） */
-export function parsePastedServers(json: string): { entries: McpUpsertInput[]; error?: string } {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(json);
-	} catch (err) {
-		return { entries: [], error: err instanceof Error ? err.message : String(err) };
-	}
-	const container =
-		parsed &&
-		typeof parsed === "object" &&
-		!Array.isArray(parsed) &&
-		(parsed as { mcpServers?: unknown }).mcpServers !== undefined
-			? (parsed as { mcpServers: unknown }).mcpServers
-			: parsed;
-	if (!container || typeof container !== "object" || Array.isArray(container)) {
-		return { entries: [], error: 'expecting { "<name>": { command | url } }' };
-	}
-	const entries: McpUpsertInput[] = [];
-	for (const [name, value] of Object.entries(container as Record<string, unknown>)) {
-		if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-		const entry = value as Record<string, unknown>;
-		const command = typeof entry.command === "string" ? entry.command : undefined;
-		const url = typeof entry.url === "string" ? entry.url : undefined;
-		if (!command && !url) continue;
-		entries.push({
-			scope: "user",
-			name,
-			command,
-			args: Array.isArray(entry.args)
-				? (entry.args as string[]).filter((a) => typeof a === "string")
-				: undefined,
-			url: command ? undefined : url,
-			description: typeof entry.description === "string" ? entry.description : undefined,
-		});
-	}
-	if (entries.length === 0) return { entries: [], error: "没解析出任何 server（需要 command 或 url）" };
-	return { entries };
 }

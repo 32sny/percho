@@ -45,7 +45,7 @@
 | 轮次计时、文件变更、diff 侧栏 | shared `transcript/turn-*`；renderer `components/chat/TurnDiffChip.tsx`、`components/diff/` |
 | 工具权限、项目边界、信任 | backend `permissions/`、`project/trust*.ts`、`project/workspace-store.ts` |
 | provider、登录、模型可见性、子代理偏好 | backend `settings/`；shared `model-visibility.ts`；renderer `stores/settings.ts`、`components/settings/providers/` |
-| MCP 配置、状态与重连 | backend `mcp/`、`tools/mcp-inventory.ts`；renderer `stores/mcp.ts`、`components/settings/mcp/` |
+| MCP 配置、状态与重连 | backend `mcp/config-store.ts`、`mcp/runtime-store.ts`、`mcp/config-validation.ts`；renderer `stores/mcp.ts`、`components/settings/mcp/` |
 | 内置工具、子代理、todo、频道协作 | backend `tools/`；子代理只读检视与返回关系在 renderer `stores/subagent-return.ts` |
 | 上下文蒸发、压缩护栏 | backend `tools/context-evaporation/`、`tools/compaction-guard/` |
 | 扩展选择题、输入、确认、通知 | backend `session/ui-context.ts`、`extension-dialog-host.ts`；renderer `components/session/InteractionDock.tsx` |

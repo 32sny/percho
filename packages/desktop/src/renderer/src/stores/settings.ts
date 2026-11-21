@@ -46,6 +46,10 @@ interface SettingsStore {
 	contextManagerMode: ContextManagerMode | null;
 	/** channel-watch 跨会话频道唤醒开关（null = 未加载） */
 	channelWatchEnabled: boolean | null;
+	/** Code Mode 启用开关（null = 未加载） */
+	codemodeEnabled: boolean | null;
+	/** Code Mode 独占模式（开启后普通工具不进模型工具表；null = 未加载） */
+	codemodeOnly: boolean | null;
 	/** 局域网观察服务运行状态（null = 未加载）。 */
 	lanStatus: LanStatus | null;
 	lanSaving: boolean;
@@ -85,6 +89,8 @@ interface SettingsStore {
 	setSubagentPreferBuiltin: (enabled: boolean) => Promise<void>;
 	setContextManagerMode: (mode: ContextManagerMode) => Promise<void>;
 	setChannelWatchEnabled: (enabled: boolean) => Promise<void>;
+	setCodemodeEnabled: (enabled: boolean) => Promise<void>;
+	setCodemodeOnly: (only: boolean) => Promise<void>;
 	refreshLanStatus: () => Promise<void>;
 	setLanEnabled: (enabled: boolean) => Promise<void>;
 	setLanRemoteControl: (enabled: boolean) => Promise<void>;
@@ -345,6 +351,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
 			.getChannelWatchConfig()
 			.then((cw) => set({ channelWatchEnabled: cw.enabled }))
 			.catch(() => {});
+		void getPi()
+			.getCodemodeConfig()
+			.then((codemode) => set({ codemodeEnabled: codemode.enabled, codemodeOnly: codemode.only }))
+			.catch(() => {});
 	};
 	const loadModelsData = async (mode: "local" | "mutation"): Promise<void> => {
 		void readPrefs().catch((error) =>
@@ -404,6 +414,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
 		permissionGateOff: null,
 		contextManagerMode: null,
 		channelWatchEnabled: null,
+		codemodeEnabled: null,
+		codemodeOnly: null,
 		lanStatus: null,
 		lanSaving: false,
 		skills: null,
@@ -479,6 +491,32 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
 				set({
 					channelWatchEnabled: previous,
 					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		},
+
+		setCodemodeEnabled: async (enabled) => {
+			const previous = get().codemodeEnabled;
+			set({ codemodeEnabled: enabled });
+			try {
+				await getPi().setCodemodeEnabled({ enabled });
+			} catch (error) {
+				set({
+					codemodeEnabled: previous,
+					error: errorMessage(error),
+				});
+			}
+		},
+
+		setCodemodeOnly: async (only) => {
+			const previous = get().codemodeOnly;
+			set({ codemodeOnly: only });
+			try {
+				await getPi().setCodemodeOnly({ only });
+			} catch (error) {
+				set({
+					codemodeOnly: previous,
+					error: errorMessage(error),
 				});
 			}
 		},

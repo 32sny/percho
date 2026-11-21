@@ -18,6 +18,11 @@ describe("工具显示名", () => {
 		expect(displayName("read", (key) => `[${key}]`)).toBe("[tool.names.read]");
 	});
 
+	it("tool_search / codemode 有中文名，且不当成未知扩展工具", () => {
+		expect(displayName("tool_search", (key) => `[${key}]`)).toBe("[tool.names.tool_search]");
+		expect(displayName("codemode", (key) => `[${key}]`)).toBe("[tool.names.codemode]");
+	});
+
 	it("MCP 工具保留命名空间：mcp__server__tool → server › tool", () => {
 		expect(displayName("mcp__demo__echo")).toBe("demo › echo");
 		// 不同 server 的同名工具不撞脸
