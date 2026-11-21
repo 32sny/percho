@@ -1,10 +1,12 @@
 import { parseSessionEntries, type SessionEntry, type SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	applySubagentNotification,
+	composerDocumentText,
 	extractSubagentRuns,
 	type ImageInput,
 	parseExpandedSkillInvocation,
 	parseSubagentNotification,
+	readComposerDocument,
 	type SessionMessage,
 	type SessionToolCall,
 } from "@percho/shared";
@@ -133,7 +135,12 @@ export function resolveRecallEntryId(
 			if (m.role !== "user") continue;
 			// timestamp 同时给出时必须相等（毫秒碰撞军见，双重锚定防同文消息错配）
 			if (ref.timestamp !== undefined && m.timestamp !== ref.timestamp) continue;
-			if (ref.text !== undefined && blockText(m.content) !== ref.text) continue;
+			if (ref.text !== undefined) {
+				const text = blockText(m.content);
+				const document = readComposerDocument(m);
+				const projected = document ? composerDocumentText(document) : undefined;
+				if (text !== ref.text && projected !== ref.text) continue;
+			}
 			return e.id;
 		}
 	}
@@ -278,10 +285,12 @@ export function toSessionMessages(rawMessages: readonly unknown[]): SessionMessa
 		}
 		if (raw.role === "user") {
 			const sourceText = blockText(raw.content);
-			const invocation = parseExpandedSkillInvocation(sourceText);
+			const document = readComposerDocument(raw);
+			const invocation = document ? null : parseExpandedSkillInvocation(sourceText);
 			out.push({
 				role: "user",
-				text: invocation ? (invocation.args ?? "") : sourceText,
+				text: document ? composerDocumentText(document) : invocation ? (invocation.args ?? "") : sourceText,
+				...(document ? { document, sourceText } : {}),
 				thinking: "",
 				tools: [],
 				images: blockImages(raw.content),

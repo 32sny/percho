@@ -1,3 +1,4 @@
+import { composerDocumentText, readComposerDocument } from "../composer-document";
 import { buildStreamGuardUiError, type UiError } from "../errors";
 import type { ImageInput, SessionEvent } from "../session";
 import { parseExpandedSkillInvocation } from "../skill-invocation";
@@ -364,7 +365,8 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 							.filter((c) => c.type === "text")
 							.map((c) => (c as { text: string }).text)
 							.join("");
-			const invocation = parseExpandedSkillInvocation(text);
+			const document = readComposerDocument(event.message);
+			const invocation = document ? null : parseExpandedSkillInvocation(text);
 			const images: ImageInput[] = Array.isArray(content)
 				? content
 						.filter((c) => c.type === "image" && (c as { data?: string }).data)
@@ -376,15 +378,17 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 			const message: UIMessage = {
 				kind: "user",
 				id: newMessageId(),
-				text: invocation ? (invocation.args ?? "") : text,
+				text: document ? composerDocumentText(document) : invocation ? (invocation.args ?? "") : text,
 				images,
 				timestamp: event.message.timestamp ?? Date.now(),
-				...(invocation
-					? {
-							skill: { name: invocation.name, args: invocation.args },
-							sourceText: text,
-						}
-					: {}),
+				...(document
+					? { document }
+					: invocation
+						? {
+								skill: { name: invocation.name, args: invocation.args },
+								sourceText: text,
+							}
+						: {}),
 			};
 			// 乐观回显认领：本次发送已本地插了一条同位置气泡（appendOptimisticUserMessage），
 			// 权威消息到达就**原位替换**（不追加）——气泡不闪、不重排，缩略图换成权威那版。

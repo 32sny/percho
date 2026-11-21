@@ -88,6 +88,9 @@ export const zh = {
 		thinkingDepth: "思考深度",
 		addImage: "添加图片",
 		imageUnsupported: "当前模型不支持图片输入，请移除图片或切换多模态模型",
+		filePathUnavailable: "无法读取该文件的本机路径，请从文件管理器重新复制或拖入",
+		legacyImageQueueBlocked: "此版本的宿主不支持安全排队图片。草稿已保留，请等当前任务结束再发送。",
+		legacyImageDraftRetained: "图片可能已排队或发出，草稿已保留。请确认发送状态后再试。",
 		removeImage: "移除图片",
 		removeAttachment: "移除引用",
 		attachmentSessionBadge: "会话",
@@ -145,9 +148,21 @@ export const zh = {
 		noMatch: "没有匹配的命令",
 		argPlaceholder: "输入参数…",
 		builtin: {
-			compact: { label: "压缩", description: "压缩会话上下文", argumentHint: "[关注重点]" },
-			name: { label: "重命名", description: "设置会话名称", argumentHint: "<名称>" },
-			export: { label: "导出", description: "导出会话（.html/.jsonl）", argumentHint: "[路径]" },
+			compact: {
+				label: "压缩",
+				description: "压缩会话上下文",
+				argumentHint: "[关注重点]",
+			},
+			name: {
+				label: "重命名",
+				description: "设置会话名称",
+				argumentHint: "<名称>",
+			},
+			export: {
+				label: "导出",
+				description: "导出会话（.html/.jsonl）",
+				argumentHint: "[路径]",
+			},
 			settings: { label: "设置", description: "打开设置" },
 		},
 		group: {
@@ -882,6 +897,9 @@ export const zh = {
 		pathRevealFailed: "无法在访达中显示",
 		pathCopyFailed: "复制路径失败",
 		pathCopied: "已复制绝对路径",
+	},
+	remote: {
+		localFileRejected: "远端会话不能直接引用本机文件，请改用图片或远端路径",
 	},
 };
 

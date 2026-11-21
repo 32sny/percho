@@ -62,11 +62,12 @@ export function messagesToUIMessages(messages: SessionMessage[]): UIMessage[] {
 			flushError();
 			const text = m.text;
 			const sourceText = m.sourceText;
-			if (m.skill || text || m.images.length > 0) {
+			if (m.skill || m.document || text || m.images.length > 0) {
 				ui.push({
 					kind: "user",
 					id,
 					text,
+					...(m.document ? { document: m.document } : {}),
 					images: m.images,
 					timestamp: m.timestamp,
 					entryId: m.entryId,

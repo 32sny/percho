@@ -1,4 +1,10 @@
-import { type SessionHoverLiveRun, type SessionHoverPreviewResult, safeUserFirstLine } from "@percho/shared";
+import {
+	composerDocumentText,
+	readComposerDocument,
+	type SessionHoverLiveRun,
+	type SessionHoverPreviewResult,
+	safeUserFirstLine,
+} from "@percho/shared";
 import {
 	FIRST_LINE_BYTES,
 	fail,
@@ -48,7 +54,8 @@ function firstQuestion(history: HoverHistorySnapshot): SessionHoverPreviewResult
 	const sessionId = history.sessionId;
 	for (const entry of history.branch) {
 		if (entry.type !== "message" || !object(entry.message) || entry.message.role !== "user") continue;
-		const line = safeUserFirstLine(entry.message.content);
+		const document = readComposerDocument(entry.message);
+		const line = safeUserFirstLine(document ? composerDocumentText(document) : entry.message.content);
 		if (line.status === "empty") continue;
 		if (line.status !== "ok") return { status: "unavailable", sessionId, reason: line.status };
 		if (Buffer.byteLength(line.text, "utf8") > FIRST_LINE_BYTES)

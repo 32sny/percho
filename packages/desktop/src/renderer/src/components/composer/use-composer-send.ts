@@ -1,9 +1,23 @@
-import type { ControlResult, ControlSnapshot, ImageInput, MessageMode, UiError } from "@percho/shared";
+import {
+	appendComposerDocument,
+	type ComposerDocument,
+	type ControlResult,
+	type ControlSnapshot,
+	composerDocumentFromText,
+	composerDocumentText,
+	EMPTY_COMPOSER_DOCUMENT,
+	type ImageInput,
+	type MessageMode,
+	normalizeComposerDocument,
+	type UiError,
+} from "@percho/shared";
 import { useEffect, useRef, useState } from "react";
 import { getPi } from "../../api";
 import { useT } from "../../i18n";
 import {
 	COMPOSER_FOCUS_EVENT,
+	EMPTY_DRAFT,
+	getDraftVersion,
 	isDraftEmpty,
 	NEW_SESSION_DRAFT_KEY,
 	useDraftStore,
@@ -13,17 +27,17 @@ import { useSettingsStore } from "../../stores/settings";
 import { pushToast } from "../../stores/toasts";
 import { useTranscriptStore } from "../../stores/transcript";
 import { type CompactionSendPolicy, resolveCompactionSendPolicy } from "./compaction-gate";
-import { buildQuoteBlock } from "./quote";
 import { buildSendUiError } from "./send-error";
 import { createSendGuard } from "./send-guard";
+import {
+	buildComposerSendContent,
+	buildComposerSendSnapshot,
+	type ComposerSendSnapshot,
+} from "./send-snapshot";
 
 export interface UseComposerSendOptions {
+	draftKey: string;
 	activeSessionId: string | null;
-	text: string;
-	images: ImageInput[];
-	attachments: string[];
-	quotes: string[];
-	slashCommand: string | null;
 	followUpQueue: string[];
 	/**
 	 * 压缩进行中（会话事件态 `transcript.compacting` 的渲染投影）。
@@ -35,11 +49,6 @@ export interface UseComposerSendOptions {
 	imagesSupported: boolean;
 	/** 发送前会话是否已在运行（排队失败不回滚工作中状态） */
 	agentActive: boolean;
-	setText: (updater: string | ((prev: string) => string)) => void;
-	setImages: (updater: ImageInput[] | ((prev: ImageInput[]) => ImageInput[])) => void;
-	setAttachments: (updater: string[] | ((prev: string[]) => string[])) => void;
-	setQuotes: (updater: string[] | ((prev: string[]) => string[])) => void;
-	setSlashCommand: (command: string | null) => void;
 }
 
 /** requestId 生成：新消息即 messageId（= requestId）；同一次传输重试复用（见 pendingTx） */
@@ -142,7 +151,10 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	const t = useT();
 	const [sending, setSending] = useState(false);
 	const [error, setErrorState] = useState<UiError | null>(null);
-	const [feedback, setFeedback] = useState<{ message: string; tone: "info" | "warn" } | null>(null);
+	const [feedback, setFeedback] = useState<{
+		message: string;
+		tone: "info" | "warn";
+	} | null>(null);
 	const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	/** 发送的同步锁（见 send-guard.ts：state 挡不住 await 窗口里的重复触发） */
 	const sendGuard = useRef(createSendGuard());
@@ -228,6 +240,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 
 	const samePayload = (
 		a: {
+			document: ComposerDocument;
 			text: string;
 			images: ImageInput[];
 			attachments: string[];
@@ -244,59 +257,86 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	const clearSentDraft = (
 		draftKey: string,
 		sent: {
+			document?: ComposerDocument;
 			text: string;
 			images: ImageInput[];
 			attachments: string[];
 			quotes: string[];
 			slashCommand: string | null;
+			draftVersion: number;
 		},
 	) => {
 		const current = useDraftStore.getState().bySession[draftKey];
 		// 等待旧发送 ACK 时可能取回了另一项，即使内容碰巧相同也不能清掉新取回稿。
 		if (current?.recovery) return;
+		const currentText = current?.text ?? "";
 		const currentPayload = {
-			text: current?.text ?? "",
+			document: normalizeComposerDocument(current?.document ?? composerDocumentFromText(currentText)),
+			text: currentText,
 			images: current?.images ?? [],
 			attachments: current?.attachments ?? [],
 			quotes: current?.quotes ?? [],
 			slashCommand: current?.slashCommand ?? null,
 		};
-		if (!samePayload(currentPayload, sent)) return;
+		if (
+			!samePayload(currentPayload, {
+				document: normalizeComposerDocument(sent.document ?? composerDocumentFromText(sent.text)),
+				text: sent.text,
+				images: sent.images,
+				attachments: sent.attachments,
+				quotes: sent.quotes,
+				slashCommand: sent.slashCommand,
+			})
+		)
+			return;
+		if (getDraftVersion(current ?? EMPTY_DRAFT) !== sent.draftVersion) return;
 		useDraftStore.getState().updateDraft(draftKey, (draft) => ({
 			...draft,
+			document: undefined,
 			text: "",
 			images: [],
 			attachments: [],
 			quotes: [],
 			slashCommand: null,
 		}));
-		if ((useSessionsStore.getState().activeSessionId ?? NEW_SESSION_DRAFT_KEY) === draftKey) {
-			options.setText("");
-			options.setImages([]);
-			options.setAttachments([]);
-			options.setQuotes([]);
-			options.setSlashCommand(null);
-		}
 	};
 
-	interface SentPayload {
-		content: string;
-		text: string;
-		images: ImageInput[];
-		attachments: string[];
-		quotes: string[];
-		imageNames: string[];
-		wasActive: boolean;
-		mode: MessageMode;
-		slashCommand: string | null;
-	}
+	type SentPayload = ComposerSendSnapshot;
+
+	const restoreLegacyQueueDraft = (
+		sessionId: string,
+		restoredInputs: Array<{ text: string; document?: ComposerDocument }>,
+	) => {
+		if (restoredInputs.length === 0) return;
+		useDraftStore.getState().updateDraft(sessionId, (draft) => {
+			const hasStructuredInput = restoredInputs.some((input) => input.document !== undefined);
+			const extraDocument = restoredInputs.reduce(
+				(document, input) =>
+					appendComposerDocument(document, input.document ?? composerDocumentFromText(input.text)),
+				EMPTY_COMPOSER_DOCUMENT,
+			);
+			let nextDocument = draft.document;
+			if (draft.document) {
+				nextDocument = appendComposerDocument(draft.document, extraDocument);
+			} else if (hasStructuredInput) {
+				nextDocument = appendComposerDocument(composerDocumentFromText(draft.text), extraDocument);
+			}
+			return {
+				...draft,
+				text: nextDocument
+					? composerDocumentText(nextDocument)
+					: [draft.text, ...restoredInputs.map((input) => input.text)].filter(Boolean).join("\n"),
+				document: nextDocument,
+			};
+		});
+	};
 
 	/**
 	 * 真正的一轮发送（同步锁内）。从「确保有会话」到 prompt 落地都可能 await，
 	 * 调用方必须先抢 `sendGuard` 再进来（见 handleSend 尾部的注释）。
 	 */
-	const sendNow = async (sent: SentPayload, draftKey: string): Promise<void> => {
-		const { content, text, images, attachments, quotes, mode, slashCommand } = sent;
+	const sendNow = async (sent: SentPayload): Promise<void> => {
+		const { draftKey, content, images, mode } = sent;
 		let sessionId = options.activeSessionId;
 		if (content.startsWith("/") && images.length === 0) {
 			sessionId = await ensureSession();
@@ -307,7 +347,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			try {
 				const result = await runSlashCommandStatus(content, sessionId);
 				if (result === "handled") {
-					clearSentDraft(draftKey, { text, images, attachments, quotes, slashCommand });
+					clearSentDraft(draftKey, sent);
 					return;
 				}
 				if (result === "failed") return;
@@ -329,8 +369,6 @@ export function useComposerSend(options: UseComposerSendOptions) {
 
 		setSending(true);
 		setError(null);
-		// ImageInput.name 仅供输入栏展示，发送到 SDK 前还原为协议字段，避免 UI 元数据进入会话。
-		const imageNames = images.map((image) => (image as { name?: string }).name ?? "");
 
 		// 仅完全没有控制 API 的旧 host 可走 legacy queue；其余情况必须 fail closed。
 		const api = controlApi();
@@ -374,18 +412,14 @@ export function useComposerSend(options: UseComposerSendOptions) {
 				sessionId,
 				draftKey,
 				runtimeId,
-				sent: { ...sent, images, imageNames },
+				sent,
 			});
 			return;
 		}
-		await sendLegacy({
-			sessionId,
-			draftKey,
-			sent: { ...sent, images, imageNames },
-		});
+		await sendLegacy({ sessionId, draftKey, sent });
 	};
 
-	/** legacy 发送路径（backend 控制未就绪）：行为与既有实现一致 */
+	/** legacy 发送路径：空闲可发图，无法确认图片受理状态时保留原稿。 */
 	const sendLegacy = async ({
 		sessionId,
 		draftKey,
@@ -395,7 +429,13 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		draftKey: string;
 		sent: SentPayload;
 	}): Promise<void> => {
-		const { content, text, images, attachments, quotes, wasActive, slashCommand } = sent;
+		const { content, images, wasActive } = sent;
+		const session = useTranscriptStore.getState().bySession[sessionId];
+		if (images.length > 0 && (wasActive || session?.agentActive || session?.followUpQueue.length)) {
+			setSending(false);
+			pushToast("warning", "composer.legacyImageQueueBlocked");
+			return;
+		}
 		// 仅在 store 确认为 idle 时取得本次乐观忙碌状态的所有权。
 		const activityToken = useTranscriptStore.getState().beginPromptActivity(sessionId);
 		// 乐观回显用户气泡：带图发送时 SDK 在构造用户消息**之前**先做图片归一化
@@ -406,17 +446,36 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		const optimisticId =
 			wasActive || content.startsWith("/")
 				? null
-				: useTranscriptStore.getState().appendOptimisticUser(sessionId, { text: content, images });
+				: useTranscriptStore.getState().appendOptimisticUser(sessionId, {
+						text: content,
+						...(sent.document ? { document: sent.document } : {}),
+						images,
+					});
 		try {
 			const ack = await getPi().prompt({
 				sessionId,
 				text: content,
+				...(sent.document ? { document: sent.document } : {}),
 				images: images.length > 0 ? images.map(({ data, mimeType }) => ({ data, mimeType })) : undefined,
 			});
 			const handled = ack?.disposition === "handled";
-			clearSentDraft(draftKey, { text, images, attachments, quotes, slashCommand });
-			useTranscriptStore.getState().settlePromptActivity(sessionId, activityToken, handled);
-			if (handled && optimisticId)
+			// 旧宿主只能按文本清队列。图片是否已开始处理不明确时，保留可编辑原稿。
+			if (images.length > 0 && !handled && ack?.disposition !== "started") {
+				pushToast("warning", "composer.legacyImageDraftRetained");
+			} else {
+				clearSentDraft(draftKey, {
+					document: sent.draftDocument,
+					text: sent.text,
+					images: sent.images,
+					attachments: sent.attachments,
+					quotes: sent.quotes,
+					slashCommand: sent.slashCommand,
+					draftVersion: sent.draftVersion,
+				});
+			}
+			const queued = ack?.disposition === "queued";
+			useTranscriptStore.getState().settlePromptActivity(sessionId, activityToken, handled || queued);
+			if ((handled || queued) && optimisticId)
 				useTranscriptStore.getState().removeOptimisticUser(sessionId, optimisticId);
 		} catch (err) {
 			if (optimisticId) useTranscriptStore.getState().removeOptimisticUser(sessionId, optimisticId);
@@ -450,9 +509,11 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		const wireImages = images.map(({ data, mimeType }) => ({ data, mimeType }));
 		const payload = {
 			text: content,
+			...(sent.document ? { document: sent.document } : {}),
 			...(wireImages.length > 0 ? { images: wireImages } : {}),
 			draft: {
 				text,
+				...(sent.draftDocument ? { document: sent.draftDocument } : {}),
 				attachments,
 				quotes,
 				slashCommand,
@@ -482,6 +543,7 @@ export function useComposerSend(options: UseComposerSendOptions) {
 				? null
 				: useTranscriptStore.getState().appendOptimisticUser(sessionId, {
 						text: content,
+						...(sent.document ? { document: sent.document } : {}),
 						images: wireImages,
 						// 草稿（含取回后编辑的）都是新消息：气泡只等本次 requestId 的 message_start 认领。
 						controlMessageId: requestId,
@@ -533,7 +595,15 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			}
 			// 成功回执后才消费草稿；ACK 期间用户改了内容则保留新输入。
 			pendingTx.current = null;
-			clearSentDraft(draftKey, { text, images, attachments, quotes, slashCommand });
+			clearSentDraft(draftKey, {
+				document: sent.draftDocument,
+				text,
+				images,
+				attachments,
+				quotes,
+				slashCommand,
+				draftVersion: sent.draftVersion,
+			});
 			const ack = res.value;
 			// handled 只表示输入被扩展消费，不能推断全会话空闲（保护 optimisticActivityToken 修复语义）：
 			// 仅回滚本次乐观所有权；queued/held 未开工同样回滚；started/interrupting 保持等真实事件。
@@ -553,8 +623,8 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	};
 
 	const handleSend = async (mode: MessageMode = "queue") => {
-		const { text, images, attachments, quotes, slashCommand, followUpQueue, agentActive } = options;
-		const draftKey = options.activeSessionId ?? NEW_SESSION_DRAFT_KEY;
+		const { followUpQueue, agentActive } = options;
+		const draftKey = options.draftKey;
 		// 出队未确认的标记必须先于空草稿 / 压缩等发送门禁处理；即使用户清空了回填内容，
 		// 仍须允许通过明确发送操作核对并解除残留保护，否则 QueueBar 消失后会永久卡住。
 		const retrieving = options.activeSessionId ? isRetrieving(options.activeSessionId) : false;
@@ -562,19 +632,18 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			pushToast("warning", "composer.recoverReleaseRequired");
 			return;
 		}
-		const blockingRecovery = useDraftStore.getState().bySession[draftKey]?.recovery;
+		const draft = useDraftStore.getState().bySession[draftKey] ?? EMPTY_DRAFT;
+		const draftVersion = getDraftVersion(draft);
+		const blockingRecovery = draft.recovery;
 		if (blockingRecovery) {
-			const released = await recoverPending({ messageId: blockingRecovery.messageId });
+			const released = await recoverPending({
+				messageId: blockingRecovery.messageId,
+			});
 			if (released) pushToast("info", "composer.recoverReadyToSend");
 			return;
 		}
-		// 引用胶囊逐条转 blockquote 段落；@ 引用胶囊拼回文本。引用置最前（先给上下文），正文在后
-		const quoteBlock = buildQuoteBlock(quotes);
-		const atText = attachments.map((p) => `@${p}`).join(" ");
-		const body = [atText, text.trim()].filter(Boolean).join("\n");
-		const content = [quoteBlock, slashCommand ? `/${slashCommand}${body ? ` ${body}` : ""}` : body]
-			.filter(Boolean)
-			.join("\n\n");
+		const { images } = draft;
+		const content = buildComposerSendContent(draft);
 		// 运行中（streaming）不拦截：prompt 走 followUp 排队；仅防双击重发（sending）
 		if ((!content && images.length === 0) || sending) return;
 		// 压缩门禁：手动压缩拒绝一切提交（保草稿）；自动压缩且控制通道完整时放行 queue/steer/interrupt。
@@ -610,19 +679,10 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		// 同步锁：`sending` 下一帧才生效，挡不住「draft 页要先 await 转正」这个窗口里的第二次触发
 		// （两次 Enter 会共享同一次 createSession，然后各自 prompt 一遍 = 同一句话发两次）
 		if (!sendGuard.current.tryAcquire()) return;
-		const sent: SentPayload = {
-			content,
-			text,
-			images: images.map((image) => ({ ...image })),
-			attachments: [...attachments],
-			quotes: [...quotes],
-			slashCommand,
-			imageNames: images.map((image) => (image as { name?: string }).name ?? ""),
-			wasActive: agentActive,
-			mode,
-		};
 		try {
-			await sendNow(sent, draftKey);
+			// 门禁与快照使用同一次同步读取的草稿，中间没有 await。
+			const sent = buildComposerSendSnapshot(draftKey, draft, mode, agentActive, content, draftVersion);
+			await sendNow(sent);
 		} finally {
 			sendGuard.current.release();
 		}
@@ -631,14 +691,16 @@ export function useComposerSend(options: UseComposerSendOptions) {
 	/** 停止：控制路径走 stopMessageControl（held 项保留在快照里，由用户取回/重发/放弃）；
 	 *  无控制快照时回退 legacy（先清排队还原草稿，再中止） */
 	const handleStop = async () => {
-		const { activeSessionId, setText } = options;
+		const { activeSessionId } = options;
 		if (!activeSessionId) return;
 		const api = controlApi();
 		if (api) {
 			try {
 				let control = currentControl(activeSessionId);
 				if (!control && typeof api.getMessageControl === "function") {
-					const snapshot = await api.getMessageControl({ sessionId: activeSessionId });
+					const snapshot = await api.getMessageControl({
+						sessionId: activeSessionId,
+					});
 					if (snapshot.ok) {
 						control = snapshot.value;
 						useTranscriptStore.getState().setControlSnapshot(activeSessionId, snapshot.value);
@@ -662,21 +724,25 @@ export function useComposerSend(options: UseComposerSendOptions) {
 		}
 		useTranscriptStore.getState().setFollowUpQueue(activeSessionId, []); // 乐观清面板
 		const cleared = await getPi().clearQueue({ sessionId: activeSessionId });
-		if (cleared.followUp.length > 0) {
-			const restored = cleared.followUp.join("\n");
-			setText((prev) => (prev ? `${prev}\n${restored}` : restored));
-		}
+		const restoredInputs =
+			[...(cleared.steeringInputs ?? []), ...(cleared.followUpInputs ?? [])].length > 0
+				? [...(cleared.steeringInputs ?? []), ...(cleared.followUpInputs ?? [])]
+				: [...cleared.steering, ...cleared.followUp].map((text) => ({ text }));
+		restoreLegacyQueueDraft(activeSessionId, restoredInputs);
 		await getPi().abort({ sessionId: activeSessionId });
 	};
 
 	/** 取回排队消息（legacy 路径）：清队列（SDK 侧 queue_update 随后对齐），内容放回输入框继续编辑 */
 	const handleRestoreQueue = async (focus: () => void) => {
-		const { activeSessionId, setText } = options;
+		const { activeSessionId } = options;
 		if (!activeSessionId) return;
 		useTranscriptStore.getState().setFollowUpQueue(activeSessionId, []); // 乐观清面板
 		const cleared = await getPi().clearQueue({ sessionId: activeSessionId });
-		const restored = cleared.followUp[0];
-		if (restored) setText((prev) => (prev ? `${prev}\n${restored}` : restored));
+		const restoredInputs =
+			[...(cleared.steeringInputs ?? []), ...(cleared.followUpInputs ?? [])].length > 0
+				? [...(cleared.steeringInputs ?? []), ...(cleared.followUpInputs ?? [])]
+				: [...cleared.steering, ...cleared.followUp].map((text) => ({ text }));
+		restoreLegacyQueueDraft(activeSessionId, restoredInputs);
 		requestAnimationFrame(focus);
 	};
 
@@ -824,7 +890,9 @@ export function useComposerSend(options: UseComposerSendOptions) {
 			let control = currentControl(activeSessionId);
 			if (!control) {
 				// 重载后本地无快照（recovering 项仍在 items 里，取回入口可用）：先取权威快照
-				const fresh = await api.getMessageControl({ sessionId: activeSessionId });
+				const fresh = await api.getMessageControl({
+					sessionId: activeSessionId,
+				});
 				if (fresh.ok) control = fresh.value;
 			}
 			if (!control) {
@@ -898,8 +966,12 @@ export function useComposerSend(options: UseComposerSendOptions) {
 					return false;
 				}
 				// 同步回填完整载荷（正文/图片/附件/引用/slash），并挂上临时保护标记直到出队确认
+				const recoveredDocument = payload.draft?.document ?? payload.document;
 				useDraftStore.getState().updateDraft(draftKey, () => ({
-					text: payload.draft?.text ?? payload.text,
+					...(recoveredDocument ? { document: recoveredDocument } : {}),
+					text: recoveredDocument
+						? composerDocumentText(recoveredDocument)
+						: (payload.draft?.text ?? payload.text),
 					images: (payload.images ?? []).map((img, index) => ({
 						...img,
 						...(payload.draft?.imageNames?.[index] ? { name: payload.draft.imageNames[index] } : {}),

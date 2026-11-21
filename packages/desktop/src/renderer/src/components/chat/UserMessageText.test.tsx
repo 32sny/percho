@@ -104,4 +104,34 @@ describe("用户正文折叠（受控布局测量）", () => {
 		harness.cleanup?.();
 		expect(harness.disconnect).toHaveBeenCalledOnce();
 	});
+
+	it("渲染并折叠含 file 与 skill 引用的结构化文档", () => {
+		const doc = {
+			version: 1 as const,
+			parts: [
+				{ type: "text" as const, text: "检查 " },
+				{ type: "skill" as const, id: "skill:review", label: "review" },
+				{ type: "text" as const, text: " 与 " },
+				{ type: "file" as const, path: "C:/repo/README.md", label: "README.md" },
+			],
+		};
+		const renderDoc = () => {
+			harness.cursor = 0;
+			return renderToStaticMarkup(
+				createElement(UserMessageText, {
+					text: "检查 review 与 @README.md",
+					document: doc,
+				}),
+			);
+		};
+		harness.height = 200;
+		renderDoc();
+		const html = renderDoc();
+		expect(html).toContain("composer-reference-skill");
+		expect(html).toContain("review");
+		expect(html).toContain("composer-reference-file");
+		expect(html).toContain("@README.md");
+		expect(html).toContain('data-collapsed="true"');
+		expect(html).toContain("显示更多");
+	});
 });

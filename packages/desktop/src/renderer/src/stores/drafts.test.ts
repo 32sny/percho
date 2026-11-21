@@ -6,14 +6,21 @@ describe("draft dequeue protection marker", () => {
 
 	it("clearing returned content retains the pending-dequeue marker for the next edit", () => {
 		const recovery = { messageId: "pending-1", expectedRevision: 8 };
-		useDraftStore.getState().updateDraft("s1", () => ({ ...EMPTY_DRAFT, text: "original", recovery }));
+		useDraftStore.getState().updateDraft("s1", () => ({
+			...EMPTY_DRAFT,
+			text: "original",
+			recovery,
+		}));
 		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "" }));
 		expect(useDraftStore.getState().bySession.s1?.recovery).toEqual(recovery);
 		const cleared = useDraftStore.getState().bySession.s1;
 		if (!cleared) throw new Error("Recovered draft was lost");
 		expect(isDraftEmpty(cleared)).toBe(true);
 		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "replacement" }));
-		expect(useDraftStore.getState().bySession.s1).toMatchObject({ text: "replacement", recovery });
+		expect(useDraftStore.getState().bySession.s1).toMatchObject({
+			text: "replacement",
+			recovery,
+		});
 	});
 
 	it("deleting the last image retains recovery but explicit release removes an empty entry", () => {
@@ -30,6 +37,18 @@ describe("draft dequeue protection marker", () => {
 
 	it("ordinary empty drafts are still removed", () => {
 		useDraftStore.getState().updateDraft("s1", () => ({ ...EMPTY_DRAFT, text: "normal" }));
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "" }));
+		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
+	});
+
+	it("clears stale document when external callers update only text", () => {
+		useDraftStore.getState().updateDraft("s1", () => ({
+			...EMPTY_DRAFT,
+			text: "hello",
+			document: { version: 1, parts: [{ type: "text", text: "hello" }] },
+		}));
+		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "updated" }));
+		expect(useDraftStore.getState().bySession.s1?.document).toBeUndefined();
 		useDraftStore.getState().updateDraft("s1", (draft) => ({ ...draft, text: "" }));
 		expect(useDraftStore.getState().bySession.s1).toBeUndefined();
 	});

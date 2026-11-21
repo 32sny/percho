@@ -2,6 +2,11 @@ import type { InlineExtension, ProjectTrustStore } from "@earendil-works/pi-codi
 import { DefaultResourceLoader, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createLogger } from "../log";
 import type { PermissionConfirm, PermissionModeRef } from "../permissions/extension";
+import {
+	attachComposerInputBridge,
+	ComposerInputBridge,
+	composerInputExtension,
+} from "../session/composer-input";
 import { builtinExtensions } from "./builtin-extensions";
 import { resolveProjectTrust, type TrustOptionInternal } from "./trust";
 
@@ -69,12 +74,13 @@ export class ProjectResourceLoader {
 	}> {
 		const agentDir = getAgentDir();
 		const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+		const composerInput = new ComposerInputBridge();
 		const resourceLoader = new DefaultResourceLoader({
 			cwd,
 			agentDir,
 			settingsManager,
 			extensionFactories: composeExtensionFactories(
-				this.deps.buildExtensions(cwd, options?.confirm, options?.modeRef),
+				[composerInputExtension(), ...this.deps.buildExtensions(cwd, options?.confirm, options?.modeRef)],
 				{ openUrl: this.deps.openUrl },
 			),
 			additionalSkillPaths: this.deps.desktopIntegration?.additionalSkillPaths,
@@ -84,6 +90,7 @@ export class ProjectResourceLoader {
 				...base,
 			],
 		});
+		attachComposerInputBridge(resourceLoader, composerInput);
 		if (this.deps.projectTrust === false) {
 			settingsManager.setProjectTrusted(true);
 			await resourceLoader.reload();

@@ -2,7 +2,8 @@ import type { SlashCommandInfo } from "@percho/shared";
 import { type RefObject, useEffect, useState } from "react";
 import { getPi } from "../../api";
 import { useT } from "../../i18n";
-import { extractSlashToken, filterCommands, removeSlashToken, type SlashToken } from "./slash-filter";
+import type { ComposerEditorHandle } from "./editor-document";
+import { extractSlashToken, filterCommands, type SlashToken } from "./slash-filter";
 
 export interface UseSlashMenuOptions {
 	activeSessionId: string | null;
@@ -11,9 +12,8 @@ export interface UseSlashMenuOptions {
 	trustVersion: number;
 	text: string;
 	slashCommand: string | null;
-	setText: (updater: string | ((prev: string) => string)) => void;
 	setSlashCommand: (command: string | null) => void;
-	textareaRef: RefObject<HTMLTextAreaElement | null>;
+	editorRef: RefObject<ComposerEditorHandle | null>;
 	ensureSession: () => Promise<string | null>;
 	runSlashCommand: (content: string, sessionId: string) => Promise<boolean>;
 	handleSend: () => Promise<void>;
@@ -21,40 +21,46 @@ export interface UseSlashMenuOptions {
 	setError: (error: string | null) => void;
 }
 
+const SKILL_PREFIX = "skill:";
+
 /**
- * 斜杠菜单域：命令清单拉取 + 光标前 token 探测 + 胶囊回填 + 键盘导航（↑↓/Tab/Esc）。
- * 触发不限于文本开头：/ 在行首或空白后（空格+/）即弹菜单；确认后命令转胶囊，
- * 触发 token 从文本原地移除、其余文字保留（成为命令参数），不再清空输入框。
+ * 斜杠菜单域：命令清单拉取 + 光标前 token 探测 + skill 句中引用 / 胶囊回填 + 键盘导航（↑↓/Tab/Esc）。
+ * - skill 命令：在光标处插入句中 skill token
+ * - 整条文本恰为无参内置命令（compact/settings）：立即执行
+ * - 其余命令（template/extension/带参内置）：命令转胶囊，触发 token 原地移除
  */
 export function useSlashMenu(options: UseSlashMenuOptions) {
 	const t = useT();
 	const [slashSelected, setSlashSelected] = useState(0);
 	const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
+	const [loadedTarget, setLoadedTarget] = useState<string | null>(null);
 	/** 点击面板外部后隐藏菜单（保留文本，再次输入时恢复） */
 	const [slashDismissed, setSlashDismissed] = useState(false);
-	/** 光标前 / token（Composer 在 onChange/onSelect 时喂入） */
+	/** 光标前 / token（Composer 在 onChange/onSelect 时喂入 completionText） */
 	const [slashToken, setSlashToken] = useState<SlashToken | null>(null);
 
 	const { activeSessionId, cwd, trustVersion, text } = options;
+	const target = activeSessionId ? `session:${activeSessionId}` : cwd ? `cwd:${cwd}` : null;
+
 	/** 胶囊已存在时不再探测（发送拼装只支持单命令，args 里打 / 不开菜单） */
 	const updateToken = (value: string, cursor: number) => {
 		setSlashToken(options.slashCommand ? null : extractSlashToken(value, cursor));
 	};
 
-	/** token 与当前文本一致才有效（程序化改文本自动失效）；胶囊模式下不生效 */
+	/** token 与当前文本及目标会话/目录一致才有效；胶囊模式下不生效 */
 	const slashOpen =
 		slashToken !== null &&
 		!options.slashCommand &&
+		loadedTarget === target &&
 		text.slice(slashToken.start, slashToken.end) === `/${slashToken.query}` &&
 		!slashDismissed;
 	const slashQuery = slashOpen ? slashToken.query : "";
 
-	// 会话切换时重新拉取命令列表（模板/skill 随项目变化）；新会话页没有后端会话，按 cwd 拉
-	// （三类命令只依赖资源加载器；项目信任已在选目录时经 ensureProjectTrust 决策落盘，
-	// 应答后 trustVersion 递增触发重拉，把项目级资源补进菜单）
-	// biome-ignore lint/correctness/useExhaustiveDependencies: trustVersion 是刻意的触发依赖（信任应答后重拉），effect 体内不引用
+	// Session trust changes invalidate the command catalog even though the effect only resets/fetches state.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reload commands when session trust changes
 	useEffect(() => {
-		// 真实会话按 sessionId 拉（命令与项目的资源加载器绑定）；新会话页按 draft 的 cwd 拉
+		setSlashToken(null);
+		setSlashDismissed(false);
 		const request = activeSessionId
 			? getPi().listSlashCommands({ sessionId: activeSessionId })
 			: cwd
@@ -62,31 +68,32 @@ export function useSlashMenu(options: UseSlashMenuOptions) {
 				: null;
 		if (!request) {
 			setSlashCommands([]);
+			setLoadedTarget(null);
 			return;
 		}
 		let cancelled = false;
 		void request
 			.then((list) => {
-				if (!cancelled) setSlashCommands(list);
+				if (cancelled) return;
+				setSlashCommands(list);
+				setLoadedTarget(target);
 			})
 			.catch(() => {
-				if (!cancelled) setSlashCommands([]);
+				if (cancelled) return;
+				setSlashCommands([]);
+				setLoadedTarget(null);
 			});
 		return () => {
 			cancelled = true;
 		};
-	}, [activeSessionId, cwd, trustVersion]);
+	}, [activeSessionId, cwd, trustVersion, target]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: 查询词变化时重置选中项
+	// The selected index belongs to the current query; keep this reset tied to the derived query.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset selection when the query changes
 	useEffect(() => {
 		setSlashSelected(0);
 	}, [slashQuery]);
 
-	/**
-	 * 确认选中命令。
-	 * - 整条文本恰为无参内置命令（compact/settings）→ 立即执行（选完即跑，现状行为）
-	 * - 其余 → 命令转胶囊：触发 token 原地移除，其余文字保留（= 命令参数），发送时拼 /cmd args
-	 */
 	const confirmCommand = async (command: SlashCommandInfo, { allowInline = true } = {}) => {
 		if (!command.supported) return;
 		const token = slashToken;
@@ -103,7 +110,7 @@ export function useSlashMenu(options: UseSlashMenuOptions) {
 				options.showFeedback(t("slash.feedback.noSession"), "warn");
 				return;
 			}
-			options.setText("");
+			if (token) options.editorRef.current?.replaceRange(token.start, token.end, "");
 			setSlashToken(null);
 			try {
 				await options.runSlashCommand(`/${command.name}`, sessionId);
@@ -112,17 +119,29 @@ export function useSlashMenu(options: UseSlashMenuOptions) {
 			}
 			return;
 		}
+		if (command.source === "skill") {
+			if (!token || !command.skillId) return;
+			const label = command.name.startsWith(SKILL_PREFIX)
+				? command.name.slice(SKILL_PREFIX.length)
+				: command.name;
+			options.editorRef.current?.replaceRangeWithReference(token.start, token.end, {
+				type: "skill",
+				id: command.skillId,
+				label,
+			});
+			setSlashToken(null);
+			setSlashDismissed(true);
+			return;
+		}
 		options.setSlashCommand(command.name);
 		setSlashToken(null);
-		if (token) options.setText(removeSlashToken(text, token));
+		if (token) {
+			const removeEnd = text[token.end] === " " ? token.end + 1 : token.end;
+			options.editorRef.current?.replaceRange(token.start, removeEnd, "");
+		}
 		setSlashDismissed(true);
 		requestAnimationFrame(() => {
-			const el = options.textareaRef.current;
-			if (el) {
-				el.focus();
-				const len = el.value.length;
-				el.setSelectionRange(len, len);
-			}
+			options.editorRef.current?.focus();
 		});
 	};
 
@@ -137,7 +156,7 @@ export function useSlashMenu(options: UseSlashMenuOptions) {
 		}
 	};
 
-	/** Tab 补全：确认选中命令为胶囊（不触发内置立即执行），菜单随之关闭 */
+	/** Tab 补全：确认选中命令（不触发内置立即执行），菜单随之关闭 */
 	const handleSlashTabComplete = () => {
 		const flat = filterCommands(slashCommands, slashQuery, t);
 		const command = flat[Math.min(slashSelected, flat.length - 1)] ?? flat[0];
@@ -146,15 +165,15 @@ export function useSlashMenu(options: UseSlashMenuOptions) {
 	};
 
 	/** 胶囊弹回文本（空文本 Backspace/Delete，或 Esc）：命令以 "/cmd " 拼回开头，等待继续编辑 */
-	const restoreSlashPill = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+	const restoreSlashPill = (e: React.KeyboardEvent<HTMLElement>) => {
 		e.preventDefault();
 		const cmd = options.slashCommand;
 		options.setSlashCommand(null);
-		options.setText((prev) => (cmd ? (prev ? `/${cmd} ${prev}` : `/${cmd} `) : prev));
+		if (cmd) options.editorRef.current?.replaceRange(0, 0, `/${cmd} `);
 		setSlashToken(null);
 		setSlashDismissed(true);
 		requestAnimationFrame(() => {
-			const el = options.textareaRef.current;
+			const el = options.editorRef.current;
 			if (el) {
 				el.focus();
 				const len = el.value.length;
@@ -163,8 +182,8 @@ export function useSlashMenu(options: UseSlashMenuOptions) {
 		});
 	};
 
-	/** 斜杠菜单键盘导航；消费事件返回 true（菜单开 = token 有效 = 无参数，Enter/Tab 均为确认选中） */
-	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+	/** 斜杠菜单键盘导航；消费事件返回 true */
+	const handleKeyDown = (e: React.KeyboardEvent<HTMLElement>): boolean => {
 		if (!slashOpen) return false;
 		if (e.key === "Tab") {
 			e.preventDefault();

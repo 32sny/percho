@@ -1,20 +1,26 @@
-import type {
-	ChangePendingMessageRequest,
-	ChangePendingMessageResult,
-	ControlResult,
-	ControlSnapshot,
-	MessageAck,
-	MessagePayload,
-	MessageSubmitRequest,
-	PendingMessageRequest,
-	RecoverPendingMessageResult,
-	StopMessageControlResult,
+import {
+	type ChangePendingMessageRequest,
+	type ChangePendingMessageResult,
+	type ControlResult,
+	type ControlSnapshot,
+	type MessageAck,
+	type MessagePayload,
+	type MessageSubmitRequest,
+	type PendingMessageRequest,
+	parseComposerDocument,
+	type RecoverPendingMessageResult,
+	type StopMessageControlResult,
 } from "@percho/shared";
+
+export interface MessageControlSubmitOptions {
+	expandPromptTemplates?: boolean;
+}
 
 export interface MessageControlHandle {
 	submit(
 		request: MessageSubmitRequest,
 		source?: "user" | "extension" | "system",
+		options?: MessageControlSubmitOptions,
 	): Promise<ControlResult<MessageAck>>;
 	getSnapshot(): ControlSnapshot;
 	changePending(request: ChangePendingMessageRequest): Promise<ControlResult<ChangePendingMessageResult>>;
@@ -41,7 +47,10 @@ export interface MessageControlHandle {
 }
 
 export interface MessageControlAdapter {
-	submit(request: MessageSubmitRequest): Promise<ControlResult<MessageAck>>;
+	submit(
+		request: MessageSubmitRequest,
+		options?: MessageControlSubmitOptions,
+	): Promise<ControlResult<MessageAck>>;
 	getSnapshot(): ControlResult<ControlSnapshot>;
 	changePending(request: ChangePendingMessageRequest): Promise<ControlResult<ChangePendingMessageResult>>;
 	recover(request: PendingMessageRequest): ControlResult<RecoverPendingMessageResult>;
@@ -58,7 +67,8 @@ export interface MessageControlAdapter {
 
 export function createMessageControlAdapter(handle: MessageControlHandle): MessageControlAdapter {
 	return {
-		submit: (request) => handle.submit(request, "user"),
+		submit: (request, options) =>
+			options === undefined ? handle.submit(request, "user") : handle.submit(request, "user", options),
 		getSnapshot: () => ({ ok: true as const, value: handle.getSnapshot() }),
 		changePending: async (request: ChangePendingMessageRequest) => handle.changePending(request),
 		recover: (request: PendingMessageRequest) => handle.recover(request),
@@ -73,8 +83,25 @@ export function createMessageControlAdapter(handle: MessageControlHandle): Messa
 }
 
 export function validateControlledPayload(payload: MessagePayload): ControlResult<MessagePayload> {
-	if (!payload || typeof payload.text !== "string" || payload.text.length > 2_000_000) {
+	if (typeof payload.text !== "string" || payload.text.length > 2_000_000) {
 		return failure("invalid_payload", "Message text is invalid or too large");
+	}
+	if (payload.document !== undefined) {
+		try {
+			parseComposerDocument(payload.document);
+		} catch (err) {
+			return failure("invalid_payload", err instanceof Error ? err.message : "Invalid composer document");
+		}
+	}
+	if (payload.draft?.document !== undefined) {
+		try {
+			parseComposerDocument(payload.draft.document);
+		} catch (err) {
+			return failure(
+				"invalid_payload",
+				err instanceof Error ? err.message : "Invalid draft composer document",
+			);
+		}
 	}
 	if (
 		payload.images !== undefined &&

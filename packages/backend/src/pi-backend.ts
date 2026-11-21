@@ -1,5 +1,5 @@
 import { existsSync, lstatSync } from "node:fs";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
@@ -27,6 +27,7 @@ import type {
 	ChangePendingMessageRequest,
 	ChangePendingMessageResult,
 	ChannelSubscriptionsSnapshot,
+	ComposerDocument,
 	ContextManagerMode,
 	ContextUsageInfo,
 	ControlIdentity,
@@ -73,10 +74,14 @@ import type {
 	TrustRequest,
 } from "@percho/shared";
 import {
+	composerDocumentModelText,
+	composerDocumentText,
 	extractTodos,
 	formatSkillCommand,
 	isModelVisible,
+	parseComposerDocument,
 	parseExpandedSkillInvocation,
+	readComposerDocument,
 	TODO_TOOL_NAME,
 	type TodoItem,
 } from "@percho/shared";
@@ -98,6 +103,13 @@ import { walkProjectFiles } from "./project/files";
 import { TrustGate } from "./project/trust";
 import { ProjectResourceLoader } from "./project/trust-loader";
 import { addAllowedPattern, addWorkspaceRoot } from "./project/workspace-store";
+import {
+	composerInputBridge,
+	composerQueueDocument,
+	composerQueueText,
+	decodeComposerTransport,
+	projectComposerMessage,
+} from "./session/composer-input";
 import { slimBulkyEvent, slimMessageUpdate } from "./session/event-slim";
 import { ExtensionDialogHost } from "./session/extension-dialog-host";
 import { SessionHydrationGate } from "./session/hydration-gate";
@@ -172,6 +184,84 @@ import { makeWebFetchTool } from "./tools/webfetch";
 
 const log = createLogger("backend");
 
+function isExtensionCommand(session: AgentSession, text: string): boolean {
+	const trimmed = text.trimStart();
+	if (!trimmed.startsWith("/")) return false;
+	const spaceIndex = trimmed.indexOf(" ");
+	const commandName = spaceIndex === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIndex);
+	if (!commandName) return false;
+	return Boolean(session.extensionRunner?.getCommand(commandName));
+}
+
+function projectControlSnapshot(snapshot: ControlSnapshot): ControlSnapshot {
+	return {
+		...snapshot,
+		items: snapshot.items.map((item) => ({
+			...item,
+			preview: composerQueueText(item.preview),
+		})),
+	};
+}
+
+function projectControlError<T>(result: ControlResult<T>): ControlResult<T> {
+	if (result.ok || !result.error.snapshot) return result;
+	return {
+		ok: false,
+		error: {
+			...result.error,
+			snapshot: projectControlSnapshot(result.error.snapshot),
+		},
+	};
+}
+
+function projectControlResult<T>(result: ControlResult<T>): ControlResult<T> {
+	if (!result.ok) return projectControlError(result);
+	if (
+		!result.value ||
+		typeof result.value !== "object" ||
+		!("snapshot" in result.value) ||
+		!result.value.snapshot
+	)
+		return result;
+	const value = result.value as T & { snapshot: ControlSnapshot };
+	return {
+		ok: true,
+		value: {
+			...value,
+			snapshot: projectControlSnapshot(value.snapshot),
+		} as T,
+	};
+}
+
+function sanitizeExportedHtml(html: string): string {
+	const open = '<script id="session-data" type="application/json">';
+	const start = html.indexOf(open);
+	if (start < 0) return html;
+	const bodyStart = start + open.length;
+	const end = html.indexOf("</script>", bodyStart);
+	if (end < 0) return html;
+	try {
+		const data = JSON.parse(Buffer.from(html.slice(bodyStart, end), "base64").toString("utf8")) as {
+			entries?: Array<{ type?: string; message?: unknown }>;
+		};
+		if (!Array.isArray(data.entries)) return html;
+		for (const entry of data.entries) {
+			if (entry?.type !== "message" || !entry.message) continue;
+			const projected = projectComposerMessage(entry.message) as Record<string, unknown>;
+			if ("perchoInput" in projected) {
+				const { perchoInput: _pi, ...rest } = projected;
+				entry.message = rest;
+			} else {
+				entry.message = projected;
+			}
+		}
+		const encoded = Buffer.from(JSON.stringify(data), "utf8").toString("base64");
+		return `${html.slice(0, bodyStart)}${encoded}${html.slice(end)}`;
+	} catch {
+		return html;
+	}
+}
+
 /** SessionManager 磁盘枚举项 → SessionMeta（listSessions/listAllSessions 共用） */
 function sessionInfoToMeta(
 	info: SessionInfo,
@@ -244,6 +334,7 @@ function mergeLiveSessionMetas(disk: readonly SessionMeta[], live: readonly Sess
  * SDK 版本在 package.json 精确锁定；内部字段缺失时按不可辨别处理（保守拒绝）。
  */
 function isUnflushedNewSession(sessionManager: SessionManager): boolean {
+	// SAFETY: these fields are private SDK runtime probes; their presence is checked before use and missing fields fail closed.
 	const probe = sessionManager as unknown as {
 		isPersisted?: () => boolean;
 		flushed?: boolean;
@@ -606,6 +697,11 @@ export class PiBackend {
 
 	private emitEvent(sessionId: string, event: SessionEvent): void {
 		this.eventRates.tick(sessionId);
+		if (event.type === "message_start" || event.type === "message_end") {
+			event = { ...event, message: projectComposerMessage(event.message) };
+		} else if (event.type === "agent_end") {
+			event = { ...event, messages: event.messages.map(projectComposerMessage) };
+		}
 		if (
 			event.type === "turn_end" &&
 			event.message.role === "assistant" &&
@@ -840,7 +936,11 @@ export class PiBackend {
 		const unsubscribeMessageControl = messageControl?.subscribe((update) =>
 			this.eventEmitter.emit({
 				sessionId: session.sessionId,
-				event: { type: "message_control_update", ...update },
+				event: {
+					type: "message_control_update",
+					...update,
+					snapshot: projectControlSnapshot(update.snapshot),
+				},
 			}),
 		);
 		const mutex = applySubagentMutex(session, extensionsResult, preferBuiltin);
@@ -1237,7 +1337,7 @@ export class PiBackend {
 	getMessageControlSnapshots(): ControlSnapshot[] {
 		return this.registry.list().flatMap((entry) => {
 			const result = entry.messageControl?.getSnapshot();
-			return result ? [result] : [];
+			return result ? [projectControlSnapshot(result)] : [];
 		});
 	}
 
@@ -1246,9 +1346,13 @@ export class PiBackend {
 		if (!entry) return failure("not_found", "Session is not active");
 		if (!entry.messageControl)
 			return failure(entry.readOnly ? "read_only" : "not_found", "Message control is unavailable");
-		return (
-			entry.messageControlAdapter?.getSnapshot() ?? { ok: true, value: entry.messageControl.getSnapshot() }
-		);
+		const result = entry.messageControlAdapter?.getSnapshot() ?? {
+			ok: true,
+			value: entry.messageControl.getSnapshot(),
+		};
+		return result.ok
+			? { ok: true, value: projectControlSnapshot(result.value) }
+			: projectControlError(result);
 	}
 
 	async submitMessage(request: MessageSubmitRequest): Promise<ControlResult<MessageAck>> {
@@ -1271,7 +1375,7 @@ export class PiBackend {
 		if (!valid.ok) return valid;
 		const snapshotResult = entry.messageControlAdapter?.getSnapshot();
 		if (!snapshotResult?.ok) return failure("not_found", "Message control snapshot unavailable");
-		const snapshot = snapshotResult.value;
+		const snapshot = projectControlSnapshot(snapshotResult.value);
 		if (request.runtimeId !== snapshot.runtimeId)
 			return failure("stale_runtime", "Session runtime changed", snapshot);
 		if (snapshot.phase === "compacting" && snapshot.compactionKind === "manual")
@@ -1292,9 +1396,63 @@ export class PiBackend {
 				"Stop the current run before sending a slash command",
 				snapshot,
 			);
-		return (
-			entry.messageControlAdapter?.submit(request) ?? failure("not_found", "Message control is unavailable")
-		);
+		const structuredDocument = request.payload.document ?? request.payload.draft?.document;
+		if (structuredDocument) {
+			const bridge = composerInputBridge(entry.session.resourceLoader);
+			if (!bridge) return failure("invalid_payload", "Composer input adapter is unavailable", snapshot);
+			return bridge.submit(request, async () => {
+				let prepared: Awaited<ReturnType<typeof bridge.prepare>>;
+				try {
+					prepared = await bridge.prepare(entry.session.resourceLoader, structuredDocument, {
+						slashCommand: request.payload.draft?.slashCommand,
+						promptTemplates: entry.session.promptTemplates,
+					});
+				} catch (err) {
+					return failure("invalid_payload", err instanceof Error ? err.message : String(err), snapshot);
+				}
+				const rawModelText = composerDocumentModelText(prepared.document);
+				const slashCommand = request.payload.draft?.slashCommand;
+				const commandCandidate = slashCommand
+					? rawModelText
+						? `/${slashCommand} ${rawModelText}`
+						: `/${slashCommand}`
+					: rawModelText;
+				const extensionCommand = isExtensionCommand(entry.session, commandCandidate);
+				const cleanText = composerDocumentText(prepared.document);
+				const preservedDraft = request.payload.draft
+					? {
+							...request.payload.draft,
+							...(request.payload.draft.document
+								? { document: parseComposerDocument(request.payload.draft.document) }
+								: {}),
+						}
+					: {
+							text: cleanText,
+							document: prepared.document,
+							attachments: [],
+							quotes: [],
+							slashCommand: null,
+						};
+				const forwardedRequest: MessageSubmitRequest = {
+					...request,
+					payload: {
+						...request.payload,
+						text: extensionCommand ? commandCandidate : prepared.transportText,
+						document: prepared.document,
+						draft: preservedDraft,
+					},
+				};
+				const result =
+					(await entry.messageControlAdapter?.submit(forwardedRequest, {
+						expandPromptTemplates: extensionCommand,
+					})) ?? failure("not_found", "Message control is unavailable");
+				return projectControlResult(result);
+			});
+		}
+		const result =
+			(await entry.messageControlAdapter?.submit(request)) ??
+			failure("not_found", "Message control is unavailable");
+		return projectControlResult(result);
 	}
 
 	async changePendingMessage(
@@ -1314,7 +1472,7 @@ export class PiBackend {
 		if (!entry) return failure("not_found", "Session is not active");
 		if (entry.readOnly) return failure("read_only", "Session is read-only");
 		if (!entry.messageControl) return failure("not_found", "Message control is unavailable");
-		const current = entry.messageControl.getSnapshot();
+		const current = projectControlSnapshot(entry.messageControl.getSnapshot());
 		if (
 			request.sessionId !== entry.session.sessionId ||
 			request.runtimeId !== current.runtimeId ||
@@ -1323,10 +1481,10 @@ export class PiBackend {
 			!Number.isInteger(request.expectedRevision)
 		)
 			return failure("stale_runtime", "Message control identity is invalid", current);
-		return (
-			entry.messageControlAdapter?.changePending(request) ??
-			failure("not_found", "Message control is unavailable")
-		);
+		const result =
+			(await entry.messageControlAdapter?.changePending(request)) ??
+			failure("not_found", "Message control is unavailable");
+		return projectControlResult(result);
 	}
 
 	async recoverPendingMessage(
@@ -1345,7 +1503,7 @@ export class PiBackend {
 		if (!entry) return failure("not_found", "Session is not active");
 		if (entry.readOnly) return failure("read_only", "Session is read-only");
 		if (!entry.messageControl) return failure("not_found", "Message control is unavailable");
-		const current = entry.messageControl.getSnapshot();
+		const current = projectControlSnapshot(entry.messageControl.getSnapshot());
 		if (
 			request.sessionId !== entry.session.sessionId ||
 			request.runtimeId !== current.runtimeId ||
@@ -1354,9 +1512,45 @@ export class PiBackend {
 			!Number.isInteger(request.expectedRevision)
 		)
 			return failure("stale_runtime", "Message control identity is invalid", current);
-		return (
-			entry.messageControlAdapter?.recover(request) ?? failure("not_found", "Message control is unavailable")
-		);
+		const result =
+			entry.messageControlAdapter?.recover(request) ?? failure("not_found", "Message control is unavailable");
+		if (!result.ok) return projectControlError(result);
+		const decoded = decodeComposerTransport(result.value.payload.text);
+		const document =
+			decoded?.document ?? result.value.payload.document ?? result.value.payload.draft?.document;
+		const cleanText = document ? composerDocumentText(document) : result.value.payload.text;
+		const existingDraft = result.value.payload.draft;
+		const draftDocument = existingDraft?.document
+			? parseComposerDocument(existingDraft.document)
+			: existingDraft && (existingDraft.attachments.length > 0 || existingDraft.quotes.length > 0)
+				? undefined
+				: document;
+		const draftText = draftDocument
+			? composerDocumentText(draftDocument)
+			: existingDraft
+				? existingDraft.text
+				: cleanText;
+		return {
+			ok: true,
+			value: {
+				...result.value,
+				snapshot: projectControlSnapshot(result.value.snapshot),
+				payload: {
+					...result.value.payload,
+					text: cleanText,
+					...(document ? { document } : {}),
+					...(existingDraft
+						? {
+								draft: {
+									...existingDraft,
+									text: draftText,
+									...(draftDocument ? { document: draftDocument } : {}),
+								},
+							}
+						: {}),
+				},
+			},
+		};
 	}
 
 	async stopMessageControl(request: ControlIdentity): Promise<ControlResult<StopMessageControlResult>> {
@@ -1371,33 +1565,63 @@ export class PiBackend {
 		if (!entry) return failure("not_found", "Session is not active");
 		if (entry.readOnly) return failure("read_only", "Session is read-only");
 		if (!entry.messageControl) return failure("not_found", "Message control is unavailable");
-		const current = entry.messageControl.getSnapshot();
+		const current = projectControlSnapshot(entry.messageControl.getSnapshot());
 		if (
 			request.sessionId !== entry.session.sessionId ||
 			request.runtimeId !== current.runtimeId ||
 			!request.requestId
 		)
 			return failure("stale_runtime", "Message control identity is invalid", current);
-		return (
-			entry.messageControlAdapter?.stop(request) ?? failure("not_found", "Message control is unavailable")
-		);
+		const result =
+			entry.messageControlAdapter?.stop(request) ?? failure("not_found", "Message control is unavailable");
+		return projectControlResult(result);
 	}
 
-	async prompt(sessionId: string, text: string, images?: ImageInput[]): Promise<PromptAck> {
+	async prompt(
+		sessionId: string,
+		text: string,
+		images?: ImageInput[],
+		document?: ComposerDocument,
+	): Promise<PromptAck> {
 		const entry = this.requireWritable(sessionId);
 		log.info("prompt", sessionId, { text: text.slice(0, 120), images: images?.length ?? 0 });
-		// session.prompt() 非流式路径会 await 整个 run（直到 agent_settled）；渲染端只需要
-		// “已受理/已入队”回执——用 preflightResult 提前返回，否则 IPC 挂一整轮，渲染端
-		// sending 状态被占住，运行中的 followUp 排队发送被防重发守卫静默拦截。
-		// preflight 前抛错（无模型/无 key/compaction 中）照常 reject 传给渲染端；
-		// ack 之后 run 期错误不再回传（走事件流呈现），then 的 reject 在已 resolve 后为 no-op。
-		// 被拒时 SDK 不再回调 preflight；受理后的 run 错误仍只由事件流呈现。
+		let acceptedText = text;
+		let expandPromptTemplates: boolean | undefined;
+		let draft:
+			| {
+					text: string;
+					document?: ComposerDocument;
+					attachments: string[];
+					quotes: string[];
+					slashCommand: string | null;
+			  }
+			| undefined;
+		if (document) {
+			const bridge = composerInputBridge(entry.session.resourceLoader);
+			if (!bridge) throw new Error("Composer input adapter is unavailable");
+			const prepared = await bridge.prepare(entry.session.resourceLoader, document, {
+				promptTemplates: entry.session.promptTemplates,
+			});
+			const rawModelText = composerDocumentModelText(prepared.document);
+			const extensionCommand = isExtensionCommand(entry.session, rawModelText);
+			acceptedText = extensionCommand ? rawModelText : prepared.transportText;
+			expandPromptTemplates = extensionCommand;
+			draft = {
+				text: composerDocumentText(prepared.document),
+				document: prepared.document,
+				attachments: [],
+				quotes: [],
+				slashCommand: null,
+			};
+		}
 		return new Promise<PromptAck>((resolve, reject) => {
 			entry.session
-				.prompt(text, {
+				.prompt(acceptedText, {
 					// 运行中发送走 followUp 排队（agent 完成后自动投递；steer 打断暂不支持）
 					// SDK 要求 streaming 时必传 streamingBehavior，否则抛错
 					streamingBehavior: "followUp",
+					...(expandPromptTemplates !== undefined ? { expandPromptTemplates } : {}),
+					...(draft ? { draft } : {}),
 					images: images?.map((image) => ({
 						type: "image" as const,
 						data: image.data,
@@ -1439,18 +1663,28 @@ export class PiBackend {
 	}
 
 	/** 清空运行中排队消息（steer+followUp 都清），返回被清内容；无会话返回空 */
-	async clearQueue(sessionId: string): Promise<{ steering: string[]; followUp: string[] }> {
+	async clearQueue(sessionId: string) {
 		const entry = this.registry.get(sessionId);
-		if (!entry) return { steering: [], followUp: [] };
+		if (!entry) return { steering: [], followUp: [], steeringInputs: [], followUpInputs: [] };
 		log.info("clearQueue", sessionId);
-		return entry.session.clearQueue();
+		const cleared = entry.session.clearQueue();
+		const toInput = (text: string) => {
+			const document = composerQueueDocument(text);
+			return { text: composerQueueText(text), ...(document ? { document } : {}) };
+		};
+		return {
+			steering: cleared.steering.map(composerQueueText),
+			followUp: cleared.followUp.map(composerQueueText),
+			steeringInputs: cleared.steering.map(toInput),
+			followUpInputs: cleared.followUp.map(toInput),
+		};
 	}
 
 	/** 当前排队的 followUp 消息文本；无会话返回空 */
 	async getFollowUpMessages(sessionId: string): Promise<string[]> {
 		const entry = this.registry.get(sessionId);
 		if (!entry) return [];
-		return [...entry.session.getFollowUpMessages()];
+		return entry.session.getFollowUpMessages().map(composerQueueText);
 	}
 
 	async setModel(sessionId: string, provider: string, modelId: string): Promise<void> {
@@ -1630,7 +1864,20 @@ export class PiBackend {
 	/** 导出会话内容（HTML/JSONL）；返回文件内容，由调用方保存 */
 	async exportSession(sessionId: string, format: "html" | "jsonl"): Promise<string> {
 		const entry = this.requireSession(sessionId);
-		return format === "html" ? entry.session.exportToHtml() : entry.session.exportToJsonl();
+		if (format === "jsonl") {
+			const manager = entry.session.sessionManager;
+			return [manager.getHeader(), ...manager.getBranch()]
+				.filter(Boolean)
+				.map((item) => JSON.stringify(item))
+				.join("\n");
+		}
+		const dir = await mkdtemp(join(tmpdir(), "percho-export-"));
+		try {
+			const file = await entry.session.exportToHtml(join(dir, "session.html"));
+			return sanitizeExportedHtml(await readFile(file, "utf8"));
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
 	}
 
 	/** renderer 已落下首份完整历史；放行启动期频道 watcher + 离线对账。 */
@@ -1761,7 +2008,7 @@ export class PiBackend {
 	async recallMessage(
 		sessionId: string,
 		ref: { entryId?: string; text?: string; timestamp?: number },
-	): Promise<{ text: string; images: ImageInput[] }> {
+	): Promise<{ text: string; images: ImageInput[]; document?: ComposerDocument }> {
 		const entry = this.requireWritable(sessionId);
 		if (entry.session.isStreaming || entry.session.isCompacting) {
 			throw new Error("Cannot recall while the agent is running or context is compacting");
@@ -1772,8 +2019,13 @@ export class PiBackend {
 		const message = target.message as RawMessage;
 		// 文本/图片从目标 entry 提取（navigateTree 只返回 editorText，图片会丢）
 		const sourceText = blockText(message.content);
-		const invocation = parseExpandedSkillInvocation(sourceText);
-		const text = invocation ? formatSkillCommand(invocation) : sourceText;
+		const document = readComposerDocument(message);
+		const invocation = document ? null : parseExpandedSkillInvocation(sourceText);
+		const text = document
+			? composerDocumentText(document)
+			: invocation
+				? formatSkillCommand(invocation)
+				: sourceText;
 		const images = blockImages(message.content);
 		if (sm.getLeafId() === targetId) {
 			// 悬挂的用户消息（发出后无任何回复，entry 即当前 leaf）：navigateTree 视为 no-op，
@@ -1795,7 +2047,7 @@ export class PiBackend {
 		// （否则撤回只存在内存，重启后旧分支回来）
 		sm.appendCustomEntry(PiBackend.RECALLED_MARKER_TYPE, { recalledEntryId: targetId });
 		log.info("recall message", sessionId, { targetId });
-		return { text, images };
+		return { text, images, ...(document ? { document } : {}) };
 	}
 
 	async listModels(): Promise<AvailableModel[]> {

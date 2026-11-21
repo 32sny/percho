@@ -97,6 +97,8 @@
 	--bar-tick-on: rgba(255, 255, 255, 0.55);
 	/* 淡出分隔线中段的颜色（见 .fade-rule）：两端渐隐会掉一档视觉强度，所以比 border 稍实 */
 	--color-rule: #d8dce3;
+	--color-skill-reference-ink: #176ac4;
+	--color-skill-reference-bg: #e7f1ff;
 }
 
 [data-theme="dark"] {
@@ -142,6 +144,8 @@
 	--markdown-table-head-bg: #212126;
 	--markdown-link-decoration: #6d28d9;
 	--markdown-link-hover: #a78bfa;
+	--color-skill-reference-ink: #8bc4ff;
+	--color-skill-reference-bg: #193653;
 	/* 扫光高光色 = 往白推（文字提亮，与日间方向相反） */
 	--shimmer-highlight: rgba(255, 255, 255, 0.95);
 	--shadow-soft: 0 0 14px -2px rgba(255, 255, 255, 0.1);

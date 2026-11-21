@@ -1,4 +1,10 @@
-import type { ImageInput, MessageMode } from "@percho/shared";
+import {
+	type ComposerDocument,
+	composerDocumentFromText,
+	composerDocumentText,
+	type ImageInput,
+	type MessageMode,
+} from "@percho/shared";
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import { getPi } from "../../api";
 import { useActiveModelInfo, useSessionReadOnly } from "../../hooks/use-session-state";
@@ -23,16 +29,19 @@ import { SESSION_DRAG_MIME } from "../sidebar/SessionRow";
 import { Tooltip } from "../ui/Tooltip";
 import { AtMenu } from "./AtMenu";
 import { AttachmentTray } from "./AttachmentTray";
+import { ComposerEditor } from "./ComposerEditor";
 import { ContextRing } from "./ContextRing";
-import { resolveDroppedFilePaths } from "./drop-files";
+import { type ComposerEditorHandle, composerDocumentCompletionText } from "./editor-document";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionPicker } from "./PermissionPicker";
+import { commitFilePaste, fileReferenceParts, planFilePaste } from "./paste-files";
 import { QueueBar, type QueueItemAction } from "./QueueBar";
 import { QuoteChip } from "./QuoteChip";
 import { SendErrorBar } from "./SendErrorBar";
 import { SendModeMenu, type SendModePick } from "./SendModeMenu";
 import { SlashMenu } from "./SlashMenu";
 import { slashPresentation } from "./slash-label";
+import { readTransferItems, resolveTransferPaths } from "./transfer-files";
 import { useAtCompletion } from "./use-at-completion";
 import { useComposerSend } from "./use-composer-send";
 import { useSlashMenu } from "./use-slash-menu";
@@ -68,9 +77,16 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 	const draftKey = activeSessionId ?? NEW_SESSION_DRAFT_KEY;
 	const draft = useDraftStore((s) => s.bySession[draftKey] ?? EMPTY_DRAFT);
 	const { text, images, slashCommand, attachments, quotes } = draft;
+	const document = draft.document ?? composerDocumentFromText(text);
+	const completionText = composerDocumentCompletionText(document);
 	const updateDraft = useDraftStore((s) => s.updateDraft);
-	const setText = (updater: string | ((prev: string) => string)) => {
-		updateDraft(draftKey, (d) => ({ ...d, text: typeof updater === "function" ? updater(d.text) : updater }));
+	const setComposerDocument = (next: ComposerDocument) => {
+		const plainText = composerDocumentText(next);
+		updateDraft(draftKey, (current) => ({
+			...current,
+			document: next,
+			text: plainText,
+		}));
 	};
 	const setImages = (updater: DraftImage[] | ((prev: DraftImage[]) => DraftImage[])) => {
 		updateDraft(draftKey, (d) => ({
@@ -104,7 +120,7 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 		}));
 	};
 	const [previewImage, setPreviewImage] = useState<ImageInput | null>(null);
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const editorRef = useRef<ComposerEditorHandle>(null);
 	const boxRef = useRef<HTMLDivElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -117,34 +133,26 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 	/** 输入框有内容：streaming 中按钮从停止切回发送（入队后文本清空自动切回停止） */
 	const hasContent =
 		Boolean(text.trim()) ||
+		document.parts.some((part) => part.type !== "text") ||
 		images.length > 0 ||
 		Boolean(slashCommand) ||
 		attachments.length > 0 ||
 		quotes.length > 0;
 
 	const send = useComposerSend({
+		draftKey,
 		activeSessionId,
-		text,
-		images,
-		attachments,
-		quotes,
-		slashCommand,
 		followUpQueue,
 		compacting,
 		agentActive: transcript.agentActive,
 		imagesSupported,
-		setText,
-		setImages,
-		setAttachments,
-		setQuotes,
-		setSlashCommand,
 	});
 	const { sending, error, setError, feedback, showFeedback, ensureSession, runSlashCommand, handleSend } =
 		send;
 	// 附件预处理（缩图）在途的 promise：发送前要等它们落地，否则「粘图立刻回车」会把图丢了
 	// （预处理要几百 ms，以前 FileReader 只需几 ms，这个窗口可忽略；现在不能）
 	const preparingRef = useRef<Promise<unknown>[]>([]);
-	// 每次渲染刷新：等完预处理后要调**最新一份** handleSend，才读得到刚 setImages 进去的图
+	// 等完图片准备后沿用最新运行态；草稿字段由 handleSend 按 draftKey 同步读取。
 	const latestSendRef = useRef(handleSend);
 	latestSendRef.current = handleSend;
 	const preparingSendRef = useRef(false);
@@ -179,7 +187,7 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 		if (action === "recover") void send.recoverPending(item);
 		else void send.changePending(item, action);
 	};
-	const focusTextarea = () => textareaRef.current?.focus();
+	const focusEditor = () => editorRef.current?.focus();
 
 	/**
 	 * 点盒子空白处也进入输入状态：正文只有一行高，正文与底部图标行之间的留白、图标行右侧
@@ -194,7 +202,7 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 		const target = event.target;
 		if (target instanceof Element && target.closest(COMPOSER_FOCUS_BLOCKERS)) return;
 		event.preventDefault();
-		textareaRef.current?.focus();
+		editorRef.current?.focus();
 	};
 	// 忙碌保守并集：真实事件态（phase/agentActive）与控制快照相位任一忙即忙——两份真源不互相覆盖
 	const control = transcript.control;
@@ -240,11 +248,10 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 		activeSessionId,
 		cwd,
 		trustVersion,
-		text,
+		text: completionText,
 		slashCommand,
-		setText,
 		setSlashCommand,
-		textareaRef,
+		editorRef,
 		ensureSession,
 		runSlashCommand,
 		// 斜杠菜单的 skill/模板命令也要等附件预处理（它们同样可能带图）
@@ -258,25 +265,19 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 
 	const at = useAtCompletion({
 		cwd,
-		text,
+		draftKey,
+		text: completionText,
 		attachments,
 		slashOpen: slash.slashOpen,
-		setText,
 		setAttachments,
-		textareaRef,
+		editorRef,
 	});
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: 高度由文本 DOM 变化驱动，显式依赖 text 便于触发
-	useEffect(() => {
-		const el = textareaRef.current;
-		if (!el) return;
-		el.style.height = "auto";
-		el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-	}, [text]);
+	// Editor host owns contenteditable sizing.
 
 	// 撤回回填草稿后聚焦输入框继续编辑（sessions store 派发，window 事件解耦组件间依赖）
 	useEffect(() => {
-		const onFocusRequest = () => textareaRef.current?.focus();
+		const onFocusRequest = () => editorRef.current?.focus();
 		window.addEventListener(COMPOSER_FOCUS_EVENT, onFocusRequest);
 		return () => window.removeEventListener(COMPOSER_FOCUS_EVENT, onFocusRequest);
 	}, []);
@@ -296,32 +297,34 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 		return () => window.removeEventListener("pointerdown", onPointerDown);
 	}, [slash.slashOpen, at.atOpen, setSlashDismissed, setAtDismissed]);
 
-	/** 文本变化：重置菜单折叠态 + 探测光标前 @ / slash token（驱动两个菜单）；同时清预填来源提示 */
-	const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+	/** 文档变化：重置菜单折叠态 + 探测光标前 @ / slash token（传入 completionText 屏蔽已有引用）；同时清预填来源提示 */
+	const handleDocumentChange = (
+		nextDocument: ComposerDocument,
+		nextCompletionText: string,
+		selection: { start: number; end: number },
+	) => {
 		if (extensionPrefillSource) useTranscriptStore.getState().clearExtensionPrefill(activeSessionId ?? "");
 		slash.setSlashDismissed(false);
 		at.setAtDismissed(false);
-		setText(e.target.value);
-		const cursor = e.target.selectionStart ?? e.target.value.length;
-		slash.updateToken(e.target.value, cursor);
-		at.updateToken(e.target.value, cursor);
+		setComposerDocument(nextDocument);
+		slash.updateToken(nextCompletionText, selection.end);
+		at.updateToken(nextCompletionText, selection.end);
 	};
 
 	/** 光标移动（点击/方向键）：重探 slash token（@ 菜单仅输入驱动，点进去不弹） */
-	const handleSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-		const el = e.currentTarget;
-		slash.updateToken(el.value, el.selectionStart ?? el.value.length);
+	const handleSelectionChange = (nextCompletionText: string, selection: { start: number; end: number }) => {
+		slash.updateToken(nextCompletionText, selection.end);
 	};
 
-	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+	const handleKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
 		if (at.handleKeyDown(e)) return;
 		if (slash.handleKeyDown(e)) return;
-		// 胶囊撤销：Esc（任意文本态，菜单未消费时）；空文本 Backspace/Delete 先 @ 胶囊后 slash 胶囊
+		// 胶囊撤销：Esc（任意文本态，菜单未消费时）；空编辑器 Backspace/Delete 先 @ 胶囊后 slash 胶囊
 		if (slashCommand && e.key === "Escape") {
 			slash.restoreSlashPill(e);
 			return;
 		}
-		if (text === "" && (e.key === "Backspace" || e.key === "Delete")) {
+		if (document.parts.length === 0 && (e.key === "Backspace" || e.key === "Delete")) {
 			// 胶囊撤销：视觉由近及远（@ 文件 → slash 命令 → 引用）
 			if (attachments.length > 0) {
 				e.preventDefault();
@@ -390,9 +393,17 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 			if (containsSessionDrag(event)) {
 				event.preventDefault();
 				const raw = event.dataTransfer.getData(SESSION_DRAG_MIME);
-				let payload: { sessionId: string; sessionFile?: string; name?: string } | null = null;
+				let payload: {
+					sessionId: string;
+					sessionFile?: string;
+					name?: string;
+				} | null = null;
 				try {
-					payload = JSON.parse(raw) as { sessionId: string; sessionFile?: string; name?: string };
+					payload = JSON.parse(raw) as {
+						sessionId: string;
+						sessionFile?: string;
+						name?: string;
+					};
 				} catch {
 					payload = null;
 				}
@@ -413,14 +424,27 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 			}
 			if (!containsFiles(event)) return;
 			event.preventDefault();
-			const files = Array.from(event.dataTransfer.files);
-			const images = files.filter((file) => file.type.startsWith("image/"));
-			const otherPaths = resolveDroppedFilePaths(
-				files.filter((file) => !file.type.startsWith("image/")),
-				getPi().getPathForFile,
-			);
-			if (images.length > 0) handleFiles(images);
-			appendAttachments(otherPaths);
+			const transfer = event.dataTransfer.items?.length
+				? readTransferItems(event.dataTransfer.items)
+				: {
+						files: Array.from(event.dataTransfer.files).map((file) => ({
+							file,
+							directory: false,
+						})),
+						images: Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/")),
+					};
+			const documents = transfer.files.filter((entry) => !entry.file.type.startsWith("image/"));
+			if (transfer.images.length > 0) {
+				if (!imagesSupported) pushToast("warning", "composer.imageUnsupported");
+				else handleFiles(transfer.images);
+			}
+			if (documents.length > 0) {
+				const resolved = resolveTransferPaths(documents, getPi().getPathForFile);
+				if (resolved.unreadable > 0) pushToast("warning", "composer.filePathUnavailable");
+				if (resolved.refs.length > 0) {
+					editorRef.current?.insertReferences(fileReferenceParts(resolved.refs));
+				}
+			}
 		};
 		window.addEventListener("dragover", onDragOver);
 		window.addEventListener("drop", onDrop);
@@ -428,29 +452,30 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 			window.removeEventListener("dragover", onDragOver);
 			window.removeEventListener("drop", onDrop);
 		};
-	}, [appendAttachments, handleFiles, readOnly]);
+	}, [appendAttachments, handleFiles, imagesSupported, readOnly]);
 
-	/** 截图/复制图片后 Ctrl+V 粘贴到输入框 */
-	const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+	/** 粘贴图片或本地文件/目录：图片走预处理，普通文件/目录在光标处落成 file token */
+	const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
 		const items = e.clipboardData?.items;
 		if (!items) return;
-		const files: File[] = [];
-		for (const item of items) {
-			if (item.type.startsWith("image/")) {
-				const file = item.getAsFile();
-				if (file) files.push(file);
-			}
-		}
-		if (files.length === 0) return;
-		// 图片门控：纯文本模型拦截粘贴（默认行为可能把图片数据塞进文本框，必须 preventDefault）
-		if (!imagesSupported) {
-			e.preventDefault();
-			// 顶栏右侧 toast 卡（不用内联反馈：该提示不阻塞继续输入，卡片可手动关）
-			pushToast("warning", "composer.imageUnsupported");
-			return;
-		}
+		const plan = planFilePaste({
+			items,
+			isRemote: false,
+			imagesSupported,
+			getPathForFile: getPi().getPathForFile,
+		});
+		if (!plan.handled) return;
 		e.preventDefault();
-		handleFiles(files);
+		commitFilePaste(plan, {
+			selectionRange: () =>
+				editorRef.current?.selectionRange() ?? {
+					start: text.length,
+					end: text.length,
+				},
+			insertReferences: (references, range) => editorRef.current?.insertReferences(references, range),
+			addImages: handleFiles,
+			toast: (message) => pushToast("warning", message),
+		});
 	};
 
 	return (
@@ -487,7 +512,7 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 				) : followUpQueue.length > 0 ? (
 					<QueueBar
 						legacyText={followUpQueue[0] ?? ""}
-						onRestore={() => void send.handleRestoreQueue(focusTextarea)}
+						onRestore={() => void send.handleRestoreQueue(focusEditor)}
 					/>
 				) : null}
 				{/* 停止操作状态行：interrupting（5s 后 slow 换文案）/ blocked 与占位符区分展示 */}
@@ -531,8 +556,7 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 							))}
 						</div>
 					)}
-					{/* 附件统一在上方托盘；正文行仅 slash 胶囊与 textarea 同行，其余时候 textarea 独占整行。
-					    外层容器恒定渲染，textarea 只切 className 不换位置 → 不重挂、不丢焦点。 */}
+					{/* 外层与 host 位置稳定，切换命令胶囊时不卸载编辑器。 */}
 					<div className={`px-4 pb-5.5 ${quotes.length > 0 ? "pt-1.5" : "pt-2"}`}>
 						<div className={slashCommand ? "flex flex-wrap items-start gap-x-1.5 gap-y-1" : undefined}>
 							{slashCommand && (
@@ -540,18 +564,19 @@ export function Composer({ centered = false }: { centered?: boolean }) {
 									{slashLabel !== slashCommand && <span className="mr-1.5">{slashLabel}</span>}/{slashCommand}
 								</span>
 							)}
-							<textarea
-								ref={textareaRef}
-								className={`max-h-[200px] resize-none bg-transparent text-ui-14 leading-relaxed outline-none placeholder:text-ink-faint select-text thin-scrollbar ${
+							<ComposerEditor
+								key={draftKey}
+								draftKey={draftKey}
+								ref={editorRef}
+								className={`max-h-[200px] overflow-y-auto bg-transparent text-ui-14 leading-relaxed outline-none placeholder:text-ink-faint select-text thin-scrollbar ${
 									slashCommand ? "min-w-[140px] flex-1" : "w-full"
 								}`}
 								placeholder={slashCommand ? t("slash.argPlaceholder") : placeholder}
-								value={text}
-								rows={1}
+								document={document}
 								disabled={readOnly}
-								onChange={handleTextChange}
+								onChange={handleDocumentChange}
+								onSelectionChange={handleSelectionChange}
 								onKeyDown={handleKeyDown}
-								onSelect={handleSelect}
 								onPaste={handlePaste}
 							/>
 						</div>

@@ -17,7 +17,7 @@ export function registerSessionsIpc(backend: PiBackend): void {
 			backend.moveSession(sessionId, targetCwd, sessionFile),
 		exportSessionTranscript: ({ sessionId, sessionFile, cwd, name }) =>
 			backend.exportSessionTranscript(sessionId, sessionFile, cwd, name),
-		prompt: ({ sessionId, text, images }) => backend.prompt(sessionId, text, images),
+		prompt: ({ sessionId, text, images, document }) => backend.prompt(sessionId, text, images, document),
 		submitMessage: (request) => backend.submitMessage(request),
 		getMessageControl: ({ sessionId }) => backend.getMessageControl(sessionId),
 		changePendingMessage: (request) => backend.changePendingMessage(request),

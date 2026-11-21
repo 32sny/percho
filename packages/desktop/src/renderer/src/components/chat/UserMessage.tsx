@@ -41,16 +41,18 @@ export function UserMessage({ message }: { message: Extract<UIMessage, { kind: "
 						>
 							{t("message.skillInvocation", { name: message.skill.name })}
 						</div>
-						{message.text && <UserMessageText key={message.id} text={message.text} />}
+						{message.text && (
+							<UserMessageText key={message.id} text={message.text} document={message.document} />
+						)}
 					</div>
 				) : (
-					message.text && (
+					(message.document || message.text) && (
 						<div className="rounded-2xl rounded-br-md bg-user-bubble px-4 py-2.5 text-ui-15 leading-[1.7] text-ink shadow-soft select-text">
-							<UserMessageText key={message.id} text={message.text} />
+							<UserMessageText key={message.id} text={message.text} document={message.document} />
 						</div>
 					)
 				)}
-				{(message.skill || message.text || message.images.length > 0) && (
+				{(message.skill || message.document || message.text || message.images.length > 0) && (
 					<div className="mt-1 flex items-center justify-end gap-1">
 						{(message.skill || message.text) && (
 							<CopyButton text={message.skill ? formatSkillCommand(message.skill) : message.text} />

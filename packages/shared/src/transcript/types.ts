@@ -1,3 +1,4 @@
+import type { ComposerDocument } from "../composer-document";
 import type { UiError } from "../errors";
 import type { ControlSnapshot } from "../message-control";
 import type { ImageInput } from "../session";
@@ -47,6 +48,7 @@ interface UIBaseMessage {
 export type UIMessage =
 	| (UIBaseMessage & {
 			kind: "user";
+			document?: ComposerDocument;
 			images: ImageInput[];
 			/** 已展开 skill 的安全展示信息（不含正文或路径） */
 			skill?: SkillInvocationDisplay;

@@ -91,6 +91,12 @@ export const en: Messages = {
 		addImage: "Add image",
 		imageUnsupported:
 			"The current model doesn't support image input — remove the image or switch to a multimodal model",
+		filePathUnavailable:
+			"Could not read a local path for this file. Copy or drag it from your file manager again.",
+		legacyImageQueueBlocked:
+			"This host cannot queue images safely. Your draft is kept. Send it after the current task finishes.",
+		legacyImageDraftRetained:
+			"The image may have been queued or sent. Your draft is kept. Check the message status before retrying.",
 		removeImage: "Remove image",
 		removeAttachment: "Remove reference",
 		attachmentSessionBadge: "Chat",
@@ -152,9 +158,21 @@ export const en: Messages = {
 		noMatch: "No matching commands",
 		argPlaceholder: "Type arguments…",
 		builtin: {
-			compact: { label: "compact", description: "Compress session context", argumentHint: "[focus]" },
-			name: { label: "name", description: "Set session display name", argumentHint: "<name>" },
-			export: { label: "export", description: "Export session (.html/.jsonl)", argumentHint: "[path]" },
+			compact: {
+				label: "compact",
+				description: "Compress session context",
+				argumentHint: "[focus]",
+			},
+			name: {
+				label: "name",
+				description: "Set session display name",
+				argumentHint: "<name>",
+			},
+			export: {
+				label: "export",
+				description: "Export session (.html/.jsonl)",
+				argumentHint: "[path]",
+			},
 			settings: { label: "settings", description: "Open settings" },
 		},
 		group: {
@@ -917,5 +935,9 @@ export const en: Messages = {
 		pathRevealFailed: "Could not reveal in Finder",
 		pathCopyFailed: "Could not copy path",
 		pathCopied: "Absolute path copied",
+	},
+	remote: {
+		localFileRejected:
+			"Remote sessions cannot reference local files directly. Use images or a remote path instead.",
 	},
 };

@@ -1,5 +1,7 @@
 import {
 	type AvailableModel,
+	appendComposerDocument,
+	composerDocumentFromText,
 	type PermissionMode,
 	type SessionCloseIntent,
 	type SessionMeta,
@@ -11,7 +13,7 @@ import { selectActiveCwd } from "../lib/active-cwd";
 import { errText } from "../lib/error-text";
 import { clampThinkingLevel } from "../lib/thinking";
 import { useChannelSubscriptionsStore } from "./channel-subscriptions";
-import { COMPOSER_FOCUS_EVENT, useDraftStore } from "./drafts";
+import { COMPOSER_EDITOR_RELEASE_EVENT, COMPOSER_FOCUS_EVENT, useDraftStore } from "./drafts";
 import { discardPendingPayloads } from "./pending-payloads";
 import {
 	finishSessionHistory,
@@ -153,15 +155,24 @@ async function optimisticSessionSetting(
 	toastKey: "toast.modelSwitchFailed" | "toast.thinkingSwitchFailed",
 	compute: () => {
 		/** 乐观写入的跟随字段（lastUsedModel / lastUsedThinkingLevel） */
-		global: { lastUsedModel?: { provider: string; modelId: string } | null; lastUsedThinkingLevel?: string };
+		global: {
+			lastUsedModel?: { provider: string; modelId: string } | null;
+			lastUsedThinkingLevel?: string;
+		};
 		/** 乐观写入当前会话条目的补丁（model / thinkingLevel） */
-		sessionPatch: { model?: { provider: string; modelId: string } | null; thinkingLevel?: string | null };
+		sessionPatch: {
+			model?: { provider: string; modelId: string } | null;
+			thinkingLevel?: string | null;
+		};
 		/** draft 页（activeSessionId === null）写 newSessionDraft 的补丁；draft 不调 IPC */
 		draftPatch: Partial<
 			Pick<NewSessionDraftConfig, "model" | "thinkingLevel" | "modelResolved" | "thinkingResolved">
 		>;
 		/** saveUiState 载荷（乐观与回滚各一次） */
-		uiState: { lastUsedModel?: { provider: string; modelId: string } | null; lastUsedThinkingLevel?: string };
+		uiState: {
+			lastUsedModel?: { provider: string; modelId: string } | null;
+			lastUsedThinkingLevel?: string;
+		};
 		/** 真实会话的 SDK 同步 */
 		sync: (sessionId: string) => Promise<void>;
 	},
@@ -178,8 +189,14 @@ async function optimisticSessionSetting(
 	const previousSession = s.sessions.find((x) => x.sessionId === activeSessionId);
 	const { global, sessionPatch, draftPatch, uiState, sync } = compute();
 	const apply = (
-		g: { lastUsedModel?: { provider: string; modelId: string } | null; lastUsedThinkingLevel?: string },
-		patch: { model?: { provider: string; modelId: string } | null; thinkingLevel?: string | null },
+		g: {
+			lastUsedModel?: { provider: string; modelId: string } | null;
+			lastUsedThinkingLevel?: string;
+		},
+		patch: {
+			model?: { provider: string; modelId: string } | null;
+			thinkingLevel?: string | null;
+		},
 		draft: Partial<
 			Pick<NewSessionDraftConfig, "model" | "thinkingLevel" | "modelResolved" | "thinkingResolved">
 		>,
@@ -206,7 +223,10 @@ async function optimisticSessionSetting(
 		apply(
 			previousGlobal,
 			previousSession
-				? { model: previousSession.model, thinkingLevel: previousSession.thinkingLevel }
+				? {
+						model: previousSession.model,
+						thinkingLevel: previousSession.thinkingLevel,
+					}
 				: { model: null, thinkingLevel: null },
 			// 不在 draft 页就没写过 draft，回滚也不能碰它（后台 draft 可能活着）
 			{},
@@ -276,10 +296,17 @@ async function promoteDraft(draft: NewSessionDraftConfig): Promise<string | null
 			const sessions = state.sessions.some((s) => s.sessionId === meta.sessionId)
 				? state.sessions
 				: [...state.sessions, meta];
-			const landed = { sessions, lastUsedAt: { ...state.lastUsedAt, [meta.sessionId]: Date.now() } };
+			const landed = {
+				sessions,
+				lastUsedAt: { ...state.lastUsedAt, [meta.sessionId]: Date.now() },
+			};
 			if (isLatestActivation(token)) {
 				// 消费 draft：转正成功后新会话页不再留草稿（下次「＋」再按当时的会话快照新建一份）
-				return { ...landed, newSessionDraft: null, activeSessionId: meta.sessionId };
+				return {
+					...landed,
+					newSessionDraft: null,
+					activeSessionId: meta.sessionId,
+				};
 			}
 			// 迟到（用户已切走）：新会话仍进 sessions，但不抢焦点/cwd。
 			// 注意「转正途中点了『＋』」：此刻用户就在新会话页，而本次已消费掉那份 draft ——
@@ -427,7 +454,11 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 	models: [],
 	// 不变式：新会话页（`activeSessionId === null`）必须有一份 draft。开机就是新会话页，
 	// 所以初始化就建好（App 启动再把 lastCwd 种进来，见 App.tsx），不留「active=null 且 draft=null」的窗口
-	newSessionDraft: makeDraft({ cwd: null, lastUsedModel: null, lastUsedThinkingLevel: "medium" }),
+	newSessionDraft: makeDraft({
+		cwd: null,
+		lastUsedModel: null,
+		lastUsedThinkingLevel: "medium",
+	}),
 	lastUsedModel: null,
 	lastUsedThinkingLevel: "medium",
 	trustVersion: 0,
@@ -594,6 +625,13 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 			return { closed: false };
 		}
 		const closedFile = get().sessions.find((s) => s.sessionId === sessionId)?.sessionFile;
+		if (typeof window !== "undefined") {
+			window.dispatchEvent(
+				new CustomEvent(COMPOSER_EDITOR_RELEASE_EVENT, {
+					detail: { sessionId },
+				}),
+			);
+		}
 		sessionLoader.forget(sessionId, closedFile);
 		useTranscriptStore.getState().resetSession(sessionId);
 		// 频道订阅快照是「后端会话实例」的附属状态：会话关了（含 GC 卸载）就丢掉，并让在途查询作废
@@ -624,7 +662,13 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 			// LRU 打点随会话一起清（表项留着就是泄漏：只会积攒不再打开的 id）
 			const lastUsedAt = { ...state.lastUsedAt };
 			delete lastUsedAt[sessionId];
-			return { sessions, activeSessionId, permissionModes, lastUsedAt, newSessionDraft };
+			return {
+				sessions,
+				activeSessionId,
+				permissionModes,
+				lastUsedAt,
+				newSessionDraft,
+			};
 		});
 		return { closed: true };
 	},
@@ -659,7 +703,10 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 	},
 
 	openSubagentSessionFrom: async (parentTarget, filePath) => {
-		const parent = { sessionId: parentTarget.sessionId, sessionFile: parentTarget.sessionFile };
+		const parent = {
+			sessionId: parentTarget.sessionId,
+			sessionFile: parentTarget.sessionFile,
+		};
 		const result = await get().openFromHistory(filePath);
 		if (!parent.sessionId || !result.ok || !result.latest) return result;
 		if (parent.sessionId === result.meta.sessionId) return result;
@@ -723,7 +770,10 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 		const token = claimActivation();
 		noteUserIntent();
 		try {
-			const meta = await getPi().forkSession({ sessionId: activeSessionId, ref });
+			const meta = await getPi().forkSession({
+				sessionId: activeSessionId,
+				ref,
+			});
 			// fork 出的是用户刚开的新会话 → 记入临时工作区；迟到（已不是最新意图）只入列表，不抢 activeFile
 			const latest = isLatestActivation(token);
 			useSessionWorkspaceStore
@@ -749,15 +799,31 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 		// 新会话页还没有消息，无可撤回（UI 上也到不了这里，防御性拦截）
 		if (!activeSessionId) return;
 		try {
-			const recalled = await getPi().recallMessage({ sessionId: activeSessionId, ref });
+			const recalled = await getPi().recallMessage({
+				sessionId: activeSessionId,
+				ref,
+			});
 			// 分支已改变即失效：随后历史重载即使失败/延后，也不能继续展示撤回前的首条提问。
 			sessionHoverPreview.invalidate(activeSessionId);
 			// 内容回填草稿：已有草稿文本时换行拼接（与排队取回一致），图片追加在尾部
-			useDraftStore.getState().updateDraft(activeSessionId, (d) => ({
-				...d,
-				text: d.text ? `${d.text}\n${recalled.text}` : recalled.text,
-				images: recalled.images.length > 0 ? [...d.images, ...recalled.images] : d.images,
-			}));
+			useDraftStore.getState().updateDraft(activeSessionId, (d) => {
+				const nextText = d.text ? `${d.text}\n${recalled.text}` : recalled.text;
+				const recalledDoc =
+					recalled.document ?? (d.document ? composerDocumentFromText(recalled.text) : undefined);
+				const nextDoc =
+					d.document && recalledDoc
+						? appendComposerDocument(d.document, recalledDoc)
+						: (recalledDoc ??
+							(d.document
+								? appendComposerDocument(d.document, composerDocumentFromText(recalled.text))
+								: undefined));
+				return {
+					...d,
+					text: nextText,
+					...(nextDoc ? { document: nextDoc } : {}),
+					images: recalled.images.length > 0 ? [...d.images, ...recalled.images] : d.images,
+				};
+			});
 			// 重建消息流 + 队列/todo 对齐（同 fork 的恢复套路；会话 meta 不变无需更新）
 			await loadSessionBundle(activeSessionId);
 			window.dispatchEvent(new CustomEvent(COMPOSER_FOCUS_EVENT));
@@ -842,7 +908,10 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 			thinkingLevel = clampThinkingLevel(thinkingLevel, nextModel.thinkingLevels);
 		}
 		await optimisticSessionSetting("切换模型", "toast.modelSwitchFailed", () => ({
-			global: { lastUsedModel: { provider, modelId }, lastUsedThinkingLevel: thinkingLevel },
+			global: {
+				lastUsedModel: { provider, modelId },
+				lastUsedThinkingLevel: thinkingLevel,
+			},
 			sessionPatch: { model: { provider, modelId }, thinkingLevel },
 			// draft 页：选择写进 draft 配置（两个 resolved 位分字段置位，互不干扰）
 			draftPatch: {
@@ -851,7 +920,10 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 				modelResolved: true,
 				thinkingResolved: true,
 			},
-			uiState: { lastUsedModel: { provider, modelId }, lastUsedThinkingLevel: thinkingLevel },
+			uiState: {
+				lastUsedModel: { provider, modelId },
+				lastUsedThinkingLevel: thinkingLevel,
+			},
 			sync: (sessionId) => getPi().setModel({ sessionId, provider, modelId }),
 		}));
 	},
@@ -875,13 +947,17 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 	 */
 	setSessionPermissionMode: async (sessionId, mode) => {
 		const previous = get().permissionModes[sessionId] ?? "default";
-		set((state) => ({ permissionModes: withPermissionMode(state.permissionModes, sessionId, mode) }));
+		set((state) => ({
+			permissionModes: withPermissionMode(state.permissionModes, sessionId, mode),
+		}));
 		try {
 			await getPi().setPermissionMode({ sessionId, mode });
 			// D7：IPC 成功才记（失败回滚不记）；传 default 则会删键
 			useUiPreferencesStore.getState().rememberPermissionMode(sessionId, mode);
 		} catch (error) {
-			set((state) => ({ permissionModes: withPermissionMode(state.permissionModes, sessionId, previous) }));
+			set((state) => ({
+				permissionModes: withPermissionMode(state.permissionModes, sessionId, previous),
+			}));
 			console.error("切换权限模式失败", error);
 			pushToast("warning", "toast.permissionModeFailed", errText(error));
 		}

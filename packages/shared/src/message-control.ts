@@ -1,12 +1,15 @@
+import type { ComposerDocument } from "./composer-document";
 import type { ImageInput } from "./session";
 
 export type MessageMode = "queue" | "steer" | "interrupt";
 export type ControlPhase = "idle" | "preparing" | "running" | "compacting" | "interrupting" | "blocked";
 export interface MessagePayload {
 	text: string;
+	document?: ComposerDocument;
 	images?: ImageInput[];
 	draft?: {
 		text: string;
+		document?: ComposerDocument;
 		attachments: string[];
 		quotes: string[];
 		slashCommand: string | null;

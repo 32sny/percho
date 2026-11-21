@@ -11,6 +11,7 @@ import type {
 import {
 	type ActivityEntry,
 	appendOptimisticUserMessage,
+	type ComposerDocument,
 	emptyTranscript,
 	projectControlSendFailure,
 	reduceEvent,
@@ -67,7 +68,7 @@ interface TranscriptStore {
 	/** 发送瞬间插入乐观用户气泡（返回本地 id，供发送失败时撤回；详见 shared/transcript/pending-user.ts） */
 	appendOptimisticUser: (
 		sessionId: string,
-		input: { text: string; images: ImageInput[]; controlMessageId?: string },
+		input: { text: string; document?: ComposerDocument; images: ImageInput[]; controlMessageId?: string },
 	) => string;
 	/** 控制快照显式装载（会话 load/重载）：传 null 清空并解钉 runtime；传快照则整体替换（旧 runtime 直接作废） */
 	setControlSnapshot: (sessionId: string, snapshot: ControlSnapshot | null) => void;
