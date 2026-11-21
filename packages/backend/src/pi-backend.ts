@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -39,6 +40,7 @@ import type {
 	ExtensionDialogRespond,
 	ExtensionEditorTextEvent,
 	ExtensionNotifyEvent,
+	HistoryImageRef,
 	ImageInput,
 	LoadedResources,
 	LoginEventPayload,
@@ -62,10 +64,12 @@ import type {
 	RecoverPendingMessageResult,
 	SessionCloseIntent,
 	SessionEvent,
+	SessionHistoryWindow,
 	SessionHoverLiveRun,
 	SessionHoverPreviewResult,
 	SessionMessage,
 	SessionMeta,
+	SessionNavigationEntry,
 	SessionStats,
 	SlashCommandInfo,
 	StopMessageControlResult,
@@ -111,6 +115,12 @@ import {
 } from "./session/composer-input";
 import { slimBulkyEvent, slimMessageUpdate } from "./session/event-slim";
 import { ExtensionDialogHost } from "./session/extension-dialog-host";
+import {
+	HistoryImageStore,
+	measureEntryWithoutImageData,
+	stripHistoryImages,
+} from "./session/history-images";
+import { HistoryCursorError, type HistoryPage, SessionHistoryPager } from "./session/history-pager";
 import { SessionHydrationGate } from "./session/hydration-gate";
 import {
 	createMessageControlAdapter,
@@ -346,6 +356,13 @@ function isUnflushedNewSession(sessionManager: SessionManager): boolean {
 	}
 }
 
+/** 一次打开/重载会话钉住的分页快照：实例所有权 + 代次 + 已签发图片引用。 */
+interface HistorySnapshot {
+	owner: RegisteredSession;
+	pager: SessionHistoryPager;
+	images: HistoryImageStore;
+}
+
 export interface PiBackendOptions {
 	/** 默认工作目录（createSession 未指定时使用） */
 	defaultCwd?: string;
@@ -443,6 +460,7 @@ export class PiBackend {
 	private readonly guardTriggerMarkers = new GuardTriggerMarkers();
 	private readonly streamGuard = new StreamGuard();
 	private readonly historyGate = new SessionHydrationGate();
+	private readonly historyPagers = new Map<string, HistorySnapshot>();
 	/**
 	 * 频道 watcher 的会话级清理（按 modeRef 键控）。
 	 * ❗SDK 的 `dispose()` **不发 `session_shutdown`**（pi 1.0.4），所以 disposeSession 里除了
@@ -1217,6 +1235,8 @@ export class PiBackend {
 			this.registry.delete(sessionId);
 		} catch (error) {
 			failures.push(error);
+		} finally {
+			this.historyPagers.delete(sessionId);
 		}
 		try {
 			this.afterSessionDispose(entry);
@@ -1857,6 +1877,77 @@ export class PiBackend {
 	/** renderer 已落下首份完整历史；放行启动期频道 watcher + 离线对账。 */
 	markSessionHistoryReady(sessionId: string): void {
 		if (this.registry.has(sessionId)) this.historyGate.ack(sessionId);
+	}
+
+	/** Read the initial bounded history page and pin a cursor to this live session instance. */
+	getSessionHistoryWindow(sessionId: string): SessionHistoryWindow {
+		const entry = this.requireSession(sessionId);
+		const branch = entry.session.sessionManager.getBranch();
+		const leaf = entry.session.sessionManager.getLeafId() ?? "root";
+		const pager = new SessionHistoryPager({
+			sessionId,
+			instanceId: randomUUID(),
+			version: `${leaf}:${branch.length}`,
+			entries: branch,
+			// 预算只数轻量 entry；base64 图片另走 getSessionHistoryImage 懒加载。
+			measureEntry: measureEntryWithoutImageData,
+		});
+		const snapshot: HistorySnapshot = {
+			owner: entry,
+			pager,
+			images: new HistoryImageStore({ sessionId, generation: pager.generation }),
+		};
+		this.historyPagers.set(sessionId, snapshot);
+		return this.projectHistoryPage(snapshot, pager.tail());
+	}
+
+	/** Read an older page from the pinned snapshot; stale or cross-instance cursors fail closed. */
+	getSessionHistoryPage(sessionId: string, cursor: string): SessionHistoryWindow {
+		const entry = this.requireSession(sessionId);
+		const snapshot = this.historyPagers.get(sessionId);
+		if (!snapshot || snapshot.owner !== entry) {
+			throw new HistoryCursorError("no history snapshot is active for this session instance");
+		}
+		return this.projectHistoryPage(snapshot, snapshot.pager.older(cursor));
+	}
+
+	/** Navigation is deliberately scoped to the page generation requested by the renderer. */
+	getSessionNavigation(sessionId: string, generation: string): SessionNavigationEntry[] {
+		const owner = this.requireSession(sessionId);
+		const snapshot = this.historyPagers.get(sessionId);
+		if (snapshot?.owner !== owner || snapshot.pager.generation !== generation) {
+			throw new HistoryCursorError("navigation snapshot is no longer active");
+		}
+		return snapshot.pager.navigation();
+	}
+
+	/**
+	 * Resolve one lazily referenced history image. Only the exact live session instance and the
+	 * snapshot generation that issued the id can resolve it; arbitrary / cross-generation refs
+	 * return null. Bytes come from the in-memory snapshot, never from a filesystem path.
+	 */
+	getSessionHistoryImage(ref: HistoryImageRef): ImageInput | null {
+		if (!ref || typeof ref !== "object") return null;
+		if (typeof ref.sessionId !== "string" || typeof ref.imageId !== "string") return null;
+		const snapshot = this.historyPagers.get(ref.sessionId);
+		if (!snapshot) return null;
+		if (this.registry.get(ref.sessionId) !== snapshot.owner) return null;
+		return snapshot.images.get(ref);
+	}
+
+	/** 页面投影：完整 turn → SessionMessage，再把图片换成引用（图片字节留在 backend）。 */
+	private projectHistoryPage(snapshot: HistorySnapshot, page: HistoryPage): SessionHistoryWindow {
+		const messages = stripHistoryImages(toBranchSessionMessages(page.entries), {
+			startIndex: page.startIndex,
+			store: snapshot.images,
+		});
+		return {
+			messages,
+			hasOlder: page.hasOlder,
+			...(page.cursor ? { cursor: page.cursor } : {}),
+			startIndex: page.startIndex,
+			generation: page.generation,
+		};
 	}
 
 	/** 读取会话树当前分支的完整历史（compaction 只裁模型上下文，不裁 UI 历史） */

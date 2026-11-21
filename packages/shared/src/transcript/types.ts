@@ -1,7 +1,7 @@
 import type { ComposerDocument } from "../composer-document";
 import type { UiError } from "../errors";
 import type { ControlSnapshot } from "../message-control";
-import type { ImageInput } from "../session";
+import type { HistoryImageRef, ImageInput } from "../session";
 import type { SkillInvocationDisplay } from "../skill-invocation";
 import type { TodoItem } from "../todo";
 
@@ -50,6 +50,8 @@ export type UIMessage =
 			kind: "user";
 			document?: ComposerDocument;
 			images: ImageInput[];
+			/** 分页历史懒加载图片引用（分页路径 `images` 为空，按引用逐个取字节） */
+			historyImageRefs?: HistoryImageRef[];
 			/** 已展开 skill 的安全展示信息（不含正文或路径） */
 			skill?: SkillInvocationDisplay;
 			/**
@@ -87,6 +89,8 @@ export type UIMessage =
 			kind: "image";
 			id: string;
 			images: ImageInput[];
+			/** 分页历史懒加载图片引用（分页路径 `images` 为空，按引用逐个取字节） */
+			historyImageRefs?: HistoryImageRef[];
 			paths: string[];
 			timestamp: number;
 	  }

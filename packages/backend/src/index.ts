@@ -71,6 +71,23 @@ export {
 	workspaceConfigPath,
 } from "./project/workspace-store";
 export {
+	HistoryImageStore,
+	type HistoryImageStoreOptions,
+	measureEntryWithoutImageData,
+	stripEntryImageData,
+	stripHistoryImages,
+} from "./session/history-images";
+export {
+	HISTORY_MAX_BYTES,
+	HISTORY_TARGET_BYTES,
+	HistoryCursorError,
+	type HistoryPage,
+	type HistoryPagerOptions,
+	HistoryPageTooLargeError,
+	type HistoryVersion,
+	SessionHistoryPager,
+} from "./session/history-pager";
+export {
 	assignEntryIds,
 	blockImages,
 	blockText,

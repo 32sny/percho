@@ -47,6 +47,7 @@ import type {
 	ContextUsageInfo,
 	CreateSessionOptions,
 	GitBranches,
+	HistoryImageRef,
 	ImageInput,
 	LoadedResources,
 	PermissionAnswer,
@@ -59,10 +60,12 @@ import type {
 	QuotaInfo,
 	SessionCloseIntent,
 	SessionEventEnvelope,
+	SessionHistoryWindow,
 	SessionHoverPreviewRequest,
 	SessionHoverPreviewResult,
 	SessionMessage,
 	SessionMeta,
+	SessionNavigationEntry,
 	SessionStats,
 	SlashCommandInfo,
 	TrustAnswer,
@@ -174,8 +177,19 @@ export const SESSION_CHANNELS = {
 	>(),
 	abort: ch("session:abort")<{ sessionId: string }, void>(),
 	setThinkingLevel: ch("session:setThinkingLevel")<{ sessionId: string; level: string }, void>(),
-	/** 读取会话历史消息（打开历史会话时回放） */
 	getSessionMessages: ch("session:getMessages")<{ sessionId: string }, SessionMessage[]>(),
+	/** 首屏历史窗口与更早页；cursor 只在当前 backend 会话实例有效。 */
+	getSessionHistoryWindow: ch("session:getHistoryWindow")<{ sessionId: string }, SessionHistoryWindow>(),
+	getSessionHistoryPage: ch("session:getHistoryPage")<
+		{ sessionId: string; cursor: string },
+		SessionHistoryWindow
+	>(),
+	/** 按分页历史引用取回图片字节；跨会话/跨代/未签发 id 返回 null，不读文件路径。 */
+	getSessionHistoryImage: ch("session:getHistoryImage")<HistoryImageRef, ImageInput | null>(),
+	getSessionNavigation: ch("session:getNavigation")<
+		{ sessionId: string; generation: string },
+		SessionNavigationEntry[]
+	>(),
 	/** 只读、有界的当前分支首条用户文本预览，不加载会话实例 */
 	getSessionHoverPreview: ch("session:hoverPreview")<SessionHoverPreviewRequest, SessionHoverPreviewResult>(),
 	/** 首份完整历史已落到 renderer；解除启动期频道唤醒屏障 */

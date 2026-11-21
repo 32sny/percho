@@ -70,7 +70,6 @@ declare module "@percho/plugin-api" {
 
 	/** 槽位 props 契约（与 SPEC §2 表一致） */
 	export interface SlotProps {
-		"chat.tool-call-card": { tool: UIToolCall };
 		"chat.subagent-card": { runs: SubagentRunUi[] };
 		"chat.todo-panel": Record<string, never>;
 	}

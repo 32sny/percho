@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useT } from "../../i18n";
 import type { UIMessage } from "../../stores/transcript";
 import { HistoryImage } from "./history-image/HistoryImage";
+import { messageImageSources } from "./history-image/history-image-source";
 import { ATTACHMENT_IMAGE_MODE } from "./history-image-layout";
 import { ImagePreviewOverlay } from "./ImagePreview";
 import { CopyButton, RecallButton } from "./message-actions";
@@ -12,13 +13,15 @@ import { UserMessageText } from "./UserMessageText";
 export function UserMessage({ message }: { message: Extract<UIMessage, { kind: "user" }> }) {
 	const t = useT();
 	const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+	// 分页回放只给引用（`images` 为空）：列表与预览共用同一份来源列表，索号不会错位
+	const images = messageImageSources(message);
 
 	return (
 		<div className="group flex justify-end">
 			<div className="max-w-[85%]">
-				{message.images.length > 0 && (
+				{images.length > 0 && (
 					<div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
-						{message.images.map((image, index) => (
+						{images.map((image, index) => (
 							<HistoryImage
 								// biome-ignore lint/suspicious/noArrayIndexKey: 缩略图列表不可变（删除为整列表替换）
 								key={index}
@@ -52,7 +55,7 @@ export function UserMessage({ message }: { message: Extract<UIMessage, { kind: "
 						</div>
 					)
 				)}
-				{(message.skill || message.document || message.text || message.images.length > 0) && (
+				{(message.skill || message.document || message.text || images.length > 0) && (
 					<div className="mt-1 flex items-center justify-end gap-1">
 						{(message.skill || message.text) && (
 							<CopyButton text={message.skill ? formatSkillCommand(message.skill) : message.text} />
@@ -70,7 +73,7 @@ export function UserMessage({ message }: { message: Extract<UIMessage, { kind: "
 			</div>
 			{previewIndex !== null && (
 				<ImagePreviewOverlay
-					images={message.images}
+					images={images}
 					initialIndex={previewIndex}
 					onClose={() => setPreviewIndex(null)}
 				/>

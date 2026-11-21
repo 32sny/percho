@@ -10,6 +10,8 @@
  *   不把异常抛给渲染层（否则调用方拿不到句柄 = 原图被强持有 + React 崩树）
  * - 非活跃 Blob 进 LRU（条数 + 字节双上限）；Blob URL 同一 key 共享、最后一个订阅者走时 revoke
  * - 身份用 WeakMap 指向 ImageInput 对象（不 hash base64）；缓存项只存 Blob 与几何，不持有原对象
+ * - **引用图**（分页回放只给 id）走同一条单飞链路：只有可见派发时才向 backend 取原图，取到的
+ *   base64 只活到 `postMessage` 那一帧，不落到 record 上（后续重试/让位后再派发会重新取）
  * - `reset()` 换代：旧句柄全部失效（不能碰新代资源、不能撤销新代 URL），队列/在途/缓存清空
  */
 import type { ImageInput } from "@percho/shared";
@@ -19,6 +21,13 @@ import { TASK_TIMEOUT_MS, THUMBNAIL_MAX_SIDE } from "./constants";
 // （未引用模块本来也会 tree-shake）；换 `?worker` 后再验。阶段 3 仍要在 app 最终产物 + file:// 下复验。
 import ThumbnailWorker from "./history-image.worker.ts?worker";
 import { historyImageObserverDiagnostics } from "./history-image-observer";
+import {
+	type HistoryImageRef,
+	type HistoryImageSource,
+	historyImageRefKey,
+	isHistoryImageRef,
+	loadHistoryImage,
+} from "./history-image-source";
 import { ActiveSlotRegistry, ThumbnailCache, type ThumbnailCacheEntry } from "./thumbnail-budget";
 import type { ThumbnailRequest, ThumbnailResponse } from "./thumbnail-protocol";
 
@@ -45,6 +54,8 @@ export interface ThumbnailServiceOptions {
 	revokeObjectUrl?: (url: string) => void;
 	maxSide?: number;
 	timeoutMs?: number;
+	/** 引用图取原图入口（默认走 IPC `getSessionHistoryImage`）；单测注入用 */
+	loadRef?: (ref: HistoryImageRef) => Promise<ImageInput | null>;
 }
 
 export interface ThumbnailServiceStats {
@@ -72,7 +83,10 @@ export interface ThumbnailServiceStats {
 
 interface KeyRecord {
 	key: number;
-	image: ImageInput;
+	/** 内联源（持有 base64）；引用图为 null，取到的原图不会落到 record 上 */
+	image: ImageInput | null;
+	/** 引用图描述（只有引用图有） */
+	ref: HistoryImageRef | null;
 	status: ThumbnailStatus;
 	entry: ThumbnailCacheEntry | null;
 	url: string | null;
@@ -85,6 +99,8 @@ interface PendingTask {
 	requestId: number;
 	key: number;
 	timer: ReturnType<typeof setTimeout> | null;
+	/** 是否已经 postMessage（引用图在取图期间 posted=false，不计入 outstandingRequests） */
+	posted: boolean;
 }
 
 const STALE_SNAPSHOT: ThumbnailSnapshot = { status: "idle", url: null, width: null, height: null };
@@ -95,10 +111,13 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 	const revokeObjectUrl = options.revokeObjectUrl ?? ((url: string) => URL.revokeObjectURL(url));
 	const maxSide = options.maxSide ?? THUMBNAIL_MAX_SIDE;
 	const timeoutMs = options.timeoutMs ?? TASK_TIMEOUT_MS;
+	const loadRef = options.loadRef ?? loadHistoryImage;
 
 	const registry = new ActiveSlotRegistry();
 	const cache = new ThumbnailCache();
 	const identity = new WeakMap<ImageInput, number>();
+	/** 引用图按稳定字符串键去重（同一张图多个订阅者共享一次取图与解码） */
+	const refKeys = new Map<string, number>();
 	const records = new Map<number, KeyRecord>();
 	const counters = {
 		outstandingRequests: 0,
@@ -121,11 +140,19 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 	let pumping = false;
 	let pumpRequested = false;
 
-	function keyOf(image: ImageInput): number {
-		const existing = identity.get(image);
+	function keyOf(source: HistoryImageSource): number {
+		if (isHistoryImageRef(source)) {
+			const refKey = historyImageRefKey(source);
+			const existing = refKeys.get(refKey);
+			if (existing !== undefined) return existing;
+			const key = ++nextKey;
+			refKeys.set(refKey, key);
+			return key;
+		}
+		const existing = identity.get(source);
 		if (existing !== undefined) return existing;
 		const key = ++nextKey;
-		identity.set(image, key);
+		identity.set(source, key);
 		return key;
 	}
 
@@ -204,12 +231,24 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 		counters.workerTerminated += 1;
 	}
 
+	/**
+	 * 当前在途任务的收尾（存在且仍是这一条才算）。
+	 * 只对**已投递**的任务退 outstandingRequests：引用图在取图期间那一笔还没到 worker。
+	 */
+	function finishTask(requestId: number): void {
+		const task = pending;
+		if (!task || task.requestId !== requestId) return;
+		pending = null;
+		if (task.timer) clearTimeout(task.timer);
+		if (task.posted) counters.outstandingRequests = Math.max(0, counters.outstandingRequests - 1);
+	}
+
 	/** 重置当前在途任务：worker 异常、同步抛、超时都走这里（保证不留僵尸任务） */
 	function failPending(): void {
 		const task = pending;
 		pending = null;
 		if (task?.timer) clearTimeout(task.timer);
-		if (task) counters.outstandingRequests = Math.max(0, counters.outstandingRequests - 1);
+		if (task?.posted) counters.outstandingRequests = Math.max(0, counters.outstandingRequests - 1);
 		disposeWorker();
 		if (!task) return;
 		const record = records.get(task.key);
@@ -237,7 +276,7 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 		const task = pending;
 		pending = null;
 		if (task.timer) clearTimeout(task.timer);
-		counters.outstandingRequests = Math.max(0, counters.outstandingRequests - 1);
+		if (task.posted) counters.outstandingRequests = Math.max(0, counters.outstandingRequests - 1);
 		const record = records.get(task.key);
 		if (!record) {
 			counters.lateDropped += 1;
@@ -266,18 +305,29 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 		}, timeoutMs);
 		// **先建立「在途所有权」再暴露 loading 通知**：否则 listener 在通知里重入 pump 时
 		// 会看到 pending 还是 null，于是又派发一条，把这条覆盖掉（实测踩到过 49/50 双投递）
-		pending = { requestId, key: record.key, timer };
+		pending = { requestId, key: record.key, timer, posted: false };
 		record.status = "loading";
 		registry.setState(record.key, "loading");
+		if (record.image) {
+			post(record, requestId, record.image);
+			return;
+		}
+		// 引用图：先通知加载中，再按需取原图（隐藏/离屏项在 pump 里已被跳过，不会走到这）
+		notify(record);
+		void resolveAndPost(record, requestId);
+	}
+
+	/** 同步投递到 worker（内联图与引用图取到原图后共用同一条路径） */
+	function post(record: KeyRecord, requestId: number, image: ImageInput): void {
 		try {
-			const request: ThumbnailRequest = { requestId, image: record.image, maxSide };
+			const request: ThumbnailRequest = { requestId, image, maxSide };
 			workerInstance().postMessage(request);
 			counters.outstandingRequests += 1;
+			if (pending?.requestId === requestId) pending.posted = true;
 		} catch {
 			// 同步失败（new Worker 被拦 / postMessage 抛）：进 error 状态机，句柄照样能 release/retry
 			counters.syncFailures += 1;
-			pending = null;
-			clearTimeout(timer);
+			finishTask(requestId);
 			disposeWorker();
 			demote(record, "error");
 			schedulePump();
@@ -289,6 +339,39 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 		// 「记录已不在、却还去推进队列」这件事不可能发生，而不是它当下承重。
 		if (records.get(record.key) !== record) return;
 		registry.promoteIdle();
+	}
+
+	/**
+	 * 引用图：先取原图，再走同一条单飞投递。取图期间 `pending` 已占位，所以「单飞」语义与
+	 * 内联图完全一致；超时 / 重置 / 释放之后的迟到结果一律丢弃（不投递、不缓存、不通知）。
+	 */
+	async function resolveAndPost(record: KeyRecord, requestId: number): Promise<void> {
+		const ref = record.ref;
+		let image: ImageInput | null = null;
+		if (ref) {
+			try {
+				image = await loadRef(ref);
+			} catch {
+				image = null;
+			}
+		}
+		// 已被收尾（超时 / reset / 同步失败）或换上别的任务：这一份 base64 直接丢掉
+		if (pending?.requestId !== requestId) return;
+		if (records.get(record.key) !== record) {
+			// 取图期间被释放/重置：连投递都不做，也不进缓存
+			finishTask(requestId);
+			schedulePump();
+			return;
+		}
+		if (!image) {
+			finishTask(requestId);
+			demote(record, "error");
+			schedulePump();
+			return;
+		}
+		// base64 只活到这一帧（postMessage 的 structured clone 已经复制）；record 上不留引用，
+		// 后续重试 / 让位后再派发会重新取图，而不是长期霸占一份原图
+		post(record, requestId, image);
 	}
 
 	/** 真实可见的请求等 slot 而预算已满时：回收最老的非可见 ready 项让位（不超预算、不多开 worker） */
@@ -332,13 +415,21 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 	function pumpOnce(): void {
 		if (pending) return;
 		registry.promoteIdle();
+		// 本轮「先不跑」的候选：引用图不可见时不取原图（只留在队列里等 setVisible）
+		const skipped = new Set<number>();
 		// 有界循环：每次迭代要么物化/派发一个、要么回收一个 slot、要么退出
 		for (let guard = 0; guard < 4096; guard += 1) {
-			const key = registry.nextWaiting();
+			const key = registry.nextWaiting(skipped);
 			if (key === null) return;
 			const record = records.get(key);
 			if (!record) {
 				registry.unsubscribe(key, false);
+				continue;
+			}
+			// 引用图**只在真实可见时**才向 backend 要原图：隐藏/离屏的项既不占在途任务，
+			// 也不把 base64 拉进内存；变成可见后 setVisible → pump 会重新选中它
+			if (!record.image && record.ref && registry.visibility(key) !== "visible") {
+				skipped.add(key);
 				continue;
 			}
 			const recordGeneration = generation;
@@ -377,15 +468,18 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 		records.delete(key);
 	}
 
-	function acquire(image: ImageInput, acquireOptions: { visible?: boolean } = {}): ThumbnailHandle {
+	function acquire(source: HistoryImageSource, acquireOptions: { visible?: boolean } = {}): ThumbnailHandle {
 		const ownGeneration = generation;
 		let visible = acquireOptions.visible !== false;
-		const key = keyOf(image);
+		const ref = isHistoryImageRef(source) ? source : null;
+		const key = keyOf(source);
 		let record = records.get(key);
 		if (!record) {
 			record = {
 				key,
-				image,
+				// 引用图不持有 base64：取到的原图只在派发那一帧存在
+				image: isHistoryImageRef(source) ? null : source,
+				ref,
 				status: "idle",
 				entry: null,
 				url: null,
@@ -458,7 +552,7 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 		const task = pending;
 		pending = null;
 		if (task?.timer) clearTimeout(task.timer);
-		if (task) counters.outstandingRequests = Math.max(0, counters.outstandingRequests - 1);
+		if (task?.posted) counters.outstandingRequests = Math.max(0, counters.outstandingRequests - 1);
 		disposeWorker();
 		for (const record of records.values()) {
 			dropUrl(record);
@@ -469,6 +563,8 @@ export function createThumbnailService(options: ThumbnailServiceOptions = {}) {
 		records.clear();
 		registry.clear();
 		cache.clear();
+		// 换代后旧引用不再有意义：清掉字符串去重表（缓存与在途已经全部作废）
+		refKeys.clear();
 		for (const listener of [...resetListeners]) {
 			try {
 				listener();

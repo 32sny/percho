@@ -11,6 +11,7 @@ export * from "./mcp";
 export * from "./message-control";
 export * from "./model-visibility";
 export * from "./packages";
+export * from "./preview-excerpt";
 export * from "./session";
 export * from "./session-hover";
 export * from "./session-path";

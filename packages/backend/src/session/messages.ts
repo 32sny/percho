@@ -6,8 +6,10 @@ import {
 	type ImageInput,
 	parseExpandedSkillInvocation,
 	parseSubagentNotification,
+	previewExcerpt,
 	readComposerDocument,
 	type SessionMessage,
+	type SessionNavigationEntry,
 	type SessionToolCall,
 } from "@percho/shared";
 
@@ -107,6 +109,47 @@ export function blockImages(content: string | ContentBlock[] | undefined): Image
 	return (content ?? [])
 		.filter((c) => c.type === "image" && c.data)
 		.map((c) => ({ data: c.data as string, mimeType: (c.mimeType as string) ?? "image/png" }));
+}
+
+function deriveUserMessage(raw: RawMessage) {
+	const sourceText = blockText(raw.content);
+	const document = readComposerDocument(raw);
+	const invocation = document ? null : parseExpandedSkillInvocation(sourceText);
+	return {
+		sourceText,
+		document,
+		invocation,
+		text: document ? composerDocumentText(document) : invocation ? (invocation.args ?? "") : sourceText,
+	};
+}
+
+/** Index the pinned branch without replaying tools, images, or skill expansion bodies. */
+export function buildSessionNavigation(branch: readonly SessionEntry[]): SessionNavigationEntry[] {
+	const nodes: SessionNavigationEntry[] = [];
+	for (const entry of branch) {
+		if (entry.type !== "message") continue;
+		const raw: RawMessage = entry.message;
+		if (raw.role === "user") {
+			const { text, invocation } = deriveUserMessage(raw);
+			const images = blockImages(raw.content).length;
+			const excerpt = previewExcerpt(invocation ? `/${invocation.name} ${text}` : text);
+			if (!text && !images && !invocation) continue;
+			nodes.push({
+				entryId: entry.id,
+				ordinal: nodes.length,
+				excerpt,
+				timestamp: Number(raw.timestamp ?? Date.parse(entry.timestamp)) || 0,
+				images,
+			});
+		} else if (raw.role === "assistant") {
+			const node = nodes.at(-1);
+			if (node && !node.reply) {
+				const reply = previewExcerpt(blockText(raw.content));
+				if (reply) node.reply = reply;
+			}
+		}
+	}
+	return nodes;
 }
 
 /**
@@ -284,12 +327,10 @@ export function toSessionMessages(rawMessages: readonly unknown[]): SessionMessa
 			continue;
 		}
 		if (raw.role === "user") {
-			const sourceText = blockText(raw.content);
-			const document = readComposerDocument(raw);
-			const invocation = document ? null : parseExpandedSkillInvocation(sourceText);
+			const { sourceText, document, invocation, text } = deriveUserMessage(raw);
 			out.push({
 				role: "user",
-				text: document ? composerDocumentText(document) : invocation ? (invocation.args ?? "") : sourceText,
+				text,
 				...(document ? { document, sourceText } : {}),
 				thinking: "",
 				tools: [],

@@ -72,7 +72,7 @@ node scripts/shoot-sidebar.mjs both .local/tmp/ui-review
 |---|---|
 | 流式白屏/卡死 | console、renderer-watchdog、事件 trace；稳定 selector 与导入环 |
 | 页面状态难复现 | `scripts/replay-trace.mts`，需要 UI 时用 `repro-full.mjs` |
-| 切会话卡顿或上滑被拉回 | `MessageList.tsx`、`mount-window.ts`、浏览器滚动锚定；不要叠加多套补偿 |
+| 切会话卡顿或上滑被拉回 | `MessageList.tsx`、`row-positions.ts`、`use-row-geometry.ts`；区分自动跟随、阅读和导航跳转，不要叠加多套锚定补偿 |
 | 浮层 rect 正确但显示不全 | mask 裁绘与 portal，见 [UI 规范](ui.md) |
 | 带图发送后短暂空白 | 乐观用户气泡与附件预缩放，见 [SDK 集成](sdk.md) |
 | 历史图成本或占位跳动 | `check-history-images.mjs`、历史图片资源层；必须覆盖 build 的 file:// 与 worker 链路 |

@@ -1,10 +1,10 @@
-import type { ImageInput } from "@percho/shared";
 import { type Ref, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useT } from "../../../i18n";
 import { createHistoryImageBinding, type HistoryImageBinding, INERT_SNAPSHOT } from "./history-image-binding";
 import { historyImageObserver } from "./history-image-observer";
 import { useHistoryImageRoot } from "./history-image-root";
 import { type ThumbnailService, type ThumbnailSnapshot, thumbnailService } from "./history-image-service";
+import type { HistoryImageSource } from "./history-image-source";
 
 /**
  * 历史列表里的一张图（用户附件与 show_image 两个入口共用）。
@@ -15,12 +15,15 @@ import { type ThumbnailService, type ThumbnailSnapshot, thumbnailService } from 
  *   没有原图回退；
  * - **加载**：交给 `history-image-service`（48 slots / 队列 / LRU / 单飞 / 超时重置），
  *   可见性由共享 IntersectionObserver 按「真实落在滚动容器可视区内」给出；
+ * - **来源**：`ImageInput`（live / 已加载页的内联 base64）或 `HistoryImageRef`（分页回放只给 id）。
+ *   引用图只有进入加载区且**真实可见**时才会去取原图，取到的 base64 不落到资源层长期持有；
+ *   生命周期、可见性门控、占位与内联图完全一致（同一个服务、同一套 slot/队列/LRU）。
  * - **预览**：点击外盒仍然是打开原图预览（占位态也能点），失败态点击是重试。
  *
  * 拿不到 root（没接线）时只渲染同尺寸占位，**不做任何加载**。
  */
 export interface HistoryImageProps {
-	image: ImageInput;
+	image: HistoryImageSource;
 	/** 外盒（固定尺寸）与盒内 img 的 class，来自 history-image-layout */
 	boxClass: string;
 	imgClass: string;

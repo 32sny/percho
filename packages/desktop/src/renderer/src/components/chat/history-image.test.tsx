@@ -36,6 +36,7 @@ import type {
 	ThumbnailService,
 	ThumbnailSnapshot,
 } from "./history-image/history-image-service";
+import type { HistoryImageRef } from "./history-image/history-image-source";
 import { ATTACHMENT_IMAGE_MODE, modeForImageCount, SINGLE_IMAGE_BOX } from "./history-image-layout";
 import { ImagePreviewOverlay } from "./ImagePreview";
 import { MessageItem } from "./MessageItem";
@@ -466,5 +467,76 @@ describe("历史图片接线（binding）：只加载加载区内的图", () => 
 		fake.emitVisibility(false, false);
 		expect(listener.mock.calls.length).toBeGreaterThan(before);
 		stop();
+	});
+});
+
+describe("历史图片：分页回放的引用（不内联 base64）", () => {
+	const historyRefs = (count: number): HistoryImageRef[] =>
+		Array.from({ length: count }, (_, index) => ({
+			sessionId: "session-1",
+			generation: "gen-1",
+			imageId: `image-${index}`,
+			mimeType: "image/png",
+		}));
+
+	/** 分页回放：`images` 为空、只有引用（shared 的 historyImageRefs 字段） */
+	const userMessageWithRefs = (count: number, text = "看看这几张") => ({
+		...userMessage(0),
+		text,
+		historyImageRefs: historyRefs(count),
+	});
+
+	const imageMessageWithRefs = (count: number) => ({
+		...imageMessage(0),
+		historyImageRefs: historyRefs(count),
+	});
+
+	beforeEach(() => {
+		vi.stubGlobal("navigator", { language: "zh-CN" });
+		vi.stubGlobal("React", React);
+	});
+
+	it("用户消息：引用按张数渲染同尺寸外盒，不出现 <img> 与原图 data URL", () => {
+		const html = renderToStaticMarkup(createElement(UserMessage, { message: userMessageWithRefs(3) }));
+		expect(imgTags(html)).toHaveLength(0);
+		expect(withClass(html, ATTACHMENT_IMAGE_MODE.box)).toHaveLength(3);
+		expect(html).toContain('data-history-image="idle"');
+		expect(html).not.toContain("data:");
+		// 占位几何与内联图完全一致（64 方格、三态同尺寸）
+		expect(withClass(html, "h-16 w-16")).toHaveLength(3);
+	});
+
+	it("纯图片气泡（无文本）：引用列表同样撑起气泡与操作行", () => {
+		const html = renderToStaticMarkup(createElement(UserMessage, { message: userMessageWithRefs(1, "") }));
+		expect(withClass(html, ATTACHMENT_IMAGE_MODE.box)).toHaveLength(1);
+		// 有图即有操作行（复制/撤回的入口容器）
+		expect(html).toContain("mt-1 flex items-center justify-end gap-1");
+		// 没有文本气泡
+		expect(html).not.toContain("bg-user-bubble");
+	});
+
+	it("show_image 消息：引用按同一套张数档位分档（外盒不漂移）", () => {
+		for (const count of [1, 3, 6, 9]) {
+			const html = renderToStaticMarkup(createElement(MessageItem, { message: imageMessageWithRefs(count) }));
+			expect(withClass(html, modeForImageCount(count).box)).toHaveLength(count);
+			expect(imgTags(html)).toHaveLength(0);
+		}
+	});
+
+	it("内联图优先：同时带 images 与引用时仍以内联为准（不会重复渲染）", () => {
+		const html = renderToStaticMarkup(
+			createElement(MessageItem, {
+				message: { ...imageMessage(2), historyImageRefs: historyRefs(5) },
+			}),
+		);
+		expect(withClass(html, modeForImageCount(2).box)).toHaveLength(2);
+	});
+
+	it("引用列表为空时按无图处理（不产生空行、不撑高度）", () => {
+		const html = renderToStaticMarkup(
+			createElement(MessageItem, { message: { ...imageMessage(0), historyImageRefs: [] } }),
+		);
+		expect(imgTags(html)).toHaveLength(0);
+		expect(withClass(html, ATTACHMENT_IMAGE_MODE.box)).toHaveLength(0);
 	});
 });

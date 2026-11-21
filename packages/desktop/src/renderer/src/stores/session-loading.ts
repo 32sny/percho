@@ -1,5 +1,4 @@
 import type { PermissionMode, SessionMeta } from "@percho/shared";
-import { messagesToUIMessages } from "@percho/shared";
 import { getPi } from "../api";
 import { errText } from "../lib/error-text";
 import {
@@ -7,7 +6,10 @@ import {
 	deferSessionHistory,
 	finishSessionHistory,
 	historyOpenEpoch,
+	historyWindowMessages,
 	isHistoryReady,
+	requestSessionHistoryWindow,
+	setSessionHistoryWindow,
 } from "./session-history";
 import { pushToast } from "./toasts";
 import { useTranscriptStore } from "./transcript";
@@ -66,30 +68,22 @@ export function createSessionLoader(ports: SessionDataPorts) {
 			useTranscriptStore.getState().bySession[sessionId]?.agentActive === true;
 		const transcriptBefore = useTranscriptStore.getState().bySession[sessionId];
 		const openingEpoch = historyOpenEpoch(sessionId);
+		// 控制快照对齐同 id 重开的 runtime；旧注入宿主未提供时显式清空。
+		// SAFETY: current CHANNEL_TABLE always includes this method; older injected hosts may omit it.
+		const controlApi = getPi() as unknown as {
+			getMessageControl?: (req: {
+				sessionId: string;
+			}) => Promise<{ ok: true; value: import("@percho/shared").ControlSnapshot } | { ok: false }>;
+		};
+		const controlPromise = controlApi.getMessageControl
+			? controlApi.getMessageControl({ sessionId }).catch(() => null)
+			: Promise.resolve(null);
 		const [history, followUpQueue, todos, permissionMode, control] = await Promise.all([
-			skipHistory ? Promise.resolve(null) : getPi().getSessionMessages({ sessionId }),
+			skipHistory ? Promise.resolve(null) : requestSessionHistoryWindow(sessionId),
 			getPi().getFollowUpMessages({ sessionId }),
 			getPi().getTodos({ sessionId }),
 			getPi().getPermissionMode({ sessionId }),
-			// 控制快照：同 id 会话可被重开（runtime 不同），load 时必须明确替换旧快照；
-			// 通道未就绪/失败按 null 处理（显式清空，防旧实例事件接管），不影响四件套
-			(
-				getPi() as unknown as {
-					getMessageControl?: (req: {
-						sessionId: string;
-					}) => Promise<{ ok: true; value: import("@percho/shared").ControlSnapshot } | { ok: false }>;
-				}
-			).getMessageControl
-				? (
-						getPi() as unknown as {
-							getMessageControl: (req: {
-								sessionId: string;
-							}) => Promise<{ ok: true; value: import("@percho/shared").ControlSnapshot } | { ok: false }>;
-						}
-					)
-						.getMessageControl({ sessionId })
-						.catch(() => null)
-				: Promise.resolve(null),
+			controlPromise,
 		]);
 		// TOCTOU 复核：await 期间会话转为 live（如恰好有 prompt 竞态）时丢弃迟到历史，
 		// 防旧快照覆盖刚建立的流式态（queue/todo/permissionMode 是幂等快照，照常应用）
@@ -101,7 +95,8 @@ export function createSessionLoader(ports: SessionDataPorts) {
 		const t = useTranscriptStore.getState();
 		const historyNeedsRetry = !history || liveNow || transcriptBefore !== transcriptNow;
 		if (history && !historyNeedsRetry) {
-			t.loadHistory(sessionId, messagesToUIMessages(history));
+			t.loadHistory(sessionId, historyWindowMessages(history));
+			setSessionHistoryWindow(sessionId, history);
 			finishSessionHistory(sessionId);
 		}
 		t.setFollowUpQueue(sessionId, followUpQueue);

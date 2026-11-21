@@ -62,9 +62,7 @@ export function createHistoryImageObserver(options: HistoryImageObserverOptions)
 	const margin = options.rootMarginPx ?? VIEWPORT_ROOT_MARGIN_PX;
 	const createObserver =
 		options.createObserver ?? ((callback, init) => new IntersectionObserver(callback, init));
-	const readRect =
-		options.readRect ??
-		((element: Element) => element.getBoundingClientRect() as DOMRect as { top: number; bottom: number });
+	const readRect = options.readRect ?? ((element: Element) => element.getBoundingClientRect());
 	const targets = new Map<Element, TargetRecord>();
 	/** 只在**加载范围内**的元素上做视口几何扫描（滚动时不做全历史扫描） */
 	const inRange = new Set<Element>();

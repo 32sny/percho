@@ -45,7 +45,14 @@ export function messagesToUIMessages(messages: SessionMessage[]): UIMessage[] {
 		}
 		if (m.role === "image") {
 			flushError();
-			ui.push({ kind: "image", id, images: m.images, paths: m.paths, timestamp: m.timestamp });
+			ui.push({
+				kind: "image",
+				id,
+				images: m.images,
+				...(m.historyImageRefs ? { historyImageRefs: m.historyImageRefs } : {}),
+				paths: m.paths,
+				timestamp: m.timestamp,
+			});
 			continue;
 		}
 		if (m.role === "subagent") {
@@ -62,13 +69,16 @@ export function messagesToUIMessages(messages: SessionMessage[]): UIMessage[] {
 			flushError();
 			const text = m.text;
 			const sourceText = m.sourceText;
-			if (m.skill || m.document || text || m.images.length > 0) {
+			const historyImageRefs = m.historyImageRefs;
+			// 分页路径的图片被剥离成引用：只带引用的纯图片 user 消息也必须保留。
+			if (m.skill || m.document || text || m.images.length > 0 || (historyImageRefs?.length ?? 0) > 0) {
 				ui.push({
 					kind: "user",
 					id,
 					text,
 					...(m.document ? { document: m.document } : {}),
 					images: m.images,
+					...(historyImageRefs ? { historyImageRefs } : {}),
 					timestamp: m.timestamp,
 					entryId: m.entryId,
 					skill: m.skill,

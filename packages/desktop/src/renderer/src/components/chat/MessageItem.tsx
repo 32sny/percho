@@ -6,6 +6,7 @@ import type { UIMessage } from "../../stores/transcript";
 import { AssistantMessage } from "./AssistantMessage";
 import { ErrorNote } from "./ErrorNote";
 import { HistoryImage } from "./history-image/HistoryImage";
+import { messageImageSources } from "./history-image/history-image-source";
 import { modeForImageCount } from "./history-image-layout";
 import { ImagePreviewOverlay } from "./ImagePreview";
 import { CopyButton, ForkButton } from "./message-actions";
@@ -42,11 +43,13 @@ export const MessageItem = memo(function MessageItem({
 		// 单图：固定 192×144 外盒 + object-contain（允许留白换「加载前后行高不变」）；
 		// 多图：统一正方形缩略图按数量分档（一行优先，超出 flex-wrap 换行）。尺寸见 history-image-layout.ts
 		// 尺寸档位与稳定外盒统一走 history-image-layout（尺寸挂外盒，img 只负责盒内填充）
-		const mode = modeForImageCount(message.images.length);
+		// 分页回放只给引用（`images` 为空）：按来源列表分档，抗图与预览索引共用它
+		const images = messageImageSources(message);
+		const mode = modeForImageCount(images.length);
 		return (
 			<div>
 				<div className="flex flex-wrap gap-2">
-					{message.images.map((image, index) => (
+					{images.map((image, index) => (
 						<HistoryImage
 							// biome-ignore lint/suspicious/noArrayIndexKey: 图片列表不可变
 							key={index}
@@ -61,7 +64,7 @@ export const MessageItem = memo(function MessageItem({
 				</div>
 				{previewIndex !== null && (
 					<ImagePreviewOverlay
-						images={message.images}
+						images={images}
 						initialIndex={previewIndex}
 						onClose={() => setPreviewIndex(null)}
 					/>

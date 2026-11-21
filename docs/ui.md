@@ -87,7 +87,9 @@
 ## 消息与图片的特殊边界
 
 - UI 历史来自完整分支，而非压缩后的模型上下文，见 [架构](architecture.md)。
-- 历史图片使用 `components/chat/history-image/` 资源层；稳定外盒、加载区门控、缩略图与原图预览各有归属，不在列表直接挂大量原图 data URL。资源释放与 worker 代次沿用现有服务，不在组件另建缓存。
+- 历史图片使用 `components/chat/history-image/` 资源层；分页回放只传图片引用。稳定外盒和加载区门控沿用现有服务，缩略图进入加载区才读取，预览只读取当前原图。旧宿主和实时图片仍可走内联路径。
+- 消息区仅挂载可视窗口及缓冲区；保留正在使用的原生选区，历史前插按稳定行键维持阅读位置。工具明细只在展开时挂载，工具调用卡不再是插件槽位。
+- 消息导航（minimap）在聊天正文左侧有足够空带且至少 4 轮时显示；高亮当前视口轮次，点击或 Alt+↑/↓ 跳转，遇到未加载历史才取页。悬停卡使用 `bg-surface shadow-pop`、无边框，字号用 `text-ui-*`。
 - markstream/Monaco/Mermaid 的接入限制先查 `Markdown.tsx`、`MermaidBlock.tsx` 与现有测试；不要复制库内部实现。
 - Monaco 只读代码块仍可能启动语言服务。`monaco-contribs.ts` 必须为 JSON、CSS/SCSS/LESS、HTML/Handlebars/Razor 与 JS/TS 分配对应语言 Worker，不能用 editor Worker 代替已注册的语言服务；Worker 使用 Vite `?worker` 导入。
 

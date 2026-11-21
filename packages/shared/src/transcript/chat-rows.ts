@@ -12,6 +12,8 @@ import type { ActivityEntry, StreamingState, SubagentRunUi, UIMessage, UIToolCal
 
 /** 折叠组中的一条元数据项（一条消息的思考/工具，或流式中的进行中部分） */
 export interface MetaItem {
+	/** 所属消息身份；明细展开状态不能仅靠组内位置跨基线复用。 */
+	sourceId?: string;
 	thinking: string;
 	tools: UIToolCall[];
 	/** 流式项的活动序列（到达顺序），预览行数据源；仅流式（未提交）项携带 */
@@ -93,7 +95,7 @@ const committedMetaCache = new WeakMap<Extract<UIMessage, { kind: "assistant" }>
 function committedMetaItem(message: Extract<UIMessage, { kind: "assistant" }>): MetaItem {
 	let item = committedMetaCache.get(message);
 	if (!item) {
-		item = { thinking: message.thinking, tools: message.tools };
+		item = { sourceId: message.id, thinking: message.thinking, tools: message.tools };
 		committedMetaCache.set(message, item);
 	}
 	return item;
@@ -136,14 +138,13 @@ export function buildChatRows(
 	}
 	if (!transcript.agentActive && lastTextId) turnFinalTextIds.add(lastTextId);
 
-	/** 组序号：同会话内 key 按位置稳定（streaming→committed 转换不 remount）；key 含会话 id：切会话强制 remount */
 	let groupIndex = 0;
-	const flushMeta = (isLatest = false, forceEmpty = false, subagentCount = 0): void => {
+	const flushMeta = (isLatest = false, forceEmpty = false, subagentCount = 0, boundaryId?: string): void => {
 		if (metaItems.length === 0 && !forceEmpty && subagentCount === 0) return;
 		const endImmediately = transcript.compacting || Boolean(streaming?.text) || !transcript.agentActive;
 		rows.push({
 			kind: "metaGroup",
-			key: `meta-${sessionId}-g${groupIndex++}`,
+			key: `meta-${sessionId}-${metaItems[0]?.sourceId ?? boundaryId ?? `g${groupIndex++}`}`,
 			items: metaItems,
 			working: isLatest && agentWorking,
 			endImmediately,
@@ -161,6 +162,7 @@ export function buildChatRows(
 	const changeByTurn = turnChanges ? new Map(turnChanges.map((tc) => [tc.turnIndex, tc])) : null;
 	const timingByTurn = turnTimings ? new Map(turnTimings.map((tt) => [tt.turnIndex, tt])) : null;
 	let userRowCount = 0;
+	let lastUserId: string | undefined;
 	/**
 	 * 轮末行的插入点：放到尾部的「通知块」之前。
 	 *
@@ -187,7 +189,7 @@ export function buildChatRows(
 		const at = footerInsertAt();
 		rows.splice(at, 0, {
 			kind: "turnDiff",
-			key: `turn-diff-${turnIndex}`,
+			key: `turn-diff-${lastUserId ?? turnIndex}`,
 			changes: changeByTurn?.get(turnIndex),
 			timing: timingByTurn?.get(turnIndex),
 			running,
@@ -203,7 +205,7 @@ export function buildChatRows(
 		if (message.kind === "subagent") {
 			// 子代理结果发生在调用工具之后：无论该轮是否还有普通工具/思考，都先落一条所属的
 			// 折叠状态行，再紧接卡片。不能回补“上一个”组，否则纯子代理轮会跳到前一轮顶部。
-			flushMeta(false, false, message.runs.length);
+			flushMeta(false, false, message.runs.length, message.id);
 			rows.push({
 				kind: "message",
 				key: message.id,
@@ -219,6 +221,7 @@ export function buildChatRows(
 			if (message.kind === "user" && (changeByTurn || timingByTurn)) {
 				if (hasFooterRow(userRowCount - 1)) pushTurnDiffRow(userRowCount - 1, false);
 				userRowCount++;
+				lastUserId = message.id;
 			}
 			rows.push({
 				kind: "message",
@@ -257,6 +260,7 @@ export function buildChatRows(
 		const postTools = textIdx == null ? [] : streaming.tools.filter((t) => (t.blockIndex ?? 0) > textIdx);
 		if (streaming.thinking || preTools.length > 0) {
 			metaItems.push({
+				sourceId: streaming.id,
 				thinking: streaming.thinking,
 				tools: preTools,
 				// 正文已出现时 pre 组被强制结束（endImmediately），不再携带活动序列；未出正文时维持现状
@@ -283,7 +287,12 @@ export function buildChatRows(
 		}
 		// 正文后的工具进新组（成为最新组）：working 预览行继续显示最新活动
 		if (postTools.length > 0) {
-			metaItems.push({ thinking: "", tools: postTools, activity: streaming.activity });
+			metaItems.push({
+				sourceId: `${streaming.id}:post`,
+				thinking: "",
+				tools: postTools,
+				activity: streaming.activity,
+			});
 		}
 	}
 	// 最新组无内容但仍在工作（正文已出、工具/子代理执行中）：挂上流式活动序列，预览行继续显示最新活动
@@ -292,7 +301,7 @@ export function buildChatRows(
 	}
 	// 流式子代理也属于当前最后一条状态行：先 flush 状态行、后挂卡片行，避免卡片倒挂在折叠行上方。
 	const streamingSubagentRuns = streaming?.subagentRuns ?? [];
-	flushMeta(true, agentWorking, streamingSubagentRuns.length);
+	flushMeta(true, agentWorking, streamingSubagentRuns.length, streaming?.id ?? "live");
 	if (streamingSubagentRuns.length > 0) {
 		rows.push({ kind: "streamingSubagents", key: "streaming-subagents", runs: streamingSubagentRuns });
 	}

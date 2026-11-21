@@ -28,6 +28,10 @@ export function registerSessionsIpc(backend: PiBackend): void {
 		setModel: ({ sessionId, provider, modelId }) => backend.setModel(sessionId, provider, modelId),
 		setThinkingLevel: ({ sessionId, level }) => backend.setThinkingLevel(sessionId, level),
 		getSessionMessages: ({ sessionId }) => backend.getSessionMessages(sessionId),
+		getSessionHistoryWindow: ({ sessionId }) => backend.getSessionHistoryWindow(sessionId),
+		getSessionHistoryPage: ({ sessionId, cursor }) => backend.getSessionHistoryPage(sessionId, cursor),
+		getSessionHistoryImage: (ref) => backend.getSessionHistoryImage(ref),
+		getSessionNavigation: ({ sessionId, generation }) => backend.getSessionNavigation(sessionId, generation),
 		getSessionHoverPreview: ({ sessionId, cwd, liveRuns, childrenOffset }) => {
 			if (childrenOffset !== undefined) {
 				return backend.getSessionHoverPreview(sessionId, cwd, liveRuns, childrenOffset);

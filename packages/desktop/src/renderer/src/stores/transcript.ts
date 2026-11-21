@@ -24,6 +24,7 @@ import {
 	type UIToolCall,
 } from "@percho/shared";
 import { create } from "zustand";
+import { useSessionViewStore } from "./session-view";
 
 export type { ActivityEntry, SessionPhase, StreamingState, SubagentRunUi, UIMessage, UIToolCall };
 
@@ -90,8 +91,9 @@ interface TranscriptStore {
 	markExtensionPrefill: (sessionId: string, source: string) => void;
 	clearExtensionPrefill: (sessionId: string) => void;
 	resetSession: (sessionId: string) => void;
-	/** 打开历史会话时回放已有消息（不触发 reducer 事件流） */
 	loadHistory: (sessionId: string, messages: UIMessage[]) => void;
+	/** 在消息流前插入一页更早的历史，不重置实时状态。 */
+	prependHistory: (sessionId: string, messages: UIMessage[]) => void;
 	/** 直接设置排队中的 followUp（打开/切换会话时从 backend 拉初始值；运行中由 queue_update 事件驱动） */
 	setFollowUpQueue: (sessionId: string, queue: string[]) => void;
 	/** 打开会话时从 backend 恢复任务列表（compaction 后 UI 面板数据源；仅写 todos，不动消息） */
@@ -290,6 +292,7 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
 		});
 	},
 	resetSession: (sessionId) => {
+		useSessionViewStore.getState().forget(sessionId);
 		// 删 key 而非写空 entry：读取点全部走 `?? EMPTY_ENTRY` / `?.`（selectTranscript 兜底），
 		// 「会话无数据」状态与从未打开过的会话一致，也是 switchSession 懒加载的判定依据
 		set((state) => {
@@ -300,6 +303,8 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
 		});
 	},
 	loadHistory: (sessionId, messages) => {
+		useSessionViewStore.getState().forget(sessionId);
+		useSessionViewStore.getState().ensure(sessionId);
 		set((state) => {
 			const current = state.bySession[sessionId];
 			const notices =
@@ -327,6 +332,20 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
 						pendingDialogs: current?.pendingDialogs ?? [],
 						extensionPrefillSource: current?.extensionPrefillSource,
 					},
+				},
+			};
+		});
+	},
+	prependHistory: (sessionId, messages) => {
+		set((state) => {
+			const current = state.bySession[sessionId];
+			if (!current || messages.length === 0) return state;
+			const notices = current.messages.filter((message) => message.kind === "system" && !message.compact);
+			const history = current.messages.filter((message) => !(message.kind === "system" && !message.compact));
+			return {
+				bySession: {
+					...state.bySession,
+					[sessionId]: { ...current, messages: [...notices, ...messages, ...history] },
 				},
 			};
 		});

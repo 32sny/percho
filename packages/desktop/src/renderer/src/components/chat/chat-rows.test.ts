@@ -178,15 +178,17 @@ describe("buildChatRows", () => {
 		expect(rows[1]).toMatchObject({ key: "streaming-subagents" });
 	});
 
-	it("group keys are positional and session-scoped", () => {
-		const t = {
-			...emptyTranscript(),
-			messages: [assistant("甲", { tools: [tool("read")] }), assistant("乙", { tools: [tool("read")] })],
-		};
-		const keys = buildChatRows(t, "s1")
-			.filter((r) => r.kind === "metaGroup")
-			.map((r) => r.key);
-		expect(keys).toEqual(["meta-s1-g0", "meta-s1-g1"]);
+	it("keeps source-based group keys stable when older rows are prepended", () => {
+		const messages = [assistant("甲", { tools: [tool("read")] }), assistant("乙", { tools: [tool("read")] })];
+		const t = { ...emptyTranscript(), messages };
+		const keys = (state: typeof t, session = "s1") =>
+			buildChatRows(state, session)
+				.filter((r) => r.kind === "metaGroup")
+				.map((r) => r.key);
+		expect(keys(t)).toEqual(messages.map((m) => `meta-s1-${m.id}`));
+		const older = assistant("旧", { tools: [tool("read")] });
+		expect(keys({ ...t, messages: [older, ...messages] }).slice(1)).toEqual(keys(t));
+		expect(keys(t, "s2")).not.toEqual(keys(t));
 	});
 });
 

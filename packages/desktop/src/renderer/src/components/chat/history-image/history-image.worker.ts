@@ -15,6 +15,7 @@
 import { THUMBNAIL_MAX_SIDE } from "./constants";
 import type { ThumbnailRequest, ThumbnailResponse } from "./thumbnail-protocol";
 
+// SAFETY: Vite creates this module only as a dedicated worker; desktop tsconfig also includes Window.
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
 function decodeBase64(base64: string): Uint8Array<ArrayBuffer> {

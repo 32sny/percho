@@ -1,11 +1,11 @@
 ---
 name: percho-ui-plugin
-description: Percho 桌面端 UI 插件（槽位组件替换）。用户说「改 XX 组件样式 / 把 XX 换成 YY 风格 / 给 XX 加个功能 / DIY 界面 / 定制界面 / 界面能改什么 / 换风格」且对象是聊天界面里的工具调用卡、子代理卡、任务列表面板时使用。按 SPEC 在 ~/.percho/ui-plugins/ 下 scaffold 插件，保存即热重载，最后引导用户在设置面板启用。
+description: Percho 桌面端 UI 插件（槽位组件替换）。用户说「改 XX 组件样式 / 把 XX 换成 YY 风格 / 给 XX 加个功能 / DIY 界面 / 定制界面 / 界面能改什么 / 换风格」且对象是聊天界面里的子代理卡、任务列表面板时使用。按 SPEC 在 ~/.percho/ui-plugins/ 下 scaffold 插件，保存即热重载，最后引导用户在设置面板启用。
 ---
 
 # Percho UI 插件
 
-用户想让 Percho 的聊天界面组件（工具调用卡 / 子代理卡 / 任务列表面板）**换样式或换行为**时，用 UI 插件机制实现：写一个 TSX 插件覆盖对应槽位，宿主自动构建 + 热重载。
+用户想让 Percho 的聊天界面组件（子代理卡 / 任务列表面板）**换样式或换行为**时，用 UI 插件机制实现：写一个 TSX 插件覆盖对应槽位，宿主自动构建 + 热重载。
 
 ## 流程
 
@@ -17,7 +17,7 @@ description: Percho 桌面端 UI 插件（槽位组件替换）。用户说「�
    <name>/src/index.tsx    # 入口（memo 包裹 + 语义 token + 只 import react / @percho/plugin-api / 相对路径图片资产）
    ```
 
-   直接抄 `~/.percho/ui-plugins/_examples/terminal-tool-card/` 改最快。
+   区域贡献可参考 `~/.percho/ui-plugins/_examples/token-meter/`。工具调用卡已无插件槽位。
 3. **保存即构建**：宿主 fs.watch 300ms 防抖自动重建。语法/导入错误 → 旧版继续生效、设置面板显示「构建失败」——修完再保存即可。
 4. **引导用户启用**（**必须**，agent 无权代劳——信任门）：告诉用户去 **设置 → UI 插件**：开总开关 → 点「启用」→ 二次确认。之后界面立即替换。
 5. **迭代**：用户确认生效后，继续改 `src/index.tsx` 保存即热替换，不用重启、不用重新启用。

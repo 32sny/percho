@@ -262,6 +262,20 @@ interface SessionBaseMessage {
 	sourceText?: string;
 }
 
+/**
+ * 分页历史里图片的懒加载引用：不携带 base64，只给出「哪一代快照的哪张图」。
+ * 只有 `session:getHistoryImage` 按当前 backend 会话实例 + 匹配的 generation + 已签发的
+ * imageId 才能换回字节；跨会话/跨代/任意 id 一律返回 null。
+ */
+export interface HistoryImageRef {
+	sessionId: string;
+	/** 签发该引用的历史快照代次（打开/重载会话即换代） */
+	generation: string;
+	/** 快照内确定性图片标识（同一页重复读取不会增长） */
+	imageId: string;
+	mimeType: string;
+}
+
 /** 历史 user 消息（打开历史会话时回放用；不依赖 pi 内部类型） */
 export interface SessionUserMessage extends SessionBaseMessage {
 	role: "user";
@@ -269,6 +283,8 @@ export interface SessionUserMessage extends SessionBaseMessage {
 	skill?: SkillInvocationDisplay;
 	/** 结构化句中引用文档（含 file/skill token） */
 	document?: ComposerDocument;
+	/** 分页历史中该消息的图片引用（与 `images` 同序；分页路径的 `images` 恒为空） */
+	historyImageRefs?: HistoryImageRef[];
 }
 
 /** 历史 assistant 消息（打开历史会话时回放用；不依赖 pi 内部类型） */
@@ -284,7 +300,9 @@ export interface SessionAssistantMessage extends SessionBaseMessage {
 export interface SessionImageMessage {
 	role: "image";
 	images: ImageInput[];
-	/** 原文件路径（工具参数，仅调试用） */
+	/** 分页历史中该消息的图片引用（与 `images` 同序；分页路径的 `images` 恒为空） */
+	historyImageRefs?: HistoryImageRef[];
+	/** 原文件路径（工具参数，仅调试用；不用于读取图片内容） */
 	paths: string[];
 	timestamp: number;
 }
@@ -313,6 +331,25 @@ export type SessionMessage =
 	| SessionImageMessage
 	| SessionSubagentMessage
 	| SessionCompactionMessage;
+
+/** A bounded current-branch history window; the cursor is scoped to one backend session snapshot. */
+export interface SessionHistoryWindow {
+	messages: SessionMessage[];
+	hasOlder: boolean;
+	cursor?: string;
+	startIndex: number;
+	generation: string;
+}
+
+/** 一代历史快照的轻量轮次导航：仅显示摘要，不包含图片或工具载荷。 */
+export interface SessionNavigationEntry {
+	entryId: string;
+	ordinal: number;
+	excerpt: string;
+	timestamp: number;
+	images: number;
+	reply?: string;
+}
 
 export interface AvailableModel {
 	provider: string;

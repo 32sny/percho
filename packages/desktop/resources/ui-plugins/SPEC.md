@@ -2,7 +2,7 @@
 
 > 本文件随 Percho 分发（`userData/ui-plugins/SPEC.md`），是 agent 编写 UI 插件的唯一权威依据。
 > 配套类型声明：同目录 `percho-ui.d.ts`（与宿主 `window.PerchoUI` 暴露清单**逐名一致**）。
-> 完整示例：`examples/terminal-tool-card/`。槽位契约设计见宿主仓库 `.local/docs/design/spec/ui-plugin-system.md`。
+> 完整示例见 `examples/` 的区域插件。
 
 ## 1. 什么是 UI 插件
 
@@ -19,7 +19,6 @@ my-plugin/
 
 | 槽位名 | props | 默认组件 |
 |---|---|---|
-| `chat.tool-call-card` | `{ tool: UIToolCall }` | 工具调用卡（折叠行：工具名 + 参数摘要 + 输出） |
 | `chat.subagent-card` | `{ runs: SubagentRunUi[] }` | 子代理独立行（状态点 + 名称 + 点击打开子会话） |
 | `chat.todo-panel` | `{}` | 任务列表面板（右上角胶囊，内部自行取数） |
 
@@ -55,13 +54,12 @@ interface SubagentRunUi {
 
 ```json
 {
-	"name": "my-terminal-card",
+	"name": "my-task-panel",
 	"version": "0.1.0",
-	"displayName": "终端风工具卡",
-	"description": "把工具调用卡改成终端样式",
+	"displayName": "任务面板",
 	"perchoUi": 1,
 	"main": "src/index.tsx",
-	"slots": { "chat.tool-call-card": "ToolCallCard" }
+	"slots": { "chat.todo-panel": "TaskPanel" }
 }
 ```
 
@@ -69,7 +67,7 @@ interface SubagentRunUi {
 - `name`：必填，`/^[a-z0-9][a-z0-9-]*$/`，**必须与目录名一致**；
 - `perchoUi`：必填，宿主契约版本，当前只接受 `1`；
 - `main`：必填，插件目录内相对路径，**禁止 `..` 穿越**；后缀 `.ts/.tsx/.js/.jsx`；
-- `slots`：必填非空对象，key 必须是上表槽位名，value 是具名导出名；
+- `slots`：有槽位时填写；仅使用区域贡献或无头入口的插件可省略。key 必须是上表槽位名，value 是具名导出名；
 - `version` / `displayName` / `description`：可选展示字段。
 
 ## 3. 可用导入（两个虚拟模块 + 静态图片资产）
@@ -140,7 +138,7 @@ export const stores: {                      // 宿主 zustand store（与宿主�
 
 ## 8. 完整示例
 
-`_examples/terminal-tool-card/`（随包分发，seedDocs 拷进插件根目录时改名为 `_examples`——下划线开头不被当插件扫描），要点齐全：memo 包裹、语义 token、useT、折叠 details 结构。照抄改即可。
+区域贡献示例见 §10.4。旧 `chat.tool-call-card` 已移除，工具明细由宿主按需挂载。旧清单含该槽位时整个插件不会加载；若仍有 `contributions` 或 `headless`，备份后删除旧槽位声明（仅此一项时删整个 `slots`），保留其他声明，再验证构建。宿主不会替用户改写插件或重置授权。
 
 ## 9. 交付闭环（agent 标准流程）
 

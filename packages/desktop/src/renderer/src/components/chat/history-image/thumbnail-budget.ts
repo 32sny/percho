@@ -142,9 +142,13 @@ export class ActiveSlotRegistry {
 		return promoted;
 	}
 
-	/** 下一个该跑的任务：可见优先，其次 FIFO；没有则 null（不改状态，由调用方标记 loading） */
-	nextWaiting(): number | null {
-		const best = this.pickWaiting();
+	/**
+	 * 下一个该跑的任务：可见优先，其次 FIFO；没有则 null（不改状态，由调用方标记 loading）。
+	 * `skip` 用于「本轮先不跑」的候选（引用图未可见时不取原图）：它们留在队列里，等可见性变化
+	 * 或下一轮再被选中，既不掉队也不因为跳过而让调用方空转。
+	 */
+	nextWaiting(skip?: ReadonlySet<number>): number | null {
+		const best = this.pickWaiting(skip);
 		return best ? best.key : null;
 	}
 
@@ -247,10 +251,11 @@ export class ActiveSlotRegistry {
 		}
 	}
 
-	private pickWaiting(): SlotRecord | null {
+	private pickWaiting(skip?: ReadonlySet<number>): SlotRecord | null {
 		let best: SlotRecord | null = null;
 		for (const record of this.records.values()) {
 			if (record.state !== "waiting") continue;
+			if (skip?.has(record.key)) continue;
 			if (!best) {
 				best = record;
 				continue;
