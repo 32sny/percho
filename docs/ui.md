@@ -65,6 +65,14 @@
 - 会话芯片只留三项：打开所在会话（`SessionChatIcon`）/ 查看转录文件（`FileTextIcon`）/ 复制路径（`CopyIcon`）——会话不是本地文件，不给「在访达中显示」（只会指向 Temp 目录）。
 - 原文不变：复制与撤回仍用 `message.text`，芯片只是展示层转译。
 
+## Lexical 编辑器与句中引用胶囊
+
+- 输入区统一使用单一 Lexical 宿主 `ComposerEditor`（`composer-editor.css`），不维护双编辑器；正文沿用 `text-ui-14` 与 `color: var(--color-ink)`。
+- 句中引用胶囊（`ReferenceNode` / `chat/ReferenceText.tsx`）统一使用 `font-size: var(--text-ui-12)` 与圆角胶囊样式：
+  - 文件/目录引用：`color: var(--color-ink-2)` + `background: var(--color-hover)`；
+  - 技能引用：`color: var(--color-skill-reference-ink)` + `background: var(--color-skill-reference-bg)`（深浅主题均在 `globals.css` 定义）。
+- 含结构化 `document` 的用户消息沿用 `UserMessageText` 折叠阈值与「显示更多」交互；旧历史无 `perchoInput` 时保持纯文本与 `@` 芯片展示，不把普通 `@path` 伪造为结构化引用。
+
 ## 会话悬停卡（SESSION-HOVER-01）
 
 - 浮层无边框、无关闭 `×`：`rounded-xl bg-surface p-3.5 shadow-pop`，整卡不挂固定滚动条；Esc / 移开仍由 Provider 关闭，卡片内只留复制幽灵钮（`Tooltip` + `align="end"`，不用原生 `title`）。

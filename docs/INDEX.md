@@ -39,7 +39,7 @@
 | 会话自动卸载、频道驻留 | renderer `lib/session-gc*.ts`、`lib/use-session-gc.ts`；backend `channel-subscriptions.ts` |
 | 消息事件、历史回放、轮次派生 | shared `transcript/`；backend `session/messages.ts`；renderer `stores/transcript.ts` |
 | 消息气泡、Markdown、Mermaid、工具卡 | renderer `components/chat/`；流式合流 `stores/event-conflator.ts` |
-| 输入、发送、停止、排队、斜杠与 @ 补全 | renderer `components/composer/`、`stores/drafts.ts`；backend `slash-commands.ts` |
+| 输入、发送、停止、排队、斜杠与 @ 补全 | renderer `components/composer/`（`Composer.tsx`、`ComposerEditor.tsx`、`ReferenceNode.ts`、`use-composer-send.ts`、`use-slash-menu.ts`、`use-at-completion.ts`、`QueueBar.tsx`）、`components/chat/ReferenceText.tsx`、`stores/drafts.ts`；shared `composer-document.ts`；backend `slash-commands.ts`、`session/composer-input.ts`；[发送边界解耦与草稿保护](PLAN-composer-input-decoupling.md)；[Lexical与句中引用迁移方案](PLAN-lexical-inline-references.md)（Stage 0–4 已完成） |
 | 图片附件与历史图资源 | renderer `lib/image-attachment.ts`、`lib/image-fit.ts`、`components/chat/history-image/`、`ImagePreview.tsx` |
 | 错误卡、分类、手动重试 | shared `errors.ts`、`transcript/llm-errors.ts`、`transcript/control-errors.ts`；renderer `stores/session-retry.ts`、`components/chat/ErrorNote.tsx` |
 | 轮次计时、文件变更、diff 侧栏 | shared `transcript/turn-*`；renderer `components/chat/TurnDiffChip.tsx`、`components/diff/` |
