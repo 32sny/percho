@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
-import type { AgentSessionEvent, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, ModelRuntime, SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
 	createAgentSession,
 	DefaultResourceLoader,
@@ -9,7 +9,12 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { isThinkingLevel, type ThinkingLevel } from "@percho/shared";
+import {
+	isThinkingLevel,
+	type PermissionMode,
+	type SubagentRunSummary,
+	type ThinkingLevel,
+} from "@percho/shared";
 import { makePermissionGateExtension } from "../../permissions/extension";
 import type { PermissionGate, PermissionRequestMeta } from "../../permissions/gate";
 import { subagentSessionsRoot } from "../../session/subagent-paths";
@@ -17,6 +22,9 @@ import type { SessionTraces } from "../../session/traces";
 import { makeUiContext } from "../../session/ui-context";
 import { makeWebFetchTool } from "../webfetch";
 import type { SubagentDefinition } from "./agents";
+import { type SubagentPolicy, subagentPermissionMode } from "./policy";
+import { describeBoundaries, reportGuidePrompt, subagentCorePrompt } from "./prompt";
+import { summarizeSubagentRun } from "./summary";
 
 export { isSubagentSessionPath, subagentSessionsRoot } from "../../session/subagent-paths";
 
@@ -29,9 +37,21 @@ export interface SubagentUsage {
 	totalTokens: { tokens: number };
 }
 
+export interface SubagentRunHandle {
+	sessionId: string;
+	sessionFile?: string;
+	cwd: string;
+	getBranch: () => SessionEntry[];
+	isStreaming: () => boolean;
+	abort: () => Promise<void>;
+}
+
 export interface SingleResult {
 	agent: string;
 	task: string;
+	status?: "queued" | "running" | "done" | "failed" | "aborted";
+	index?: number;
+	summary?: SubagentRunSummary;
 	model?: string;
 	/** 子会话实际生效的思考档位（SDK 按模型能力 clamp 后的值；无模型时为 off） */
 	thinkingLevel?: string;
@@ -48,8 +68,11 @@ export interface RunSubagentInput {
 	cwd: string;
 	/** 父会话的项目信任态（子会话 SettingsManager 对齐，不硬编码 trusted） */
 	projectTrusted: boolean;
+	index?: number;
 	model?: Model<any>;
 	signal?: AbortSignal;
+	/** 后台派工预创建的 SessionManager（使派工回执立即可带 sessionFile） */
+	sessionManager?: SessionManager;
 	onProgress?: (result: SingleResult) => void;
 }
 
@@ -59,10 +82,13 @@ export interface RunSubagentDeps {
 	getSubagentModel: (agentName: string) => Promise<string | undefined>;
 	/** 设置页的 per-agent 思考深度覆盖；无配置时返回 undefined 并继续走 frontmatter。 */
 	getSubagentThinkingLevel: (agentName: string) => Promise<string | undefined>;
+	getPermissionMode?: () => PermissionMode;
 	gate: PermissionGate;
 	traces: SessionTraces;
+	registerRun?: (handle: SubagentRunHandle) => void;
+	unregisterRun?: (sessionId: string) => void;
 	/** 把运行中子会话事件转发给宿主；未提供时只写 trace（供非桌面宿主使用）。 */
-	onEvent?: (sessionId: string, event: AgentSessionEvent) => void;
+	onEvent?: (sessionId: string, event: AgentSessionEvent, abort: () => Promise<void>) => void;
 }
 
 const EMPTY_USAGE: SubagentUsage = {
@@ -77,6 +103,12 @@ const EMPTY_USAGE: SubagentUsage = {
 function projectSlug(cwd: string): string {
 	const slug = cwd.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
 	return slug || "default";
+}
+
+export function createSubagentSessionManager(cwd: string): SessionManager {
+	const agentDir = getAgentDir();
+	const sessionDir = join(subagentSessionsRoot(agentDir), projectSlug(cwd));
+	return SessionManager.create(cwd, sessionDir);
 }
 
 export async function resolveModel(
@@ -189,10 +221,20 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 		await deps.getSubagentThinkingLevel(input.agent.name),
 		input.agent.thinking,
 	);
+	const startedAt = Date.now();
 	const agentDir = getAgentDir();
 	const sessionDir = join(subagentSessionsRoot(agentDir), projectSlug(input.cwd));
+	const policy: SubagentPolicy = {
+		agentDir,
+		deny: input.agent.deny ?? [],
+		permissionMode: input.agent.permissionMode,
+	};
+	const effectiveMode = subagentPermissionMode(
+		deps.getPermissionMode?.() ?? "default",
+		policy.permissionMode,
+	);
 	const childGateConfirm = (title: string, message: string, meta?: PermissionRequestMeta) =>
-		deps.gate.confirm(`[${input.agent.name}] ${title}`, message, meta);
+		deps.gate.confirm(`[${input.agent.name}] ${title}`, message, meta, input.signal);
 	const childSettings = SettingsManager.create(input.cwd, agentDir, {
 		projectTrusted: input.projectTrusted,
 	});
@@ -205,18 +247,39 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 		noExtensions: true,
 		noSkills: true,
 		noPromptTemplates: true,
-		// 保留角色指令，同时让 SDK 按父会话信任态发现 APPEND_SYSTEM.md。
-		appendSystemPromptOverride: (base) => [input.agent.systemPrompt, ...base],
+		// 保留角色指令与边界/汇报指引，同时让 SDK 按父会话信任态发现 APPEND_SYSTEM.md。
+		appendSystemPromptOverride: (base) => [
+			input.agent.systemPrompt,
+			subagentCorePrompt(safeTools),
+			describeBoundaries(policy),
+			reportGuidePrompt(safeTools),
+			...base,
+		],
 		extensionFactories: [
 			makePermissionGateExtension(agentDir, {
 				projectRoot: input.cwd,
 				confirm: childGateConfirm,
+				getMode: () => effectiveMode,
+				subagentPolicy: policy,
 			}),
 		],
 	});
 	await resourceLoader.reload();
 
-	const sessionManager = SessionManager.create(input.cwd, sessionDir);
+	const sessionManager = input.sessionManager ?? SessionManager.create(input.cwd, sessionDir);
+	if (input.signal?.aborted) {
+		deps.unregisterRun?.(sessionManager.getSessionId());
+		return {
+			agent: input.agent.name,
+			task: input.task,
+			status: "aborted",
+			...(input.index != null ? { index: input.index } : {}),
+			exitCode: 1,
+			error: "aborted",
+			usage: structuredClone(EMPTY_USAGE),
+			artifactPaths: { jsonlPath: sessionManager.getSessionFile() },
+		};
+	}
 	const { session } = await createAgentSession({
 		cwd: input.cwd,
 		agentDir,
@@ -237,6 +300,8 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 	const result: SingleResult = {
 		agent: input.agent.name,
 		task: input.task,
+		status: "running",
+		...(input.index != null ? { index: input.index } : {}),
 		model: modelLabel(session.model),
 		// 实际生效档位（SDK clamp 后）；卡片元信息与 jsonl 的 thinking_level_change 一致
 		thinkingLevel: session.thinkingLevel,
@@ -245,14 +310,27 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 		artifactPaths: { jsonlPath: session.sessionFile },
 	};
 	let settled = false;
+	let aborted = false;
 	let failure: string | undefined;
 	let unsubscribeEvents: (() => void) | undefined;
+	const handle: SubagentRunHandle = {
+		sessionId: session.sessionId,
+		sessionFile: session.sessionFile,
+		cwd: input.cwd,
+		getBranch: () => session.sessionManager.getBranch(),
+		isStreaming: () => session.isStreaming,
+		abort: async () => {
+			aborted = true;
+			await session.abort();
+		},
+	};
+	deps.registerRun?.(handle);
 	// 等待 agent_settled 而非 agent_end：_runAgentPrompt 的 finally 保证 settled 在全部路径
 	// （正常结束 / 异常逃逸 / abort）都触发；agent_end 在 overflow 重试（willRetry）或异常时不算终结。
 	const endPromise = new Promise<void>((resolve) => {
 		unsubscribeEvents = session.subscribe((event: AgentSessionEvent) => {
-			if (deps.onEvent) deps.onEvent(session.sessionId, event);
-			else deps.traces.record(session.sessionId, event);
+			deps.traces.record(session.sessionId, event);
+			deps.onEvent?.(session.sessionId, event, handle.abort);
 			if (event.type === "message_end") addUsage(result.usage, usageFromMessage(event.message));
 			if (event.type === "agent_settled") {
 				settled = true;
@@ -261,6 +339,7 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 		});
 	});
 	const abort = () => {
+		aborted = true;
 		void session.abort();
 	};
 	if (input.signal) {
@@ -268,14 +347,13 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 		else input.signal.addEventListener("abort", abort, { once: true });
 	}
 	try {
-		// sessionFile 已在创建时落盘；先通知父工具/UI，用户即可在首个模型事件前进入实时子会话。
-		input.onProgress?.(result);
+		// sessionFile 已在创建时分配；先通知父工具/UI，用户即可在首个模型事件前进入实时子会话。
+		input.onProgress?.({ ...result, usage: { ...result.usage } });
 		await deps.traces.start(session.sessionId, session.sessionManager.getSessionDir());
 		// expandPromptTemplates: false——子会话无任何模板/命令，任务文本以 "/" 开头也不触发命令解析
 		await session.prompt(input.task, { expandPromptTemplates: false });
 		if (!settled) await endPromise;
 		result.content = assistantText(session);
-		result.exitCode = input.signal?.aborted ? 1 : 0;
 		// 子会话 LLM 错误不一定 throw（stopReason "error" 体现在最后一条 assistant 消息上）
 		const lastAssistant = [...session.messages]
 			.reverse()
@@ -283,19 +361,28 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 			| { stopReason?: string; errorMessage?: string }
 			| undefined;
 		if (lastAssistant?.stopReason === "error") {
-			result.exitCode = 1;
+			result.status = "failed";
 			result.error = lastAssistant.errorMessage ?? "subagent model error";
 		}
 	} catch (error) {
+		result.status = aborted || input.signal?.aborted ? "aborted" : "failed";
 		failure = error instanceof Error ? error.message : String(error);
-		result.exitCode = 1;
 		result.error = failure;
 	} finally {
 		unsubscribeEvents?.();
 		input.signal?.removeEventListener("abort", abort);
-		await deps.traces.stop(session.sessionId);
-		session.dispose();
+		result.summary = summarizeSubagentRun(session.sessionManager, Date.now() - startedAt);
+		deps.traces.recordCustom?.(session.sessionId, "subagent_summary", result.summary);
+		try {
+			await deps.traces.stop(session.sessionId);
+		} finally {
+			session.dispose();
+			deps.unregisterRun?.(session.sessionId);
+		}
 	}
+	if (aborted || input.signal?.aborted) result.status = "aborted";
+	else if (result.status === "running") result.status = failure ? "failed" : "done";
+	result.exitCode = result.status === "done" ? 0 : 1;
 	if (failure && !result.error) result.error = failure;
 	// totalTokens 从未上报时回落 input+output（卡片 tokens 展示用）
 	if (result.usage.totalTokens.tokens === 0) {

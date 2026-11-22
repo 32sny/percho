@@ -2,12 +2,27 @@
  * 子代理运行数据提取（跨进程共用）：从 subagent 工具结果的 details 结构检测运行组。
  * 从 session.ts 拆出（session.ts 回归纯类型 + 消息 union 定义）。
  */
+export type SubagentRunStatus = "running" | "queued" | "done" | "error" | "aborted";
+
+export interface SubagentRunSummary {
+	changedFiles: Array<{ path: string; added: number; removed: number }>;
+	commands: Array<{ command: string; isError: boolean }>;
+	failedCommands: number;
+	durationMs: number;
+}
+
 /** 子代理运行结果（扩展 subagent 工具 details 提取，独立消息展示用） */
 export interface SubagentRunData {
 	/** 子代理名（如 reviewer / scout） */
 	agent: string;
 	task?: string;
-	status: "running" | "done" | "error";
+	status: SubagentRunStatus;
+	summary?: SubagentRunSummary;
+	index?: number;
+	/** 内置后台派工批次 ID（run_in_background=true 时存在） */
+	runId?: string;
+	/** 是否为内置后台异步派工 */
+	background?: boolean;
 	model?: string;
 	/** pi-subagents 的 agent id（后台派工返回的 Agent ID；完成通知按它回填状态） */
 	agentId?: string;
@@ -59,6 +74,8 @@ export function extractSubagentRuns(details: unknown): SubagentRunData[] | null 
 				results?: unknown[];
 				completions?: unknown[];
 				artifacts?: { dir?: unknown };
+				runId?: unknown;
+				mode?: unknown;
 		  }
 		| null
 		| undefined;
@@ -69,6 +86,11 @@ export function extractSubagentRuns(details: unknown): SubagentRunData[] | null 
 	const pushRun = (
 		agent: unknown,
 		rest: {
+			status?: unknown;
+			summary?: unknown;
+			index?: unknown;
+			runId?: unknown;
+			background?: unknown;
 			task?: unknown;
 			model?: unknown;
 			thinkingLevel?: unknown;
@@ -83,10 +105,25 @@ export function extractSubagentRuns(details: unknown): SubagentRunData[] | null 
 		const task = typeof rest.task === "string" && rest.task.length > 0 ? rest.task : undefined;
 		const exitCode = typeof rest.exitCode === "number" ? rest.exitCode : undefined;
 		const error = typeof rest.error === "string" && rest.error.length > 0 ? rest.error : undefined;
+		const rawStatus = rest.status;
+		const status: SubagentRunStatus =
+			rawStatus === "queued" || rawStatus === "running" || rawStatus === "done" || rawStatus === "aborted"
+				? rawStatus
+				: rawStatus === "failed" || rawStatus === "error"
+					? "error"
+					: exitCode != null && exitCode !== 0
+						? "error"
+						: error
+							? "error"
+							: "done";
 		runs.push({
 			agent,
 			task,
-			status: exitCode != null && exitCode !== 0 ? "error" : error ? "error" : "done",
+			status,
+			...(isSubagentRunSummary(rest.summary) ? { summary: rest.summary } : {}),
+			...(typeof rest.index === "number" ? { index: rest.index } : {}),
+			...(typeof rest.runId === "string" ? { runId: rest.runId } : {}),
+			...(rest.background === true ? { background: true } : {}),
 			model: typeof rest.model === "string" ? rest.model : undefined,
 			thinkingLevel: typeof rest.thinkingLevel === "string" ? rest.thinkingLevel : undefined,
 			tokens: typeof rest.tokens === "number" ? rest.tokens : undefined,
@@ -126,7 +163,9 @@ export function extractSubagentRuns(details: unknown): SubagentRunData[] | null 
 		}
 	}
 
-	// 同步/foreground：details.results[]（会话文件在 artifactPaths.jsonlPath）
+	// 同步/foreground/background：details.results[]（会话文件在 artifactPaths.jsonlPath）
+	const batchRunId = typeof d.runId === "string" ? d.runId : undefined;
+	const batchBackground = d.mode === "background";
 	const results = Array.isArray(d.results) ? d.results : [];
 	for (const raw of results) {
 		const r = raw as Record<string, unknown>;
@@ -150,6 +189,11 @@ export function extractSubagentRuns(details: unknown): SubagentRunData[] | null 
 		const exitCode = typeof r.exitCode === "number" ? r.exitCode : undefined;
 		const error = typeof r.error === "string" && r.error.length > 0 ? r.error : undefined;
 		pushRun(agent ?? sessionFile ?? "subagent", {
+			status: r.status,
+			summary: r.summary,
+			index: r.index,
+			runId: typeof r.runId === "string" ? r.runId : batchRunId,
+			background: r.background === true || batchBackground,
 			task: r.task,
 			model: r.model,
 			thinkingLevel: r.thinkingLevel,
@@ -204,4 +248,15 @@ export function extractSubagentRuns(details: unknown): SubagentRunData[] | null 
 		}
 	}
 	return runs.length > 0 ? runs : null;
+}
+
+function isSubagentRunSummary(value: unknown): value is SubagentRunSummary {
+	if (!value || typeof value !== "object") return false;
+	const v = value as Record<string, unknown>;
+	return (
+		Array.isArray(v.changedFiles) &&
+		Array.isArray(v.commands) &&
+		typeof v.failedCommands === "number" &&
+		typeof v.durationMs === "number"
+	);
 }

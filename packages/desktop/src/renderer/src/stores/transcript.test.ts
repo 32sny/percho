@@ -1288,6 +1288,77 @@ describe("transcript reducer", () => {
 		expect(state.streaming?.subagentRuns).toHaveLength(0);
 	});
 
+	it("subagent：parallel 超过 4 个任务时前 4 个 running、后续 queued，并按 partialResult/end 刷新 summary 与 aborted", () => {
+		let state = emptyTranscript();
+		state = reduceEvent(state, ev("agent_start"));
+		const tasks = Array.from({ length: 5 }, (_, i) => ({ agent: "Explore", task: `task-${i + 1}` }));
+		state = reduceEvent(state, {
+			type: "tool_execution_start",
+			toolCallId: "tc-q",
+			toolName: "subagent",
+			args: { tasks },
+		} as unknown as AgentSessionEvent);
+		expect(state.streaming?.subagentRuns.map((r) => [r.index, r.status])).toEqual([
+			[1, "running"],
+			[2, "running"],
+			[3, "running"],
+			[4, "running"],
+			[5, "queued"],
+		]);
+		state = reduceEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "tc-q",
+			toolName: "subagent",
+			partialResult: {
+				details: {
+					mode: "parallel",
+					results: tasks.map((t, i) => ({
+						agent: t.agent,
+						task: t.task,
+						index: i + 1,
+						status: i === 4 ? "running" : i === 0 ? "done" : "running",
+						artifactPaths: { jsonlPath: `/tmp/sub-${i + 1}.jsonl` },
+					})),
+				},
+			},
+		} as unknown as AgentSessionEvent);
+		expect(state.streaming?.subagentRuns[0]?.status).toBe("done");
+		expect(state.streaming?.subagentRuns[4]?.status).toBe("running");
+		const summary = {
+			changedFiles: [{ path: "a.ts", added: 2, removed: 1 }],
+			commands: [{ command: "npm test", isError: false }],
+			failedCommands: 0,
+			durationMs: 120,
+		};
+		state = reduceEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "tc-q",
+			toolName: "subagent",
+			result: {
+				content: [{ type: "text", text: "done" }],
+				details: {
+					mode: "parallel",
+					results: [
+						{ agent: "Explore", task: "task-1", index: 1, status: "done", summary, exitCode: 0 },
+						{ agent: "Explore", task: "task-2", index: 2, status: "aborted", exitCode: 1 },
+						{ agent: "Explore", task: "task-3", index: 3, status: "failed", exitCode: 1 },
+						{ agent: "Explore", task: "task-4", index: 4, status: "done", exitCode: 0 },
+						{ agent: "Explore", task: "task-5", index: 5, status: "done", exitCode: 0 },
+					],
+				},
+			},
+			isError: false,
+		} as unknown as AgentSessionEvent);
+		expect(state.streaming?.subagentRuns.map((r) => r.status)).toEqual([
+			"done",
+			"aborted",
+			"error",
+			"done",
+			"done",
+		]);
+		expect(state.streaming?.subagentRuns[0]?.summary).toEqual(summary);
+	});
+
 	it("todo：tool_execution_end 设置/替换/清空列表，turn_end 后保留", () => {
 		let state = emptyTranscript();
 		state = reduceEvent(state, ev("agent_start"));

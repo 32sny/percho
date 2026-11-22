@@ -47,6 +47,8 @@ export interface SubagentInfo {
 	thinking?: string;
 	/** agent 定义中 thinking 非法时的原文（设置页警示用） */
 	thinkingWarning?: string;
+	/** agent 定义中 deny 非法规则原文（设置页警示用） */
+	denyWarnings?: string[];
 }
 
 export interface ProviderModelInfo {

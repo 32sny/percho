@@ -3,6 +3,7 @@ import type { UiError } from "../errors";
 import type { ControlSnapshot } from "../message-control";
 import type { HistoryImageRef, ImageInput } from "../session";
 import type { SkillInvocationDisplay } from "../skill-invocation";
+import type { SubagentRunStatus, SubagentRunSummary } from "../subagent";
 import type { TodoItem } from "../todo";
 
 /** SDK 自动重试（auto_retry_start）即时信息：状态行文案 + 出现/清除时机都来自事件流 */
@@ -14,13 +15,17 @@ export interface RetryInfo {
 
 /** 会话 UI 态类型（transcript reducer 的状态形状） */
 
-/** 子代理运行（UI 态：流式期 running，固化后 done/error） */
+/** 子代理运行（UI 态：流式期 running/queued，固化后 done/error/aborted） */
 export interface SubagentRunUi {
 	/** 本地稳定标识（React key 用） */
 	key: string;
 	agent: string;
 	task?: string;
-	status: "running" | "done" | "error";
+	status: SubagentRunStatus;
+	summary?: SubagentRunSummary;
+	index?: number;
+	runId?: string;
+	background?: boolean;
 	model?: string;
 	/** pi-subagents 的 agent id（后台派工返回的 Agent ID；完成通知按它回填状态） */
 	agentId?: string;

@@ -2,7 +2,8 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { isThinkingLevel, type ThinkingLevel } from "@percho/shared";
+import { isThinkingLevel, type PermissionMode, type ThinkingLevel } from "@percho/shared";
+import { isDenyPattern } from "./policy";
 
 export type AgentSource = "builtin" | "user" | "project";
 
@@ -15,6 +16,9 @@ export interface SubagentDefinition {
 	thinking?: ThinkingLevel;
 	/** frontmatter thinking 非法时的原文（设置页警示用；合法/缺失时 undefined） */
 	thinkingWarning?: string;
+	permissionMode?: PermissionMode;
+	deny?: string[];
+	denyWarnings?: string[];
 	systemPrompt: string;
 	source: AgentSource;
 	path?: string;
@@ -88,6 +92,12 @@ export function parseAgentMarkdown(
 	const rawThinking = parseScalar(metadata.get("thinking") ?? "");
 	const thinking = isThinkingLevel(rawThinking) ? rawThinking : undefined;
 	const thinkingWarning = thinking ? undefined : rawThinking || undefined;
+	const rawMode = parseScalar(metadata.get("permissionMode") ?? "");
+	const permissionMode: PermissionMode | undefined =
+		rawMode === "default" || rawMode === "fullAccess" ? rawMode : undefined;
+	const rawDeny = metadata.has("deny") ? parseTools(metadata.get("deny") ?? "") : [];
+	const deny = rawDeny.filter(isDenyPattern);
+	const denyWarnings = rawDeny.filter((item) => !isDenyPattern(item));
 	return {
 		name,
 		description,
@@ -95,6 +105,9 @@ export function parseAgentMarkdown(
 		model,
 		...(thinking ? { thinking } : {}),
 		...(thinkingWarning ? { thinkingWarning } : {}),
+		...(permissionMode ? { permissionMode } : {}),
+		...(deny.length > 0 ? { deny } : {}),
+		...(denyWarnings.length > 0 ? { denyWarnings } : {}),
 		systemPrompt: lines
 			.slice(end + 1)
 			.join("\n")

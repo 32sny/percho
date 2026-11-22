@@ -274,7 +274,9 @@ export const zh = {
 		openSessionAmbiguous: "该引用匹配到多个会话，请从侧栏重新拖入目标会话",
 		subagent: {
 			running: "工作中",
+			queued: "排队中",
 			done: "已完成",
+			aborted: "已中止",
 			/** 子代理检视页左上角返回父会话入口（spec D4） */
 			backToParent: "返回父会话",
 			failed: "失败",
@@ -547,6 +549,7 @@ export const zh = {
 			subagentThinkingInherit: "跟随 agent 定义",
 			subagentThinkingInheritWith: "跟随 agent 定义（{level}）",
 			subagentThinkingInvalid: '定义中的 thinking "{value}" 无效，已忽略',
+			subagentDenyInvalid: "已忽略无效 deny 规则：{value}",
 			subagentExecutorTitle: "优先使用内置 subagent 执行器",
 			subagentExecutorHint: "开启时遮蔽第三方 subagent 扩展的同名工具；仅对新会话（含重开）生效。",
 			subagentExecutorConflictHint: "检测到第三方 subagent 扩展（{names}），当前内置执行器优先。",

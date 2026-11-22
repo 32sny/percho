@@ -16,6 +16,7 @@ import { useChannelSubscriptionsStore } from "./channel-subscriptions";
 import { COMPOSER_EDITOR_RELEASE_EVENT, COMPOSER_FOCUS_EVENT, useDraftStore } from "./drafts";
 import { discardPendingPayloads } from "./pending-payloads";
 import {
+	clearSessionHistory,
 	finishSessionHistory,
 	hasPendingSessionHistory,
 	isHistoryReady,
@@ -986,8 +987,26 @@ const { loadSessionBundle, restorePermissionMode, ensureOpenSession } = sessionL
  *
  * 放在本模块而不是 workspace 侧：依赖方向是 sessions → session-workspace，反向订阅会成模块环。
  */
+let viewedSubagentId: string | null = null;
 useSessionsStore.subscribe((state, prev) => {
-	if (state.activeSessionId === prev.activeSessionId) return;
-	const { members, setActive } = useSessionWorkspaceStore.getState();
-	setActive(members.find((m) => m.sessionId === state.activeSessionId)?.file ?? null);
+	if (state.activeSessionId !== prev.activeSessionId) {
+		const { members, setActive } = useSessionWorkspaceStore.getState();
+		setActive(members.find((m) => m.sessionId === state.activeSessionId)?.file ?? null);
+	}
+	const active = state.activeSessionId;
+	const isReadOnly =
+		active != null && state.sessions.some((s) => s.sessionId === active && s.readOnly === true);
+	const next = isReadOnly ? active : null;
+	if (next === viewedSubagentId) return;
+	const previous = viewedSubagentId;
+	viewedSubagentId = next;
+	if (previous) {
+		clearSessionHistory(previous);
+		void getPi()
+			.setViewedSubagent?.({})
+			.catch(() => {});
+	}
+	if (next) {
+		void loadSessionBundle(next, { observeSubagent: true }).catch(() => {});
+	}
 });

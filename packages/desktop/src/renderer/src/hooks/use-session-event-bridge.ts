@@ -5,6 +5,7 @@ import { useDraftStore } from "../stores/drafts";
 import { EventConflator } from "../stores/event-conflator";
 import { useProjectsStore } from "../stores/projects";
 import { retrySessionHistory } from "../stores/session-history";
+import { bufferSubagentEventIfObserving } from "../stores/session-loading";
 import { useSessionsStore } from "../stores/sessions";
 import { pushExtensionToast } from "../stores/toasts";
 import { useTranscriptStore } from "../stores/transcript";
@@ -40,6 +41,7 @@ export function useSessionEventBridge({
 				useProjectsStore.getState().applySessionName(sessionId, event.name);
 				return; // 会话名走 sessions + projects 两份投影；reducer 对该类型本就无操作
 			}
+			if (bufferSubagentEventIfObserving(sessionId, event)) return;
 			conflator.push(sessionId, event);
 		});
 		const offPermission = pi.onPermissionRequest((req) => {

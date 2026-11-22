@@ -12,6 +12,7 @@ import {
 	type ActivityEntry,
 	appendOptimisticUserMessage,
 	type ComposerDocument,
+	emptyStreaming,
 	emptyTranscript,
 	projectControlSendFailure,
 	reduceEvent,
@@ -91,7 +92,7 @@ interface TranscriptStore {
 	markExtensionPrefill: (sessionId: string, source: string) => void;
 	clearExtensionPrefill: (sessionId: string) => void;
 	resetSession: (sessionId: string) => void;
-	loadHistory: (sessionId: string, messages: UIMessage[]) => void;
+	loadHistory: (sessionId: string, messages: UIMessage[], opts?: { agentActive?: boolean }) => void;
 	/** 在消息流前插入一页更早的历史，不重置实时状态。 */
 	prependHistory: (sessionId: string, messages: UIMessage[]) => void;
 	/** 直接设置排队中的 followUp（打开/切换会话时从 backend 拉初始值；运行中由 queue_update 事件驱动） */
@@ -302,9 +303,10 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
 			return { bySession };
 		});
 	},
-	loadHistory: (sessionId, messages) => {
+	loadHistory: (sessionId, messages, opts) => {
 		useSessionViewStore.getState().forget(sessionId);
 		useSessionViewStore.getState().ensure(sessionId);
+		const agentActive = opts?.agentActive === true;
 		set((state) => {
 			const current = state.bySession[sessionId];
 			const notices =
@@ -314,9 +316,9 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
 					...state.bySession,
 					[sessionId]: {
 						messages: [...notices, ...messages],
-						streaming: null,
-						phase: "idle",
-						agentActive: false,
+						streaming: agentActive ? emptyStreaming() : null,
+						phase: agentActive ? "streaming" : "idle",
+						agentActive,
 						unseenCompletion: false,
 						compacting: false,
 						followUpQueue: current?.followUpQueue ?? [],

@@ -14,6 +14,7 @@ const piMock = vi.hoisted(() => ({
 	setPermissionMode: vi.fn(() => Promise.resolve()),
 	saveUiState: vi.fn(() => Promise.resolve()),
 	loadUiState: vi.fn(() => Promise.resolve(undefined)),
+	setViewedSubagent: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("../api", () => ({ getPi: () => piMock }));
 
@@ -362,5 +363,17 @@ describe("关系清理：只有删除会清（GC 卸载不清）", () => {
 		await useProjectsStore.getState().deleteSession(child);
 
 		expect(relations()).toEqual({});
+	});
+
+	it("离开只读子代理会话时清空历史就绪态并通知后端停止推流", async () => {
+		openParentAsActive();
+		const readOnlyChild = { ...child, readOnly: true };
+		piMock.openSession.mockResolvedValue(readOnlyChild);
+		await useSessionsStore.getState().openSubagentSession(childFile);
+		expect(active()).toBe("sub-1");
+
+		await useSessionsStore.getState().returnToParent("sub-1");
+		expect(active()).toBe("parent");
+		expect(piMock.setViewedSubagent).toHaveBeenCalledWith({});
 	});
 });

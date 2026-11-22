@@ -1,10 +1,13 @@
 import { parseSessionEntries, type SessionEntry, type SessionManager } from "@earendil-works/pi-coding-agent";
 import {
+	applyPerchoSubagentNotification,
 	applySubagentNotification,
 	composerDocumentText,
 	extractSubagentRuns,
 	type ImageInput,
+	PERCHO_SUBAGENT_NOTIFICATION_TYPE,
 	parseExpandedSkillInvocation,
+	parsePerchoSubagentNotification,
 	parseSubagentNotification,
 	previewExcerpt,
 	readComposerDocument,
@@ -273,6 +276,17 @@ export function toBranchSessionMessages(branch: readonly SessionEntry[]): Sessio
 	for (const entry of branch) {
 		if (entry.type === "message") raw.push(entry.message);
 		else if (entry.type === "compaction") raw.push(compactionMarker(entry));
+		else if (
+			entry.type === "custom_message" &&
+			(entry.customType === "subagent-notification" || entry.customType === PERCHO_SUBAGENT_NOTIFICATION_TYPE)
+		) {
+			raw.push({
+				role: "custom",
+				customType: entry.customType,
+				content: entry.content,
+				details: entry.details,
+			});
+		}
 	}
 	const messages = toSessionMessages(raw);
 	assignEntryIds(messages, branch);
@@ -298,6 +312,21 @@ export function toSessionMessages(rawMessages: readonly unknown[]): SessionMessa
 	const out: SessionMessage[] = [];
 	const toolById = new Map<string, SessionToolCall>();
 	for (const raw of rawMessages as RawMessage[]) {
+		if (raw.role === "custom" && raw.customType === PERCHO_SUBAGENT_NOTIFICATION_TYPE) {
+			const notif = parsePerchoSubagentNotification(raw.details);
+			if (notif) {
+				for (let i = out.length - 1; i >= 0; i--) {
+					const candidate = out[i];
+					if (candidate?.role !== "subagent") continue;
+					const runs = applyPerchoSubagentNotification(candidate.runs, notif);
+					if (runs) {
+						candidate.runs = runs;
+						break;
+					}
+				}
+			}
+			continue;
+		}
 		// pi-subagents 后台完成通知（custom 消息）：不产气泡，只把更早那条仍标着"运行中"的
 		// 子代理消息收尾。历史行没有 toolCallId 键，只能按通知里的 <task-id>（agentId）匹配。
 		if (raw.role === "custom" && raw.customType === "subagent-notification") {

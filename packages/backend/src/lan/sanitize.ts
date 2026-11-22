@@ -129,6 +129,15 @@ export function sanitizeSessionEvent(event: SessionEvent): SessionEvent | null {
 	if (event.type === "subagent_mutex") {
 		return { ...event, extensionPath: "" };
 	}
+	if (event.type === "subagent_background_update") {
+		return {
+			...event,
+			notification: {
+				...event.notification,
+				runs: event.notification.runs.map(({ sessionFile: _sf, ...rest }) => rest),
+			},
+		};
+	}
 	if (event.type === "message_start" || event.type === "message_update") {
 		return { ...event, message: sanitizeAgentMessage(event.message) as typeof event.message };
 	}

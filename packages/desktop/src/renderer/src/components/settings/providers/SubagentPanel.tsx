@@ -120,6 +120,13 @@ export function SubagentPanel() {
 										{t("settings.models.subagentThinkingInvalid", { value: agent.thinkingWarning })}
 									</p>
 								)}
+								{agent.denyWarnings && agent.denyWarnings.length > 0 && (
+									<p className="mt-1 text-ui-11 text-ink-faint">
+										{t("settings.models.subagentDenyInvalid", {
+											value: agent.denyWarnings.join(", "),
+										})}
+									</p>
+								)}
 							</li>
 						);
 					})}

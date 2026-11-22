@@ -35,11 +35,20 @@ interface UIToolCall {
 	endedAt?: number;  // 执行结束时间戳（可选）
 }
 
+interface SubagentRunSummary {
+	changedFiles: Array<{ path: string; added: number; removed: number }>;
+	commands: Array<{ command: string; isError: boolean }>;
+	failedCommands: number;
+	durationMs: number;
+}
+
 interface SubagentRunUi {
 	key: string;
 	agent: string;
 	task?: string;
-	status: "running" | "done" | "error";
+	status: "running" | "queued" | "done" | "error" | "aborted";
+	summary?: SubagentRunSummary;
+	index?: number;
 	model?: string;
 	agentId?: string;  // pi-subagents 的后台 agent id（可喂给 steer/get_subagent_result）
 	thinkingLevel?: string;

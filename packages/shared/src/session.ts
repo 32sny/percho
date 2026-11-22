@@ -3,6 +3,7 @@ import type { ComposerDocument } from "./composer-document";
 import type { MessageControlUpdateEvent } from "./message-control";
 import type { SkillInvocationDisplay } from "./skill-invocation";
 import type { SubagentRunData } from "./subagent";
+import type { PerchoSubagentNotificationDetails } from "./subagent-notification";
 
 /**
  * 临时会话工作区快照（跨重启保留）：有序的会话文件路径 + 最后查看的那一个。
@@ -339,6 +340,8 @@ export interface SessionHistoryWindow {
 	cursor?: string;
 	startIndex: number;
 	generation: string;
+	/** 运行中只读子代理打开时的实时活跃态（避免 loadHistory 把等待首 token 的子会话重置为 idle） */
+	live?: { agentActive: boolean };
 }
 
 /** 一代历史快照的轻量轮次导航：仅显示摘要，不包含图片或工具载荷。 */
@@ -615,6 +618,12 @@ export interface StreamGuardTrippedEvent {
 	verdict: string;
 }
 
+/** 内置后台子代理中间进度更新（不进 trace/LLM 上下文，仅实时刷新父会话卡片状态）。 */
+export interface SubagentBackgroundUpdateEvent {
+	type: "subagent_background_update";
+	notification: PerchoSubagentNotificationDetails;
+}
+
 /** pi 事件 + Percho UI 事件，跨 IPC 统一转发。 */
 export type { PiAgentSessionEvent as AgentSessionEvent };
 export type SessionEvent =
@@ -625,7 +634,8 @@ export type SessionEvent =
 	  })
 	| SubagentMutexEvent
 	| StreamGuardTrippedEvent
-	| MessageControlUpdateEvent;
+	| MessageControlUpdateEvent
+	| SubagentBackgroundUpdateEvent;
 
 /** 渲染进程收到的统一事件包络 */
 export interface SessionEventEnvelope {

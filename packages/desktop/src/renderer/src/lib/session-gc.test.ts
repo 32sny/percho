@@ -254,4 +254,13 @@ describe("pickUnloadCandidates · 频道订阅保护（P0）", () => {
 		expect(isProtected(session("a", NOW, { hasChannelSubscriptions: false }), IDLE_ENTRY)).toBe(false);
 		expect(isProtected(session("a", NOW), IDLE_ENTRY)).toBe(false); // 缺省 = 无订阅
 	});
+
+	it("存在运行中/排队中的内置后台子代理时受保护不被 GC 卸载", () => {
+		expect(
+			ids({
+				open: [session("bg", NOW - 10_000_000)],
+				entryOf: (id) => (id === "bg" ? { ...IDLE_ENTRY, hasRunningBackgroundSubagents: true } : IDLE_ENTRY),
+			}),
+		).toEqual([]);
+	});
 });

@@ -40,6 +40,7 @@ export function registerSessionsIpc(backend: PiBackend): void {
 			return backend.getSessionHoverPreview(sessionId, cwd);
 		},
 		markSessionHistoryReady: ({ sessionId }) => backend.markSessionHistoryReady(sessionId),
+		setViewedSubagent: ({ sessionId }) => backend.setViewedSubagent(sessionId),
 		getTodos: ({ sessionId }) => backend.getTodos(sessionId),
 		compact: ({ sessionId, customInstructions }) => backend.compact(sessionId, customInstructions),
 		getStats: ({ sessionId }) => backend.getStats(sessionId),

@@ -79,6 +79,8 @@ import {
 	formatSkillCommand,
 	isMcpReconnectable,
 	isModelVisible,
+	PERCHO_SUBAGENT_NOTIFICATION_TYPE,
+	type PerchoSubagentNotificationDetails,
 	parseComposerDocument,
 	parseExpandedSkillInvocation,
 	projectMcpRuntime,
@@ -188,7 +190,13 @@ import {
 	writeContextManagerMode,
 } from "./tools/context-evaporation";
 import { makeShowImageTool } from "./tools/show-image";
-import { discoverAgents, makeSubagentTool } from "./tools/subagent";
+import {
+	BackgroundSubagentManager,
+	discoverAgents,
+	makeSubagentBackgroundTools,
+	makeSubagentTool,
+	type SubagentRunHandle,
+} from "./tools/subagent";
 import { applySubagentMutex, resolveSubagentPreferBuiltin } from "./tools/subagent/mutex";
 import { makeSubagentRelationsExtension } from "./tools/subagent-relations";
 import { makeTodoTool } from "./tools/todo";
@@ -476,6 +484,12 @@ export class PiBackend {
 	 * emit 该事件（见 `session/shutdown.ts`）仍显式调这里 —— 两道都触发时 cleanup 幂等，重复无害。
 	 */
 	private readonly channelWatchCleanups = new WeakMap<PermissionModeRef, () => void>();
+	/** 运行中子代理句柄（供只读检视读取实时内存分支与未落盘打开） */
+	private readonly runningSubagents = new Map<string, SubagentRunHandle>();
+	/** 内置后台子代理管理器（run_in_background 生命周期与自动唤醒） */
+	private readonly backgroundSubagents = new BackgroundSubagentManager();
+	/** 当前正在检视的子代理会话 ID（仅查看时向渲染层转发实时事件） */
+	private viewedSubagentId: string | undefined;
 	/** 每会话事件速率（60s 窗口；心跳/临终快照数据源） */
 	private readonly eventRates = new EventRateTracker();
 	private modelRuntime: ModelRuntime | undefined;
@@ -531,7 +545,12 @@ export class PiBackend {
 	}
 
 	/** 自定义工具 = 调用方传入的 + 内置 webfetch（webFetch:false 关闭）+ show_image + todo + subagent */
-	private buildCustomTools(gate: PermissionGate, preferBuiltin: boolean): ToolDefinition[] {
+	private buildCustomTools(
+		gate: PermissionGate,
+		preferBuiltin: boolean,
+		modeRef?: PermissionModeRef,
+		getParentSessionId?: () => string | undefined,
+	): ToolDefinition[] {
 		const tools = [...(this.options.customTools ?? [])];
 		const webFetch = this.options.webFetch;
 		if (webFetch !== false) {
@@ -540,16 +559,38 @@ export class PiBackend {
 		tools.push(makeShowImageTool());
 		tools.push(makeTodoTool());
 		if (preferBuiltin) {
+			const backgroundBridge = getParentSessionId
+				? {
+						manager: this.backgroundSubagents,
+						getParentSessionId,
+						onComplete: (
+							parentSessionId: string,
+							notification: PerchoSubagentNotificationDetails,
+							reportText: string,
+						) => this.deliverBackgroundSubagentNotification(parentSessionId, notification, reportText),
+					}
+				: undefined;
 			tools.push(
 				makeSubagentTool({
 					getModelRuntime: () => this.getModelRuntime(),
 					getSubagentModel: (agentName) => this.modelPrefs.getSubagentModel(agentName),
 					getSubagentThinkingLevel: (agentName) => this.modelPrefs.getSubagentThinking(agentName),
+					getPermissionMode: modeRef ? () => modeRef.current : undefined,
 					gate,
 					traces: this.traces,
-					onEvent: (sessionId, event) => this.emitEvent(sessionId, event),
+					registerRun: (handle) => {
+						this.runningSubagents.set(handle.sessionId, handle);
+					},
+					unregisterRun: (sessionId) => {
+						this.runningSubagents.delete(sessionId);
+					},
+					onEvent: (sessionId, event, abort) => this.emitSubagentEvent(sessionId, event, abort),
+					...(backgroundBridge ? { background: backgroundBridge } : {}),
 				}),
 			);
+			if (backgroundBridge) {
+				tools.push(...makeSubagentBackgroundTools(backgroundBridge));
+			}
 		}
 		return tools;
 	}
@@ -709,7 +750,70 @@ export class PiBackend {
 		return this.modelRuntime;
 	}
 
-	private emitEvent(sessionId: string, event: SessionEvent): void {
+	setViewedSubagent(sessionId?: string): void {
+		this.viewedSubagentId = sessionId;
+	}
+
+	private async deliverBackgroundSubagentNotification(
+		parentSessionId: string,
+		notification: PerchoSubagentNotificationDetails,
+		reportText: string,
+	): Promise<void> {
+		if (this.disposed) return;
+		const entry = this.registry.get(parentSessionId);
+		if (!entry || entry.readOnly) return;
+		const message = {
+			customType: PERCHO_SUBAGENT_NOTIFICATION_TYPE,
+			content: reportText,
+			display: false,
+			details: notification,
+		};
+		const options = { triggerTurn: true, deliverAs: "followUp" as const };
+		try {
+			await entry.session.sendCustomMessage(message, options);
+		} catch (error) {
+			log.warn("background subagent notification delivery failed, retrying once", {
+				parentSessionId,
+				runId: notification.runId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			if (this.disposed || this.registry.get(parentSessionId) !== entry) return;
+			try {
+				await entry.session.sendCustomMessage(message, options);
+			} catch (retryError) {
+				log.error("background subagent notification delivery failed after retry", {
+					parentSessionId,
+					runId: notification.runId,
+					error: retryError instanceof Error ? retryError.message : String(retryError),
+				});
+			}
+		}
+	}
+
+	private findRunningSubagentByFile(filePath: string): SubagentRunHandle | undefined {
+		const target = backendSessionPathKey(filePath);
+		for (const handle of this.runningSubagents.values()) {
+			if (handle.sessionFile && backendSessionPathKey(handle.sessionFile) === target) {
+				return handle;
+			}
+		}
+		return undefined;
+	}
+
+	private emitSubagentEvent(sessionId: string, event: AgentSessionEvent, abort: () => Promise<void>): void {
+		this.emitEvent(sessionId, event, {
+			forward: this.viewedSubagentId === sessionId && this.registry.has(sessionId),
+			recordTrace: false,
+			abort,
+		});
+	}
+
+	private emitEvent(
+		sessionId: string,
+		event: SessionEvent,
+		opts?: { forward?: boolean; recordTrace?: boolean; abort?: () => Promise<void> },
+	): void {
 		this.eventRates.tick(sessionId);
 		if (event.type === "message_start" || event.type === "message_end") {
 			event = { ...event, message: projectComposerMessage(event.message) };
@@ -745,21 +849,26 @@ export class PiBackend {
 		if (verdict !== "pass") {
 			if (verdict !== "suppress") {
 				log.error("stream guard tripped, aborting session", sessionId, { verdict });
-				void this.abort(sessionId).catch(() => {});
+				void (opts?.abort ? opts.abort() : this.abort(sessionId)).catch(() => {});
 				// 熔断显形：合成 stream_guard_tripped UI 事件（subagent_mutex 同款：union + IPC 转发 +
 				// 不进 trace），reducer 产 warning 条——否则「回复戛然而止」零 UI 信号。
 				// 合成事件直接 emit，不喂回 streamGuard.inspect（防线不能自触发）。
-				this.eventEmitter.emit({ sessionId, event: { type: "stream_guard_tripped", verdict } });
+				if (opts?.forward !== false) {
+					this.eventEmitter.emit({ sessionId, event: { type: "stream_guard_tripped", verdict } });
+				}
 			}
 			return;
 		}
 		if (
+			opts?.recordTrace !== false &&
 			event.type !== "subagent_mutex" &&
 			event.type !== "stream_guard_tripped" &&
 			event.type !== "message_control_update"
 		)
 			this.traces.record(sessionId, event as AgentSessionEvent);
-		this.eventEmitter.emit({ sessionId, event: event as SessionEvent });
+		if (opts?.forward !== false) {
+			this.eventEmitter.emit({ sessionId, event: event as SessionEvent });
+		}
 	}
 
 	private async prewarmAntigravityProvider(): Promise<void> {
@@ -797,7 +906,7 @@ export class PiBackend {
 				model,
 				thinkingLevel: options.thinkingLevel as ThinkingLevel | undefined,
 				tools: this.options.tools,
-				customTools: this.buildCustomTools(deps.gate, deps.preferBuiltin),
+				customTools: this.buildCustomTools(deps.gate, deps.preferBuiltin, deps.modeRef, deps.getSessionId),
 				sessionManager: SessionManager.create(cwd),
 				settingsManager,
 				resourceLoader,
@@ -880,35 +989,51 @@ export class PiBackend {
 		// 读 header 拿到 sessionId（只读文件头，不构造会话）后先查 registry：
 		// 子代理产物目录下的会话文件 = 只读检视（spec §8.1：防能力静默漂移/递归绕过）。
 		// 其运行 trace 由 runner 管理，检视页不可写，故不另建 recorder（避免覆盖运行中的 recorder）。
-		if (isSubagentSessionPath(filePath) && !(await validateSubagentSessionFile(filePath))) {
+		const isSubagent = isSubagentSessionPath(filePath);
+		const liveHandle = isSubagent ? this.findRunningSubagentByFile(filePath) : undefined;
+		const validSubagentOnDisk = isSubagent ? await validateSubagentSessionFile(filePath) : false;
+		if (isSubagent && !validSubagentOnDisk && !liveHandle) {
 			throw new Error("Invalid subagent transcript path");
 		}
 		if (isOrdinarySessionPath(filePath) && !(await validateOrdinarySessionFile(filePath))) {
 			throw new Error("Invalid stored session path");
 		}
-		const sessionManager = SessionManager.open(filePath);
+		const sessionManager =
+			isSubagent && !validSubagentOnDisk && liveHandle
+				? SessionManager.inMemory(liveHandle.cwd, { id: liveHandle.sessionId })
+				: SessionManager.open(filePath);
 		const existing = this.registry.get(sessionManager.getSessionId());
 		if (existing) {
 			log.info("session open short-circuited", sessionManager.getSessionId(), { file: filePath });
 			return this.registry.toMeta(existing);
 		}
 		const runtime = await this.getModelRuntime();
-		const cwd = sessionManager.getCwd() || process.cwd();
-		const readOnly = isSubagentSessionPath(filePath);
-		const session = await this.wireSession(cwd, readOnly, async (deps) => {
-			const { settingsManager, resourceLoader } = await deps.load();
-			return createAgentSession({
-				sessionManager,
-				modelRuntime: runtime,
-				// 与 create 对称应用工具白名单（F1 修复；SDK 仅在初始激活工具集层面消费，
-				// 会话文件不持久化工具开关，重开无状态冲突）
-				tools: this.options.tools,
-				settingsManager,
-				resourceLoader,
-				...codemodeSessionOptions(settingsManager, getAgentDir()),
-				customTools: this.buildCustomTools(deps.gate, deps.preferBuiltin),
-			});
-		});
+		const cwd = sessionManager.getCwd() || liveHandle?.cwd || process.cwd();
+		const readOnly = isSubagent;
+		const session = await this.wireSession(
+			cwd,
+			readOnly,
+			async (deps) => {
+				const { settingsManager, resourceLoader } = await deps.load();
+				return createAgentSession({
+					sessionManager,
+					modelRuntime: runtime,
+					// 与 create 对称应用工具白名单（F1 修复；SDK 仅在初始激活工具集层面消费，
+					// 会话文件不持久化工具开关，重开无状态冲突）
+					tools: this.options.tools,
+					settingsManager,
+					resourceLoader,
+					...codemodeSessionOptions(settingsManager, getAgentDir()),
+					customTools: this.buildCustomTools(
+						deps.gate,
+						deps.preferBuiltin,
+						deps.modeRef,
+						readOnly ? undefined : deps.getSessionId,
+					),
+				});
+			},
+			isSubagent ? filePath : undefined,
+		);
 		log.info("session opened", session.sessionId, { file: filePath });
 		return this.toMetaOrThrow(session.sessionId);
 	}
@@ -926,9 +1051,12 @@ export class PiBackend {
 		makeSession: (deps: {
 			gate: PermissionGate;
 			preferBuiltin: boolean;
+			modeRef: PermissionModeRef;
+			getSessionId: () => string | undefined;
 			/** 两阶段资源加载（信任决策走 projectLoader 既有链路）；懒执行：makeSession 决定时机 */
 			load: () => Promise<{ settingsManager: SettingsManagerType; resourceLoader: DefaultResourceLoader }>;
 		}) => Promise<CreateAgentSessionResult>,
+		subagentFile?: string,
 	): Promise<AgentSession> {
 		const gate = new PermissionGate((req) => this.permissionEmitter.emit(req));
 		gate.setResolvedListener((result) => this.permissionResolvedEmitter.emit(result));
@@ -937,6 +1065,7 @@ export class PiBackend {
 			gate.confirm(title, message, meta, gateRunSignal?.());
 		// 会话权限模式引用：一律 default 起步（D1：不落盘、不继承），随工厂闭包注入求值链
 		let gateRunSignal: (() => AbortSignal | undefined) | undefined;
+		let boundSessionId: string | undefined;
 		const modeRef: PermissionModeRef = { current: "default" };
 		const mcpOwner = readOnly ? undefined : this.mcpRuntime.owner(cwd);
 		if (mcpOwner) this.mcpOwners.set(modeRef, mcpOwner);
@@ -953,12 +1082,19 @@ export class PiBackend {
 		let session: AgentSession;
 		let extensionsResult: CreateAgentSessionResult["extensionsResult"];
 		try {
-			({ session, extensionsResult } = await makeSession({ gate, preferBuiltin, load }));
+			({ session, extensionsResult } = await makeSession({
+				gate,
+				preferBuiltin,
+				modeRef,
+				getSessionId: () => boundSessionId,
+				load,
+			}));
 		} catch (error) {
 			mcpOwner?.close();
 			this.mcpOwners.delete(modeRef);
 			throw error;
 		}
+		boundSessionId = session.sessionId;
 		gate.bindSession(session.sessionId);
 		const messageControl = readOnly ? undefined : this.enableMessageControl(session);
 		const messageControlAdapter = messageControl ? createMessageControlAdapter(messageControl) : undefined;
@@ -1009,6 +1145,7 @@ export class PiBackend {
 				unsubscribeMessageControl,
 				modeRef,
 				readOnly: readOnly || undefined,
+				...(subagentFile ? { subagentFile } : {}),
 			});
 			mcpOwner?.bind(session.sessionId);
 			// 旧会话重开：转录记录的工具集优先于 defaultTools，codemode 又以 defaultActive:false 注册，
@@ -1130,6 +1267,10 @@ export class PiBackend {
 		if (!entry) return { closed: true };
 		if (this.sessionHasUnsettledControl(entry)) {
 			log.warn("closeSession ignored: active or pending message control", sessionId);
+			return { closed: false };
+		}
+		if (this.backgroundSubagents.hasRunning(sessionId)) {
+			log.warn("closeSession ignored: running background subagents", sessionId);
 			return { closed: false };
 		}
 		// 自动 GC 不得卸掉有频道订阅的会话（快照按 sessionId 精确查，退订后自然恢复资格）。
@@ -1302,6 +1443,7 @@ export class PiBackend {
 		}
 		// 显式删除是用户的明确意图（既有行为：即便正跑着也删），**绕开 closeSession 的 isStreaming 拒绝**，
 		// 否则会变成「拒绝 dispose 但磁盘文件照删」的跛脚状态（阶段 0 实测确认这条路径不先 abort）
+		await this.backgroundSubagents.abortForParent(sessionId);
 		if (entry) await this.disposeSession(entry);
 		if (!file) throw new Error(`Session file not found: ${sessionId}`);
 		// 文件可能还不存在：0 消息会话（首条 prompt 没过 preflight）只有**计划路径**，SDK 要等
@@ -1917,11 +2059,23 @@ export class PiBackend {
 		if (this.registry.has(sessionId)) this.historyGate.ack(sessionId);
 	}
 
+	/** 同步读取会话当前分支：运行中子代理读内存实时分支，已结束只读子代理重读磁盘最新分支 */
+	private sessionBranch(entry: RegisteredSession): SessionEntry[] {
+		const live = this.runningSubagents.get(entry.session.sessionId);
+		if (live) return live.getBranch();
+		const file = entry.session.sessionFile ?? entry.subagentFile;
+		if (entry.readOnly && file && existsSync(file)) {
+			return SessionManager.open(file).getBranch();
+		}
+		return entry.session.sessionManager.getBranch();
+	}
+
 	/** Read the initial bounded history page and pin a cursor to this live session instance. */
 	getSessionHistoryWindow(sessionId: string): SessionHistoryWindow {
 		const entry = this.requireSession(sessionId);
-		const branch = entry.session.sessionManager.getBranch();
-		const leaf = entry.session.sessionManager.getLeafId() ?? "root";
+		if (entry.readOnly) this.viewedSubagentId = sessionId;
+		const branch = this.sessionBranch(entry);
+		const leaf = branch.at(-1)?.id ?? entry.session.sessionManager.getLeafId() ?? "root";
 		const pager = new SessionHistoryPager({
 			sessionId,
 			instanceId: randomUUID(),
@@ -1936,7 +2090,12 @@ export class PiBackend {
 			images: new HistoryImageStore({ sessionId, generation: pager.generation }),
 		};
 		this.historyPagers.set(sessionId, snapshot);
-		return this.projectHistoryPage(snapshot, pager.tail());
+		const window = this.projectHistoryPage(snapshot, pager.tail());
+		const liveHandle = this.runningSubagents.get(sessionId);
+		if (entry.readOnly && liveHandle?.isStreaming()) {
+			return { ...window, live: { agentActive: true } };
+		}
+		return window;
 	}
 
 	/** Read an older page from the pinned snapshot; stale or cross-instance cursors fail closed. */
@@ -1991,7 +2150,7 @@ export class PiBackend {
 	/** 读取会话树当前分支的完整历史（compaction 只裁模型上下文，不裁 UI 历史） */
 	async getSessionMessages(sessionId: string): Promise<SessionMessage[]> {
 		const entry = this.requireSession(sessionId);
-		return toBranchSessionMessages(entry.session.sessionManager.getBranch());
+		return toBranchSessionMessages(this.sessionBranch(entry));
 	}
 
 	/** 悬停专用只读入口：精确定位，不加载/创建实例，不走全项目枚举兜底。 */
@@ -2197,12 +2356,13 @@ export class PiBackend {
 		const agents = await discoverAgents(this.options.defaultCwd ?? process.cwd(), { projectTrusted: false });
 		return agents
 			.filter((agent) => agent.source !== "project")
-			.map(({ name, description, source, thinking, thinkingWarning }) => ({
+			.map(({ name, description, source, thinking, thinkingWarning, denyWarnings }) => ({
 				name,
 				description,
 				source: source === "builtin" ? "builtin" : "user",
 				...(thinking ? { thinking } : {}),
 				...(thinkingWarning ? { thinkingWarning } : {}),
+				...(denyWarnings && denyWarnings.length > 0 ? { denyWarnings } : {}),
 			}));
 	}
 
@@ -2517,6 +2677,9 @@ export class PiBackend {
 
 	dispose(): void {
 		this.disposed = true;
+		this.viewedSubagentId = undefined;
+		void this.backgroundSubagents.disposeAll();
+		this.runningSubagents.clear();
 		this.registry.disposeAll({
 			beforeShutdown: (entry) => {
 				this.beforeSessionShutdown(entry);

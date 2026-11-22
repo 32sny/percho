@@ -24,6 +24,11 @@ const TICK_MS = 20_000;
 function entryOf(sessionId: string): SessionGcEntry | undefined {
 	const entry = useTranscriptStore.getState().bySession[sessionId];
 	if (!entry) return undefined;
+	const hasRunningBackgroundSubagents = entry.messages.some(
+		(m) =>
+			m.kind === "subagent" &&
+			m.runs.some((r) => r.background && (r.status === "running" || r.status === "queued")),
+	);
 	return {
 		agentActive: entry.agentActive,
 		pendingPermissions: entry.pendingPermissions,
@@ -31,6 +36,7 @@ function entryOf(sessionId: string): SessionGcEntry | undefined {
 		unseenCompletion: entry.unseenCompletion,
 		compacting: entry.compacting,
 		followUpQueue: entry.followUpQueue,
+		hasRunningBackgroundSubagents,
 		messageCount: entry.messages.length,
 	};
 }

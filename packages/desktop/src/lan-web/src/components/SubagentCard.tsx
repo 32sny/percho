@@ -7,17 +7,30 @@ export function SubagentCard({ runs }: { runs: SubagentRunUi[] }) {
 	return (
 		<div className="agent-box">
 			{runs.map((run) => {
-				const state = run.status === "running" ? "run" : run.status === "error" ? "bad" : "ok";
+				const state =
+					run.status === "running" || run.status === "queued"
+						? "run"
+						: run.status === "error" || run.status === "aborted"
+							? "bad"
+							: "ok";
 				const statusLabel =
 					run.status === "running"
 						? t("subagent.running")
-						: run.status === "error"
-							? t("subagent.failed")
-							: t("subagent.done");
+						: run.status === "queued"
+							? t("subagent.queued")
+							: run.status === "aborted"
+								? t("subagent.aborted")
+								: run.status === "error"
+									? t("subagent.failed")
+									: t("subagent.done");
+				const agentLabel =
+					run.index != null
+						? `${run.agent.charAt(0).toUpperCase() + run.agent.slice(1)} #${run.index}`
+						: run.agent.charAt(0).toUpperCase() + run.agent.slice(1);
 				return (
 					<div key={run.key} className="agent-row">
 						<span className={`pulse-dot sm ${state === "run" ? "violet" : state === "bad" ? "bad" : ""}`} />
-						<span className="agent-name">{run.agent.charAt(0).toUpperCase() + run.agent.slice(1)}</span>
+						<span className="agent-name">{agentLabel}</span>
 						{run.task && <span className="agent-task">{run.task}</span>}
 						<span className={`agent-state ${state}`}>{statusLabel}</span>
 					</div>

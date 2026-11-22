@@ -3,7 +3,13 @@ import { buildStreamGuardUiError, type UiError } from "../errors";
 import type { ImageInput, SessionEvent } from "../session";
 import { parseExpandedSkillInvocation } from "../skill-invocation";
 import { extractSubagentRuns } from "../subagent";
-import { applySubagentNotification, parseSubagentNotification } from "../subagent-notification";
+import {
+	applyPerchoSubagentNotification,
+	applySubagentNotification,
+	PERCHO_SUBAGENT_NOTIFICATION_TYPE,
+	parsePerchoSubagentNotification,
+	parseSubagentNotification,
+} from "../subagent-notification";
 import { extractTodos, TODO_TOOL_NAME } from "../todo";
 import { projectControlSendFailure } from "./control-errors";
 import {
@@ -45,6 +51,51 @@ function withStreaming(
 	return { ...state, streaming };
 }
 
+function applySubagentProgress(
+	subagentRuns: SubagentRunUi[],
+	placement: { start: number; count: number },
+	partialResult: unknown,
+): SubagentRunUi[] {
+	const details = (partialResult as { details?: unknown } | null | undefined)?.details;
+	const progress = extractSubagentRuns(details);
+	if (!progress) return subagentRuns;
+	const next = [...subagentRuns];
+	const rawResults = Array.isArray((details as { results?: unknown[] } | undefined)?.results)
+		? ((details as { results?: unknown[] }).results ?? [])
+		: [];
+	const positional = progress.length === placement.count;
+	for (let pIdx = 0; pIdx < progress.length; pIdx++) {
+		const update = progress[pIdx];
+		if (!update) continue;
+		const rawItem = rawResults[pIdx] as { status?: unknown } | undefined;
+		const hasExplicitStatus = typeof rawItem?.status === "string";
+		const index = positional
+			? placement.start + pIdx
+			: next.findIndex(
+					(run, i) =>
+						i >= placement.start &&
+						i < placement.start + placement.count &&
+						((update.sessionFile != null && run.sessionFile === update.sessionFile) ||
+							(run.sessionFile == null &&
+								run.agent === update.agent &&
+								(update.task == null || run.task === update.task))),
+				);
+		const current = index >= 0 ? next[index] : undefined;
+		if (!current) continue;
+		next[index] = {
+			...current,
+			status: hasExplicitStatus ? update.status : current.status,
+			...(update.sessionFile ? { sessionFile: update.sessionFile } : {}),
+			...(update.thinkingLevel ? { thinkingLevel: update.thinkingLevel } : {}),
+			...(update.model ? { model: update.model } : {}),
+			...(update.tokens != null ? { tokens: update.tokens } : {}),
+			...(update.summary ? { summary: update.summary } : {}),
+			...(update.index != null ? { index: update.index } : {}),
+		};
+	}
+	return next;
+}
+
 /**
  * 后台子代理完成通知落地：pi-subagents 在每个后台子代理跑完后投递一条 custom 消息
  * （`<task-notification>`，内含 `<tool-use-id>` 与 `<task-id>`），它不会回头更新当初那次
@@ -69,6 +120,33 @@ function applySubagentNotificationToState(
 	const streamRuns =
 		streaming && streaming.subagentRuns.length > 0
 			? applySubagentNotification(streaming.subagentRuns, notif, (run) => run.key)
+			: null;
+	if (!touched && !streamRuns) return state;
+	return {
+		...state,
+		messages: touched ? messages : state.messages,
+		...(streamRuns && streaming ? { streaming: { ...streaming, subagentRuns: streamRuns } } : {}),
+	};
+}
+
+function applyPerchoSubagentNotificationToState(
+	state: SessionTranscriptState,
+	details: unknown,
+): SessionTranscriptState {
+	const notif = parsePerchoSubagentNotification(details);
+	if (!notif) return state;
+	let touched = false;
+	const messages = state.messages.map((message) => {
+		if (message.kind !== "subagent") return message;
+		const runs = applyPerchoSubagentNotification(message.runs, notif);
+		if (!runs) return message;
+		touched = true;
+		return { ...message, runs };
+	});
+	const streaming = state.streaming;
+	const streamRuns =
+		streaming && streaming.subagentRuns.length > 0
+			? applyPerchoSubagentNotification(streaming.subagentRuns, notif)
 			: null;
 	if (!touched && !streamRuns) return state;
 	return {
@@ -277,6 +355,7 @@ export const REDUCED_EVENT_TYPES = [
 	"auto_retry_end",
 	"stream_guard_tripped",
 	"message_control_update",
+	"subagent_background_update",
 ] as const;
 
 export type ReducedEventTypeName = (typeof REDUCED_EVENT_TYPES)[number];
@@ -287,6 +366,9 @@ export type ReducedEventTypeName = (typeof REDUCED_EVENT_TYPES)[number];
  */
 export function reduceEvent(state: SessionTranscriptState, event: SessionEvent): SessionTranscriptState {
 	switch (event.type) {
+		case "subagent_background_update": {
+			return applyPerchoSubagentNotificationToState(state, event.notification);
+		}
 		case "stream_guard_tripped": {
 			// 熔断显形：warning 卡（含 verdict detail）；同轮 pending 的 LLM 错误卡不再落（熔断卡是唯一解释）
 			// 先 finalize 再落卡——熔断发生在流式中途（message_update 触发），partial 正文必须先固化在卡前
@@ -347,6 +429,10 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 			// 后台子代理完成通知（pi-subagents 的 custom 消息）：不产气泡，只把对应的
 			// running 行收尾成 done/error 并补 token。命中不了就原样返回。
 			if (event.message.role === "custom") {
+				const custom = event.message as { customType?: unknown; details?: unknown; content?: unknown };
+				if (custom.customType === PERCHO_SUBAGENT_NOTIFICATION_TYPE) {
+					return applyPerchoSubagentNotificationToState(state, custom.details);
+				}
 				return applySubagentNotificationToState(state, event.message.content);
 			}
 			// 防御：assistant 消息开始但容器不存在时（如 turn_start 缺失）补建
@@ -451,7 +537,8 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 						key: `${event.toolCallId}:${index}`,
 						agent: typeof input.agent === "string" && input.agent.length > 0 ? input.agent : "subagent",
 						task: typeof input.task === "string" && input.task.length > 0 ? input.task : undefined,
-						status: "running",
+						status: runInputs.length > 1 && index >= 4 ? "queued" : "running",
+						...(runInputs.length > 1 ? { index: index + 1 } : {}),
 					}));
 					// ticker 摘条（spec §9.0）：subagent 不进 Working 预览行——toolcall_start 已在
 					// activity 留了 `c${blockIndex}` 条目，移出折叠区时同步摘除
@@ -483,34 +570,9 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 			return withStreaming(state, (streaming) => {
 				const delta = extractExecutionDelta(event.partialResult);
 				const placement = streaming.subagentByToolCallId[event.toolCallId];
-				const progress = placement
-					? extractSubagentRuns((event.partialResult as { details?: unknown } | null | undefined)?.details)
-					: null;
-				let subagentRuns = streaming.subagentRuns;
-				if (placement && progress) {
-					// 子会话在 runner 创建后立即通过 partialResult 上报 sessionFile；只回填路径，
-					// 保住 running 状态（其 exitCode=-1，不能被 extract 的 error 判定覆盖）。
-					const next = [...subagentRuns];
-					for (const update of progress) {
-						if (!update.sessionFile) continue;
-						const index = next.findIndex(
-							(run, i) =>
-								i >= placement.start &&
-								i < placement.start + placement.count &&
-								run.sessionFile == null &&
-								run.agent === update.agent &&
-								(update.task == null || run.task === update.task),
-						);
-						const current = index >= 0 ? next[index] : undefined;
-						if (current)
-							next[index] = {
-								...current,
-								sessionFile: update.sessionFile,
-								...(update.thinkingLevel ? { thinkingLevel: update.thinkingLevel } : {}),
-							};
-					}
-					subagentRuns = next;
-				}
+				const subagentRuns = placement
+					? applySubagentProgress(streaming.subagentRuns, placement, event.partialResult)
+					: streaming.subagentRuns;
 				if (!delta && subagentRuns === streaming.subagentRuns) return streaming;
 				const rawToolOutputs = delta
 					? {

@@ -149,7 +149,8 @@ export function collectSessionHoverLiveRuns(
 	let bytes = 2; // JSON 数组方括号
 	const append = (run: unknown, source: SessionHoverLiveRun["source"]): boolean => {
 		if (!object(run) || typeof run.sessionFile !== "string" || !run.sessionFile.trim()) return true;
-		const status = run.status;
+		const rawStatus = run.status;
+		const status = rawStatus === "queued" ? "running" : rawStatus === "aborted" ? "error" : rawStatus;
 		if (status !== "running" && status !== "done" && status !== "error") return true;
 		const exitCode =
 			typeof run.exitCode === "number" && Number.isFinite(run.exitCode) ? run.exitCode : undefined;

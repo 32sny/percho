@@ -15,7 +15,7 @@ function formatTokens(count: number): string {
 	return `${count} token`;
 }
 
-/** 单个子代理行：状态点（工作中呼吸动画 / 完成勾 / 失败红点）+ 加粗名称 + 状态；有会话文件时可点击打开 */
+/** 单个子代理行：保留真实 Agent 名与关键元信息 + 右侧跳动三点胶囊（终态收成圆点）；有会话文件时可点击打开 */
 function SubagentRunRow({ run }: { run: SubagentRunUi }) {
 	const t = useT();
 	// 走统一入口：它同步捕获父目标并只在「仍是最新导航意图」时记下返回关系（spec D4）
@@ -26,44 +26,53 @@ function SubagentRunRow({ run }: { run: SubagentRunUi }) {
 	const statusLabel =
 		run.status === "running"
 			? t("message.subagent.running")
-			: run.status === "error"
-				? t("message.subagent.failed")
-				: t("message.subagent.done");
+			: run.status === "queued"
+				? t("message.subagent.queued")
+				: run.status === "aborted"
+					? t("message.subagent.aborted")
+					: run.status === "error"
+						? t("message.subagent.failed")
+						: t("message.subagent.done");
+	const agentLabel = run.index != null ? `${displayName(run.agent)} #${run.index}` : displayName(run.agent);
 
 	return (
 		<button
 			type="button"
 			disabled={!clickable}
+			aria-label={`${agentLabel} · ${statusLabel}`}
 			// 后台派工时这一行就是"派工回执"：agent id 是 steer_subagent / get_subagent_result
 			// 的唯一凭据，但卡片本身不展示它（太长），挂 hover 提示里供复制。
-			title={run.agentId}
+			title={run.agentId ?? statusLabel}
 			// 推入过渡：子代理页从右向左滑入（父页同时向左滑出，见 lib/session-page-slide.ts）
 			onClick={() => {
 				if (!clickable || !run.sessionFile) return;
 				void withSessionSlide("push", () => openSubagentSession(run.sessionFile as string));
 			}}
-			className={`flex w-full items-center gap-2 py-1 text-left ${
+			className={`flex w-full items-center justify-between gap-2 py-1 text-left ${
 				clickable ? "cursor-pointer rounded-md hover:bg-hover" : "cursor-default"
 			} px-1.5 transition-colors`}
 		>
-			{run.status === "running" ? (
-				<span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
-			) : run.status === "error" ? (
-				<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />
-			) : (
-				<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
-			)}
-			<span className="truncate text-ui-13 font-semibold text-ink">{displayName(run.agent)}</span>
-			{run.thinkingLevel && (
-				<span className="shrink-0 text-ui-11 text-ink-faint">
-					{t(`thinkingLevels.${run.thinkingLevel}` as MessageKey)}
+			<span className="flex min-w-0 items-center gap-2">
+				<span className="truncate text-ui-13 font-semibold text-ink">{agentLabel}</span>
+				{run.thinkingLevel && (
+					<span className="shrink-0 text-ui-11 text-ink-faint">
+						{t(`thinkingLevels.${run.thinkingLevel}` as MessageKey)}
+					</span>
+				)}
+				{run.model && <span className="shrink-0 text-ui-11 text-ink-faint">{run.model}</span>}
+				{run.tokens != null && (
+					<span className="shrink-0 text-ui-11 text-ink-faint">{formatTokens(run.tokens)}</span>
+				)}
+			</span>
+			<span className="subagent-slot" aria-hidden="true">
+				<span className="subagent-cap" data-state={run.status}>
+					<span className="subagent-dots">
+						<span className="subagent-dot" />
+						<span className="subagent-dot" />
+						<span className="subagent-dot" />
+					</span>
 				</span>
-			)}
-			{run.model && <span className="shrink-0 text-ui-11 text-ink-faint">{run.model}</span>}
-			{run.tokens != null && (
-				<span className="shrink-0 text-ui-11 text-ink-faint">{formatTokens(run.tokens)}</span>
-			)}
-			<span className="shrink-0 text-ui-11 text-ink-faint">{statusLabel}</span>
+			</span>
 		</button>
 	);
 }

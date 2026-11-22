@@ -286,7 +286,9 @@ export const en: Messages = {
 			"This reference matches multiple sessions. Drag the target session from the sidebar again.",
 		subagent: {
 			running: "Working",
+			queued: "Queued",
 			done: "Done",
+			aborted: "Aborted",
 			/** Back-to-parent entry on the subagent inspection page (spec D4) */
 			backToParent: "Back to parent session",
 			failed: "Failed",
@@ -564,6 +566,7 @@ export const en: Messages = {
 			subagentThinkingInherit: "Follow agent definition",
 			subagentThinkingInheritWith: "Follow agent definition ({level})",
 			subagentThinkingInvalid: 'Definition thinking "{value}" is invalid and was ignored',
+			subagentDenyInvalid: "Ignored invalid deny rule: {value}",
 			subagentExecutorTitle: "Prefer built-in subagent executor",
 			subagentExecutorHint:
 				"When on, third-party subagent extensions' same-named tools are shadowed; applies to new sessions (including reopened).",

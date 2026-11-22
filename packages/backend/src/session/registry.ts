@@ -14,6 +14,8 @@ export interface RegisteredSession {
 	cwd: string;
 	/** 只读会话（subagent 产物检视）：prompt/fork/recall/setModel 等写操作全部拒绝 */
 	readOnly?: boolean;
+	/** 刚派工尚未落盘的运行中子代理路径（用于结束后重读磁盘分支） */
+	subagentFile?: string;
 	/** SDK 唯一消息控制权威（主写会话启用；随 entry 清理） */
 	messageControl?: MessageControlHandle;
 	messageControlAdapter?: MessageControlAdapter;
@@ -124,12 +126,13 @@ export class SessionRegistry {
 		// ⚠️ `sessionFile` 为空只出现在内存 manager（SessionManager.inMemory）：持久化会话的路径在
 		// create 时就分配好（SDK session-manager 构造函数），但**文件内容**要等首条 user/assistant
 		// 消息才落盘（1.0.4 的 `_hasConversation` 门控 `_persist`）——“是否落盘”一律用 existsSync。
+		const sessionFile = session.sessionFile ?? entry.subagentFile;
 		const times =
 			deriveSessionTimes(session.sessionManager.getHeader(), session.sessionManager.getEntries()) ??
-			fallbackSessionTimes(session.sessionFile);
+			fallbackSessionTimes(sessionFile);
 		return {
 			sessionId: session.sessionId,
-			sessionFile: session.sessionFile, // 内存 manager 才为空，见上（路径≠已落盘）
+			sessionFile, // 内存 manager 才为空，见上（路径≠已落盘）
 			cwd,
 			name: session.sessionName,
 			modelLabel: session.model?.name,

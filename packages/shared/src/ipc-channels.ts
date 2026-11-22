@@ -194,6 +194,8 @@ export const SESSION_CHANNELS = {
 	getSessionHoverPreview: ch("session:hoverPreview")<SessionHoverPreviewRequest, SessionHoverPreviewResult>(),
 	/** 首份完整历史已落到 renderer；解除启动期频道唤醒屏障 */
 	markSessionHistoryReady: ch("session:historyReady")<{ sessionId: string }, void>(),
+	/** 通知后端当前正在检视的子代理会话（仅查看时转发实时事件；空对象表示离开） */
+	setViewedSubagent: ch("session:setViewedSubagent")<{ sessionId?: string }, void>(),
 	/** 读取会话当前 todo 列表（无则空数组） */
 	getTodos: ch("session:getTodos")<{ sessionId: string }, TodoItem[]>(),
 	compact: ch("session:compact")<{ sessionId: string; customInstructions?: string }, void>(),

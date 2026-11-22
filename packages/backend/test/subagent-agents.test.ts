@@ -49,6 +49,17 @@ describe("subagent agent definitions", () => {
 		});
 	});
 
+	describe("frontmatter permissionMode 与 deny", () => {
+		it("解析合法 permissionMode 与 deny，非法 deny 记入 denyWarnings 并忽略", () => {
+			const agent = parseAgentMarkdown(
+				`---\nname: fixer\ndescription: Fixer\npermissionMode: default\ndeny: bash: rm *, bad pattern\n---\n\nFix.`,
+			);
+			expect(agent?.permissionMode).toBe("default");
+			expect(agent?.deny).toEqual(["bash: rm *"]);
+			expect(agent?.denyWarnings).toEqual(["bad pattern"]);
+		});
+	});
+
 	it("applies builtin → user → trusted project precedence", async () => {
 		const root = await mkdtemp(join(tmpdir(), "percho-subagent-agents-"));
 		tempDirs.push(root);

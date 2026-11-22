@@ -79,7 +79,7 @@ export function isAgentWorking(
 	const { streaming } = input;
 	const hasRunningWork = Boolean(
 		streaming?.tools.some((t) => t.state === "running") ||
-			streaming?.subagentRuns.some((r) => r.status === "running"),
+			streaming?.subagentRuns.some((r) => r.status === "running" || r.status === "queued"),
 	);
 	return input.agentActive && (!streaming?.text || hasRunningWork);
 }

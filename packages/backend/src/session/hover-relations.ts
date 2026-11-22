@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { basename, isAbsolute, resolve } from "node:path";
 import {
 	extractSubagentRuns,
+	PERCHO_SUBAGENT_NOTIFICATION_TYPE,
+	parsePerchoSubagentNotification,
 	projectSessionHoverAgent,
 	projectSessionHoverTask,
 	SESSION_HOVER_PAGE_SIZE,
@@ -245,6 +247,26 @@ export async function projectHoverRelations(
 		}
 	}
 	for (const entry of history.branch) {
+		if (entry.type === "custom_message" && entry.customType === PERCHO_SUBAGENT_NOTIFICATION_TYPE) {
+			const notif = parsePerchoSubagentNotification(entry.details);
+			if (notif) {
+				for (const item of notif.runs) {
+					if (!item.sessionFile) continue;
+					const target = children.find((c) => c.child.sessionFile === item.sessionFile);
+					if (!target) continue;
+					target.child = {
+						...target.child,
+						status:
+							item.status === "running" || item.status === "queued"
+								? "running"
+								: item.status === "done"
+									? "done"
+									: "error",
+					};
+				}
+			}
+			continue;
+		}
 		if (entry.type !== "message" || !object(entry.message) || entry.message.role !== "toolResult") continue;
 		const pluginChild = plugin.byEntryId.get(entry.id);
 		if (pluginChild) {
@@ -272,18 +294,23 @@ export async function projectHoverRelations(
 						? Date.parse(entry.timestamp)
 						: NaN;
 			const taskFirstLine = projectSessionHoverTask(run.task, run.sessionFile);
+			const status: SessionHoverRelationChild["status"] =
+				run.status === "running" || run.status === "queued"
+					? "running"
+					: run.status === "aborted"
+						? "error"
+						: run.exitCode == null || !Number.isFinite(run.exitCode)
+							? "unknown"
+							: run.exitCode === 0
+								? "done"
+								: "error";
 			children.push({
 				child: {
 					sessionFile: run.sessionFile,
 					...(idMatch?.[1] ? { sessionId: idMatch[1] } : {}),
 					agent: projectSessionHoverAgent(run.agent, run.sessionFile),
 					...(taskFirstLine !== undefined ? { taskFirstLine } : {}),
-					status:
-						run.exitCode == null || !Number.isFinite(run.exitCode)
-							? "unknown"
-							: run.exitCode === 0
-								? "done"
-								: "error",
+					status,
 					...(Number.isFinite(createdAt) ? { createdAt } : {}),
 				},
 				order: history.branch.indexOf(entry),

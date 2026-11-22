@@ -69,6 +69,8 @@
 	--color-info: #a1a1aa;
 	/* 正常运转状态色（UI 插件状态点等）：与 severity 同类的 graphics 专用 token */
 	--color-ok: #059669;
+	--color-subagent-ok: #34c759;
+	--color-subagent-err: #ff3b30;
 	/* 开关（Switch）关闭态轨道：独立中性浅灰，不随 border-strong 走 slate 蓝调 */
 	--color-switch-off: #d4d4d8;
 	/* 自定义背景图遮罩（rgb 分量；不透明度由 .app-bg-scrim 的 inline opacity 控制） */
@@ -153,6 +155,8 @@
 	--shadow-dialog: 0 12px 40px rgba(255, 255, 255, 0.18);
 	--scrollbar-thumb: #4b4b53;
 	--scrollbar-thumb-hover: #5d5d66;
+	--color-subagent-ok: #30d158;
+	--color-subagent-err: #ff453a;
 }
 
 /* 预览行上滑切换：新行从下方滑入，旧行向上滑出（时长恒定 0.32s，与 PreviewTicker 的 ANIMATION_MS 同步；不随队列积压变化）。slide-out 必须 forwards：动画结束后保持透明/位移终态，否则旧行在 React 移除前弹回可见造成重叠 */
@@ -2656,5 +2660,96 @@ body > div.markstream-react.ms-tooltip[role="tooltip"]:not(.tooltip-element) {
 	.message-rail-card {
 		transition-duration: 0s;
 		animation: none;
+	}
+	.subagent-cap {
+		transition-duration: 0s;
+	}
+	.subagent-dot {
+		animation: none;
+	}
+}
+
+/* 子代理状态胶囊：running 80×22 跳动三点；queued 静止半透明；终态从右向左收拢为 6px 圆点 */
+.subagent-slot {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-end;
+	width: 80px;
+	height: 22px;
+	flex-shrink: 0;
+}
+.subagent-cap {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 80px;
+	height: 22px;
+	border-radius: 9999px;
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	transition:
+		width 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+		height 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+		background-color 0.22s ease,
+		border-color 0.22s ease;
+}
+.subagent-cap[data-state="done"] {
+	width: 6px;
+	height: 6px;
+	background: var(--color-subagent-ok);
+	border-color: transparent;
+}
+.subagent-cap[data-state="error"] {
+	width: 6px;
+	height: 6px;
+	background: var(--color-subagent-err);
+	border-color: transparent;
+}
+.subagent-cap[data-state="aborted"] {
+	width: 6px;
+	height: 6px;
+	background: var(--color-ink-faint);
+	border-color: transparent;
+}
+.subagent-dots {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	transition: opacity 0.14s ease;
+}
+.subagent-cap[data-state="done"] .subagent-dots,
+.subagent-cap[data-state="error"] .subagent-dots,
+.subagent-cap[data-state="aborted"] .subagent-dots {
+	opacity: 0;
+	width: 0;
+	overflow: hidden;
+}
+.subagent-dot {
+	width: 4px;
+	height: 4px;
+	border-radius: 9999px;
+	background: var(--color-ink-dim);
+	animation: subagent-dot-bounce 1.1s ease-in-out infinite;
+}
+.subagent-cap[data-state="queued"] .subagent-dot {
+	animation: none;
+	opacity: 0.45;
+}
+.subagent-dot:nth-child(2) {
+	animation-delay: 0.16s;
+}
+.subagent-dot:nth-child(3) {
+	animation-delay: 0.32s;
+}
+@keyframes subagent-dot-bounce {
+	0%,
+	60%,
+	100% {
+		transform: translateY(0);
+		opacity: 0.45;
+	}
+	30% {
+		transform: translateY(-3px);
+		opacity: 1;
 	}
 }

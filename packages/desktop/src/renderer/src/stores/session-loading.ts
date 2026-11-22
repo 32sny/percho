@@ -1,4 +1,4 @@
-import type { PermissionMode, SessionMeta } from "@percho/shared";
+import type { PermissionMode, SessionEvent, SessionMeta } from "@percho/shared";
 import { getPi } from "../api";
 import { errText } from "../lib/error-text";
 import {
@@ -14,6 +14,16 @@ import {
 import { pushToast } from "./toasts";
 import { useTranscriptStore } from "./transcript";
 import { useUiPreferencesStore } from "./ui-preferences";
+
+const subagentEventBuffers = new Map<string, SessionEvent[]>();
+
+/** 正在拉取只读子代理基线时暂存实时事件，待 loadHistory 落地后按序重放，避免漏事件或被覆盖。 */
+export function bufferSubagentEventIfObserving(sessionId: string, event: SessionEvent): boolean {
+	const buffer = subagentEventBuffers.get(sessionId);
+	if (!buffer) return false;
+	buffer.push(event);
+	return true;
+}
 
 export interface SessionDataPorts {
 	isOpen(sessionId: string): boolean;
@@ -35,7 +45,10 @@ export function createSessionLoader(ports: SessionDataPorts) {
 	 * 同会话同时在途时复用同一个 Promise（spec D3，见 `ensureOpenSession`）：open 完成时 meta 会先落进
 	 * `sessions`，用户这时再点那一行就走 `switchSession` 的懒加载，两条路会撞车重复拉四件套。
 	 */
-	function loadSessionBundle(sessionId: string, opts?: { skipHistoryIfLive?: boolean }): Promise<void> {
+	function loadSessionBundle(
+		sessionId: string,
+		opts?: { skipHistoryIfLive?: boolean; observeSubagent?: boolean },
+	): Promise<void> {
 		const existing = bundleInFlight.get(sessionId);
 		if (existing) return existing;
 		const openingEpoch = historyOpenEpoch(sessionId);
@@ -60,65 +73,82 @@ export function createSessionLoader(ports: SessionDataPorts) {
 
 	async function loadSessionBundleInner(
 		sessionId: string,
-		opts?: { skipHistoryIfLive?: boolean },
+		opts?: { skipHistoryIfLive?: boolean; observeSubagent?: boolean },
 	): Promise<void> {
+		const observeSubagent = opts?.observeSubagent === true;
 		// skip 判定在入口一次性取值：并行发起 IPC 前先确定是否跳过历史（agent 运行中保流式态，见 openFromHistory 注释）
 		const skipHistory =
+			!observeSubagent &&
 			opts?.skipHistoryIfLive === true &&
 			useTranscriptStore.getState().bySession[sessionId]?.agentActive === true;
 		const transcriptBefore = useTranscriptStore.getState().bySession[sessionId];
 		const openingEpoch = historyOpenEpoch(sessionId);
-		// 控制快照对齐同 id 重开的 runtime；旧注入宿主未提供时显式清空。
-		// SAFETY: current CHANNEL_TABLE always includes this method; older injected hosts may omit it.
-		const controlApi = getPi() as unknown as {
-			getMessageControl?: (req: {
-				sessionId: string;
-			}) => Promise<{ ok: true; value: import("@percho/shared").ControlSnapshot } | { ok: false }>;
-		};
-		const controlPromise = controlApi.getMessageControl
-			? controlApi.getMessageControl({ sessionId }).catch(() => null)
-			: Promise.resolve(null);
-		const [history, followUpQueue, todos, permissionMode, control] = await Promise.all([
-			skipHistory ? Promise.resolve(null) : requestSessionHistoryWindow(sessionId),
-			getPi().getFollowUpMessages({ sessionId }),
-			getPi().getTodos({ sessionId }),
-			getPi().getPermissionMode({ sessionId }),
-			controlPromise,
-		]);
-		// TOCTOU 复核：await 期间会话转为 live（如恰好有 prompt 竞态）时丢弃迟到历史，
-		// 防旧快照覆盖刚建立的流式态（queue/todo/permissionMode 是幂等快照，照常应用）
-		const transcriptNow = useTranscriptStore.getState().bySession[sessionId];
-		const liveNow = transcriptNow?.agentActive === true;
-		// 不能只看 liveNow：IPC 期间恰好跑完的一轮可能已改写 transcript，旧快照仍过期。
-		// 关闭后的迟到 bundle 也绝不能重建该 session 的 UI 条目。
-		if (historyOpenEpoch(sessionId) !== openingEpoch || !ports.isOpen(sessionId)) return;
-		const t = useTranscriptStore.getState();
-		const historyNeedsRetry = !history || liveNow || transcriptBefore !== transcriptNow;
-		if (history && !historyNeedsRetry) {
-			t.loadHistory(sessionId, historyWindowMessages(history));
-			setSessionHistoryWindow(sessionId, history);
-			finishSessionHistory(sessionId);
-		}
-		t.setFollowUpQueue(sessionId, followUpQueue);
-		// 显式替换（含清空）：旧 runtime 快照/事件一律作废，事件侧由 reducer 的 runtime 钉住兜底
-		t.setControlSnapshot(sessionId, control?.ok ? control.value : null);
-		t.loadTodos(sessionId, todos);
-		ports.writePermissionMode(sessionId, permissionMode);
-		if (historyNeedsRetry) {
-			deferSessionHistory(sessionId, () => ports.isOpen(sessionId));
-		}
-		// D7：本机记住过的档位盖过后端默认值（后端 mode 不落盘，重启/卸载重开后恒为 default）。
-		// 这里 await 而不是 fire-and-forget：保证「打开完就是正确档位」，验收才能确定性断言。
-		const remembered = useUiPreferencesStore.getState().sessionPermissionModes[sessionId];
-		if (remembered && remembered !== permissionMode) {
-			try {
-				await getPi().setPermissionMode({ sessionId, mode: remembered });
-				if (historyOpenEpoch(sessionId) === openingEpoch && ports.isOpen(sessionId)) {
-					ports.writePermissionMode(sessionId, remembered);
+		if (observeSubagent) subagentEventBuffers.set(sessionId, []);
+		try {
+			// 控制快照对齐同 id 重开的 runtime；旧注入宿主未提供时显式清空。
+			// SAFETY: current CHANNEL_TABLE always includes this method; older injected hosts may omit it.
+			const controlApi = getPi() as unknown as {
+				getMessageControl?: (req: {
+					sessionId: string;
+				}) => Promise<{ ok: true; value: import("@percho/shared").ControlSnapshot } | { ok: false }>;
+			};
+			const controlPromise = controlApi.getMessageControl
+				? controlApi.getMessageControl({ sessionId }).catch(() => null)
+				: Promise.resolve(null);
+			const [history, followUpQueue, todos, permissionMode, control] = await Promise.all([
+				skipHistory ? Promise.resolve(null) : requestSessionHistoryWindow(sessionId),
+				getPi().getFollowUpMessages({ sessionId }),
+				getPi().getTodos({ sessionId }),
+				getPi().getPermissionMode({ sessionId }),
+				controlPromise,
+			]);
+			// TOCTOU 复核：await 期间会话转为 live（如恰好有 prompt 竞态）时丢弃迟到历史，
+			// 防旧快照覆盖刚建立的流式态（queue/todo/permissionMode 是幂等快照，照常应用）
+			const transcriptNow = useTranscriptStore.getState().bySession[sessionId];
+			const liveNow = transcriptNow?.agentActive === true;
+			// 不能只看 liveNow：IPC 期间恰好跑完的一轮可能已改写 transcript，旧快照仍过期。
+			// 关闭后的迟到 bundle 也绝不能重建该 session 的 UI 条目。
+			if (historyOpenEpoch(sessionId) !== openingEpoch || !ports.isOpen(sessionId)) return;
+			const t = useTranscriptStore.getState();
+			const historyNeedsRetry =
+				!history || (!observeSubagent && (liveNow || transcriptBefore !== transcriptNow));
+			if (history && !historyNeedsRetry) {
+				t.loadHistory(sessionId, historyWindowMessages(history), {
+					agentActive: history.live?.agentActive,
+				});
+				setSessionHistoryWindow(sessionId, history);
+				finishSessionHistory(sessionId);
+				if (observeSubagent) {
+					const buffered = subagentEventBuffers.get(sessionId) ?? [];
+					subagentEventBuffers.delete(sessionId);
+					for (const event of buffered) {
+						t.applyEvent(sessionId, event, { isActiveViewing: true });
+					}
 				}
-			} catch (error) {
-				console.warn("恢复会话权限模式失败", error);
 			}
+			t.setFollowUpQueue(sessionId, followUpQueue);
+			// 显式替换（含清空）：旧 runtime 快照/事件一律作废，事件侧由 reducer 的 runtime 钉住兜底
+			t.setControlSnapshot(sessionId, control?.ok ? control.value : null);
+			t.loadTodos(sessionId, todos);
+			ports.writePermissionMode(sessionId, permissionMode);
+			if (historyNeedsRetry) {
+				deferSessionHistory(sessionId, () => ports.isOpen(sessionId));
+			}
+			// D7：本机记住过的档位盖过后端默认值（后端 mode 不落盘，重启/卸载重开后恒为 default）。
+			// 这里 await 而不是 fire-and-forget：保证「打开完就是正确档位」，验收才能确定性断言。
+			const remembered = useUiPreferencesStore.getState().sessionPermissionModes[sessionId];
+			if (remembered && remembered !== permissionMode) {
+				try {
+					await getPi().setPermissionMode({ sessionId, mode: remembered });
+					if (historyOpenEpoch(sessionId) === openingEpoch && ports.isOpen(sessionId)) {
+						ports.writePermissionMode(sessionId, remembered);
+					}
+				} catch (error) {
+					console.warn("恢复会话权限模式失败", error);
+				}
+			}
+		} finally {
+			if (observeSubagent) subagentEventBuffers.delete(sessionId);
 		}
 	}
 
@@ -175,9 +205,11 @@ export function createSessionLoader(ports: SessionDataPorts) {
 		ports.landMeta(meta);
 		if (!loadBundle) return isCurrent() ? meta : null;
 		try {
-			// 运行中子会话的事件已按其 sessionId 实时转发；保留已有流式态，
-			// 否则会在点击卡片时把 agent_start 建立的进度视图重置为静态历史。
-			await loadSessionBundle(meta.sessionId, { skipHistoryIfLive: true });
+			// 只读子代理会话未查看时不推流，打开时必须拉取实时基线并开启按需推流。
+			await loadSessionBundle(meta.sessionId, {
+				skipHistoryIfLive: true,
+				...(meta.readOnly ? { observeSubagent: true } : {}),
+			});
 		} catch (error) {
 			// 会话已经打开了（后端在内存里、meta 在 tabs）：数据装载失败只能提示，
 			// 不能当成「打开失败」——否则用户点了行却什么都没发生。

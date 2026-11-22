@@ -12,11 +12,12 @@ const pi = vi.hoisted(() => ({
 	setPermissionMode: vi.fn(),
 	markSessionHistoryReady: vi.fn(),
 	getMessageControl: vi.fn(),
+	setViewedSubagent: vi.fn(),
 }));
 vi.mock("../api", () => ({ getPi: () => pi }));
 
 import { clearSessionHistory, isHistoryReady } from "./session-history";
-import { createSessionLoader } from "./session-loading";
+import { bufferSubagentEventIfObserving, createSessionLoader } from "./session-loading";
 import {
 	currentNavigationToken,
 	currentUserIntentToken,
@@ -76,6 +77,7 @@ beforeEach(() => {
 	pi.setPermissionMode.mockResolvedValue(undefined);
 	pi.markSessionHistoryReady.mockResolvedValue(undefined);
 	pi.getMessageControl.mockRejectedValue(new Error("not implemented"));
+	pi.setViewedSubagent.mockResolvedValue(undefined);
 	useTranscriptStore.setState({ bySession: {} });
 	useUiPreferencesStore.setState({ sessionPermissionModes: {} });
 	useToastsStore.setState({ toasts: [] });
@@ -391,5 +393,62 @@ describe("控制快照装载（getMessageControl 显式替换）", () => {
 		pi.getMessageControl.mockRejectedValue(new Error("not implemented"));
 		await f.loader.loadSessionBundle("ctrl-off");
 		expect(useTranscriptStore.getState().bySession["ctrl-off"]?.control).toBeNull();
+	});
+});
+
+describe("只读子代理基线装载与事件缓冲", () => {
+	it("observeSubagent 强制拉取基线、恢复 live.agentActive 并重放窗口期间缓冲事件", async () => {
+		const f = fixture("sub-live");
+		useTranscriptStore.getState().applyEvent("sub-live", { type: "agent_start" } as never);
+		const win = deferred<{
+			messages: Array<{
+				id: string;
+				role: "user";
+				text: string;
+				images: [];
+				timestamp: number;
+			}>;
+			hasOlder: boolean;
+			startIndex: number;
+			generation: string;
+			live: { agentActive: boolean };
+		}>();
+		const piWithWindow = pi as typeof pi & { getSessionHistoryWindow?: ReturnType<typeof vi.fn> };
+		piWithWindow.getSessionHistoryWindow = vi.fn().mockReturnValueOnce(win.promise);
+		try {
+			const loading = f.loader.loadSessionBundle("sub-live", {
+				skipHistoryIfLive: true,
+				observeSubagent: true,
+			});
+			expect(
+				bufferSubagentEventIfObserving("sub-live", {
+					type: "message_start",
+					message: { role: "assistant", content: [], timestamp: 2 },
+				} as never),
+			).toBe(true);
+			expect(
+				bufferSubagentEventIfObserving("sub-live", {
+					type: "message_update",
+					assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello" },
+				} as never),
+			).toBe(true);
+
+			win.resolve({
+				messages: [{ id: "u1", role: "user", text: "inspect", images: [], timestamp: 1 }],
+				hasOlder: false,
+				startIndex: 0,
+				generation: "g1",
+				live: { agentActive: true },
+			});
+			await loading;
+
+			const entry = useTranscriptStore.getState().bySession["sub-live"];
+			expect(entry?.messages).toHaveLength(1);
+			expect(entry?.agentActive).toBe(true);
+			expect(entry?.streaming?.text).toBe("hello");
+			expect(bufferSubagentEventIfObserving("sub-live", { type: "agent_start" } as never)).toBe(false);
+		} finally {
+			delete piWithWindow.getSessionHistoryWindow;
+		}
 	});
 });

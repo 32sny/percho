@@ -27,6 +27,8 @@ export interface SessionGcEntry {
 	compacting: boolean;
 	/** 排队跟发（**只活在后端会话内存里、不落盘**，卸载即丢） */
 	followUpQueue: string[];
+	/** 存在运行中/排队中的内置后台子代理（卸载会丢失自动汇报与实时查看） */
+	hasRunningBackgroundSubagents?: boolean;
 	/**
 	 * transcript 里已知的消息条数。与 `item.messageCount`（磁盘元数据，只在打开时读一次）**取较大值**判断
 	 * 「有没有会话文件」——本次进程内新建的会话 meta 恒为 0（store 不随流式事件更新），只看 meta 会把它
@@ -103,7 +105,8 @@ export function isProtected(item: SessionGcOpen, entry: SessionGcEntry | undefin
 		entry.unseenCompletion ||
 		entry.pendingPermissions.length > 0 ||
 		entry.pendingDialogs.length > 0 ||
-		entry.followUpQueue.length > 0
+		entry.followUpQueue.length > 0 ||
+		entry.hasRunningBackgroundSubagents === true
 	);
 }
 

@@ -119,4 +119,24 @@ describe("session hover live projection", () => {
 			{ sessionFile: "/safe/child.jsonl", source: "streaming", status: "running" },
 		]);
 	});
+
+	it("normalizes queued and aborted subagent statuses for hover live runs", () => {
+		const result = collectSessionHoverLiveRuns({
+			messages: [
+				{
+					id: "m1",
+					kind: "subagent",
+					runs: [{ key: "k1", agent: "Explore", status: "aborted", sessionFile: "/safe/a.jsonl" }],
+					timestamp: 1,
+				},
+			],
+			streaming: {
+				subagentRuns: [{ key: "k2", agent: "Explore", status: "queued", sessionFile: "/safe/b.jsonl" }],
+			},
+		});
+		expect(result).toMatchObject([
+			{ sessionFile: "/safe/a.jsonl", status: "error", source: "committed" },
+			{ sessionFile: "/safe/b.jsonl", status: "running", source: "streaming" },
+		]);
+	});
 });
