@@ -48,3 +48,30 @@ export function codemodeSessionOptions(settings: SettingsManager, agentDir: stri
 	});
 	return { excludeTools: enabled ? undefined : ["codemode"] };
 }
+
+/**
+ * 重开会话后按当前开关校正 codemode 激活。
+ *
+ * 两个 SDK 事实让 `defaultTools` 不够用：
+ * 1. 有转录记录的会话以**转录里的工具集**为准，`defaultTools` 只影响内置工具；
+ * 2. codemode 以 `defaultActive: false` 注册，不随注册自动激活。
+ * 结果：旧会话重开后完全拿不到 codemode，而独占模式靠 codemode 的 `prepareLoadout` 隐藏其他
+ * 工具声明，也跟着失效。开关关闭时不必处理：`codemodeSessionOptions` 已用 `excludeTools` 阻止注册。
+ *
+ * @returns 是否真的改了激活集合（供测试断言）
+ */
+export function ensureCodemodeActive(
+	session: {
+		getActiveToolNames(): string[];
+		getAllTools(): { name: string }[];
+		setActiveToolsByName(names: string[]): void;
+	},
+	agentDir: string,
+): boolean {
+	if (!readCodemodeEnabled(agentDir)) return false;
+	const active = session.getActiveToolNames();
+	if (active.includes("codemode")) return false;
+	if (!session.getAllTools().some((tool) => tool.name === "codemode")) return false;
+	session.setActiveToolsByName([...active, "codemode"]);
+	return true;
+}

@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpRuntimeSnapshot } from "@earendil-works/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const agentDir = vi.hoisted(() => ({ value: "" }));
 const observers = vi.hoisted(() => ({ callbacks: [] as Array<(snapshot: McpRuntimeSnapshot) => void> }));
@@ -78,17 +78,21 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 			const instance = connected.runtime?.instances.find((item) => item.sessionId === session.sessionId);
 			expect(instance?.available).toBe(true);
 			expect(instance?.instanceId).toBeTruthy();
-			const registry = (backend as unknown as {
-				registry: {
-					get(id: string): {
-						session: {
-							prompt: (...args: unknown[]) => unknown;
-							messages: unknown[];
-							isStreaming: boolean;
-						};
-					} | undefined;
-				};
-			}).registry;
+			const registry = (
+				backend as unknown as {
+					registry: {
+						get(id: string):
+							| {
+									session: {
+										prompt: (...args: unknown[]) => unknown;
+										messages: unknown[];
+										isStreaming: boolean;
+									};
+							  }
+							| undefined;
+					};
+				}
+			).registry;
 			const activeSession = registry.get(session.sessionId)?.session;
 			expect(activeSession).toBeDefined();
 			if (!activeSession || !instance?.instanceId) throw new Error("MCP session fixture was not registered");
@@ -98,9 +102,12 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 				backend.reconnectMcpServer({ instanceId: "stale-instance", name: "demo" }),
 			).rejects.toThrow("MCP 实例已失效");
 			await backend.reconnectMcpServer({ instanceId: instance.instanceId, name: "demo" });
-			await vi.waitFor(() => {
-				expect(readFileSync(connections, "utf8").trim().split(/\r?\n/)).toHaveLength(2);
-			}, { timeout: 10000 });
+			await vi.waitFor(
+				() => {
+					expect(readFileSync(connections, "utf8").trim().split(/\r?\n/)).toHaveLength(2);
+				},
+				{ timeout: 10000 },
+			);
 			expect(prompt).toHaveBeenCalledWith("/mcp reconnect demo");
 			expect(activeSession.messages).toHaveLength(messageCount);
 			expect(activeSession.isStreaming ?? false).toBe(false);

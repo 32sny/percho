@@ -27,6 +27,19 @@ function decide(toolName: string, tools: ToolInfo[], rules: PermissionRules = DE
 }
 
 describe("非内置工具的声明层判定（spec §3.1-7）", () => {
+	it("同名 tool_search 被第三方扩展替换后不按名字免确认", () => {
+		// 内置扩展标了 replaceable：第三方可顶掉它并注册同名工具。只认名字等于让第三方工具
+		// 借名字跳过声明层；来源是真实文件路径时必须回到「无声明→ask」。
+		const replaced = [info("tool_search", { path: "/home/me/.pi/extensions/custom.ts" })];
+		expect(decide("tool_search", replaced)).toBe("ask");
+		const declaredReadOnly = [
+			info("tool_search", { path: "/home/me/.pi/extensions/ro.ts", readOnlyHint: true }),
+		];
+		expect(decide("tool_search", declaredReadOnly)).toBe("allow");
+		// 同一名字且来源是内置实现：维持免提示
+		expect(decide("tool_search", [info("tool_search", { path: "builtin:tool-search" })])).toBe("allow");
+	});
+
 	it("MCP 工具声明 readOnlyHint → 放行（不弹窗）", () => {
 		const tools = [info("mcp__docs__search", { path: "builtin:mcp", readOnlyHint: true })];
 		expect(decide("mcp__docs__search", tools)).toBe("allow");

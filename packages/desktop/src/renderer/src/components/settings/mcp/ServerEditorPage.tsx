@@ -117,6 +117,8 @@ export function ServerEditorPage({
 	const [argsEdited, setArgsEdited] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
+	// 「未动过」不等于「值与当前展示相同」：非法旧值会被展示成回退档，靠值比较永远看不出用户改没改。
+	const [exposureEdited, setExposureEdited] = useState(false);
 
 	const absolutePathHint =
 		form.transport === "command" && form.command.length > 0 && !form.command.startsWith("/");
@@ -154,7 +156,7 @@ export function ServerEditorPage({
 				url: !server?.isOverride && form.transport === "url" ? form.url.trim() : undefined,
 				description: server?.isOverride ? undefined : form.description,
 				// 未改动暴露档位 = 不写字段（后端编辑时保持原值，避免把非法原值静默洗成合法档）
-				exposure: form.exposure === server?.exposure ? undefined : form.exposure,
+				exposure: exposureEdited ? form.exposure : undefined,
 			};
 			await upsert(payload);
 			onBack();
@@ -328,7 +330,10 @@ export function ServerEditorPage({
 							value: exposure,
 							label: t(`settings.mcp.exposureShort.${exposure}`),
 						}))}
-						onChange={(exposure) => setForm({ ...form, exposure })}
+						onChange={(exposure) => {
+							setExposureEdited(true);
+							setForm({ ...form, exposure });
+						}}
 					/>
 					{form.exposure ? (
 						<p className={hint}>{t(`settings.mcp.exposureExplain.${form.exposure}`)}</p>

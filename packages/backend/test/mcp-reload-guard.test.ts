@@ -57,7 +57,11 @@ function addSessions(backend: InstanceType<typeof PiBackend>, entries: ReturnTyp
 
 describe("MCP 配置写入不扰动运行会话", () => {
 	it("增删改与导入只写盘，不 reload/abort；成功后标记重启生效", async () => {
-		const sessions = [stubSession("idle"), stubSession("streaming"), stubSession("other", join(root, "other"))];
+		const sessions = [
+			stubSession("idle"),
+			stubSession("streaming"),
+			stubSession("other", join(root, "other")),
+		];
 		sessions[1].session.isStreaming = true;
 		mkdirSync(sessions[2].cwd, { recursive: true });
 		const backend = new PiBackend({ projectTrust: false, permissionGates: false });

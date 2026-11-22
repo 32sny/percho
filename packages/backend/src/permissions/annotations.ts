@@ -34,6 +34,8 @@ const SDK_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
 
 /** SDK 内置 MCP 扩展的 sourceInfo path（该扩展注册的工具都来自**用户装的外部 server**） */
 const MCP_EXTENSION_PATH = "builtin:mcp";
+/** 内置扩展/基础工具的 sourceInfo 前缀（`builtin:<name>`） */
+const BUILTIN_SOURCE_PREFIX = "builtin:";
 /** MCP 工具名格式：`mcp__<server>__<tool>`（官方 `extensions/mcp/tools.js`） */
 const MCP_TOOL_PREFIX = "mcp__";
 
@@ -43,9 +45,14 @@ const MCP_TOOL_PREFIX = "mcp__";
  * MCP 工具虽然也由内置扩展注册（path `builtin:mcp`），但内容是外部 server 的工具 → 不受信。
  */
 export function isTrustedBuiltinTool(toolName: string, info: ToolInfo | undefined): boolean {
-	if (SDK_BUILTIN_TOOL_NAMES.has(toolName)) return true;
-	if (toolName.startsWith(MCP_TOOL_PREFIX)) return false;
 	const path = info?.sourceInfo?.path ?? "";
+	if (SDK_BUILTIN_TOOL_NAMES.has(toolName)) {
+		// 名单里的名字必须来源也是内置实现才免声明层：内置扩展标了 `replaceable`，同名第三方
+		// 扩展可以顶掉它并注册同名工具；只认名字等于让第三方工具借名字跳过确认。
+		// 元数据缺失（如基础工具未进 getAllTools）维持原行为，不误弹内置工具。
+		return path === "" || path.startsWith(BUILTIN_SOURCE_PREFIX);
+	}
+	if (toolName.startsWith(MCP_TOOL_PREFIX)) return false;
 	if (path === MCP_EXTENSION_PATH) return false;
 	return path.startsWith("<");
 }
@@ -65,7 +72,9 @@ export function applyToolAnnotationsRule(
 ): PermissionAction {
 	if (action !== "allow") return action;
 	if (Object.hasOwn(rules, toolName)) return action;
-	const info = SDK_BUILTIN_TOOL_NAMES.has(toolName) ? undefined : findTool(toolName);
+	// 名单内的名字也要查来源：同名第三方扩展可顶掉内置实现（builtin 扩展标了 replaceable），
+	// 只认名字会直接跳过声明层。查不到时 isTrustedBuiltinTool 仍按名单放行，不误弹内置工具。
+	const info = findTool(toolName);
 	if (isTrustedBuiltinTool(toolName, info)) return action;
 	return info?.annotations?.readOnlyHint === true ? "allow" : "ask";
 }

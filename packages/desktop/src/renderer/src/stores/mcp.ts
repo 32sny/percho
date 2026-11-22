@@ -186,12 +186,19 @@ export function createMcpStore() {
 			load: async (cwd, sessionId) => {
 				const seq = ++loadSeq;
 				const operation = operationSeq;
-				if (contextSeq === 0 || contextCwd !== cwd || activeSession !== sessionId) {
+				const cwdChanged = contextSeq === 0 || contextCwd !== cwd;
+				if (cwdChanged || activeSession !== sessionId) {
 					contextSeq++;
 					reconcileFailedOperation = undefined;
 					contextCwd = cwd;
 					activeSession = sessionId;
-					set({ config: null, notice: undefined, selectedInstanceId: undefined });
+					// 只换会话（同一项目）时保留旧配置：instanceId 重选即可，而清空 config 会让设置页
+					// 短暂回到加载态，把正在编辑/粘贴的未保存表单连带卸载丢掉。
+					set(
+						cwdChanged
+							? { config: null, notice: undefined, selectedInstanceId: undefined }
+							: { selectedInstanceId: undefined },
+					);
 				}
 				const startedAt = eventSeq;
 				set({ loading: true });

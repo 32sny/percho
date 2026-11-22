@@ -165,6 +165,7 @@ import { makeUiContext } from "./session/ui-context";
 import { syncAgentFileField } from "./settings/agent-file-sync";
 import {
 	codemodeSessionOptions,
+	ensureCodemodeActive,
 	readCodemodeConfig,
 	writeCodemodeEnabled,
 	writeCodemodeOnly,
@@ -1010,6 +1011,9 @@ export class PiBackend {
 				readOnly: readOnly || undefined,
 			});
 			mcpOwner?.bind(session.sessionId);
+			// 旧会话重开：转录记录的工具集优先于 defaultTools，codemode 又以 defaultActive:false 注册，
+			// 不补这一下，默认开启与独占模式在历史会话里都形同关闭。
+			if (!readOnly) ensureCodemodeActive(session, getAgentDir());
 			// 这一代开始了：领取新代次（早报过的会话也在这里拿到最终代次；dispose 后重开会是新的一代）
 			this.channelSubs.noteSessionOpened(session.sessionId);
 		} catch (error) {
@@ -2250,10 +2254,7 @@ export class PiBackend {
 	/** 批量导入 JSON 配置，只在重启后生效。 */
 	async importMcpServers(input: { json: string; cwd?: string }): Promise<McpMutationResult> {
 		const cwd = input.cwd;
-		await importMcpServers(
-			{ json: input.json, cwd },
-			{ projectTrusted: this.isProjectTrusted(cwd) },
-		);
+		await importMcpServers({ json: input.json, cwd }, { projectTrusted: this.isProjectTrusted(cwd) });
 		this.mcpRestartRequired = true;
 		return { config: await this.getMcpConfig({ cwd }) };
 	}
@@ -2296,7 +2297,10 @@ export class PiBackend {
 		if (!instance.available || !server || !isMcpReconnectable(server.state))
 			throw new Error("MCP 服务器当前无法重连，请等待连接完成或检查服务器状态");
 		if (!entry.session.extensionRunner.getCommand("mcp")) throw new Error("MCP 重连命令不可用");
-		if (!entry.session.isStreaming && !entry.session.isCompacting) {
+		// 忙碌时 `prompt()` 会静默把维护命令排进用户消息队列（还会混进用户可见历史），
+		// 而这里又先返回成功 —— 必须要求真正空闲，不能把排队当完成。
+		if (!entry.session.isIdle) throw new Error("会话正在运行，请等当前回合结束后再重连 MCP 服务器");
+		{
 			const lease = entry.session.tryAcquireIdleLease();
 			if (!lease) throw new Error("会话正在切换，请稍后重试 MCP 重连");
 			lease.release();
@@ -2327,7 +2331,9 @@ export class PiBackend {
 			throw new Error("MCP 服务器当前不需要登录或状态不可用");
 		if (!this.options.openExternal) throw new Error("此环境无法打开授权页面，请在服务器侧使用维护入口登录");
 		if (!entry.session.extensionRunner.getCommand("mcp")) throw new Error("MCP 登录命令不可用");
-		if (!entry.session.isStreaming) {
+		// 同重连：忙碌时登录命令会被排进用户队列，这里却已返回成功。
+		if (!entry.session.isIdle) throw new Error("会话正在运行，请等当前回合结束后再登录 MCP 服务器");
+		{
 			const lease = entry.session.tryAcquireIdleLease();
 			if (!lease) throw new Error("会话正在切换，请稍后重试 MCP 登录");
 			lease.release();

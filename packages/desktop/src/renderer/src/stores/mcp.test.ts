@@ -138,6 +138,29 @@ describe("MCP 运行态快照", () => {
 		expect(api.mcpReconnect).toHaveBeenCalledWith({ instanceId: "1", name: "my-server" });
 	});
 
+	it("同项目换会话只重选实例，不清空已加载配置（避免卸载编辑中的表单）", async () => {
+		const store = createMcpStore();
+		api.mcpConfigList.mockResolvedValueOnce(config(inventory(1, [instance("1")])));
+		await store.getState().load("/a", "session-1");
+		expect(store.getState().config).not.toBeNull();
+
+		const pending = deferred<McpConfigListResult>();
+		api.mcpConfigList.mockReturnValueOnce(pending.promise);
+		const loading = store.getState().load("/a", "session-9");
+		// 同一项目的配置与表单可以继续展示；只把实例选择交回给新会话
+		expect(store.getState().config).not.toBeNull();
+		expect(store.getState().selectedInstanceId).toBeUndefined();
+		expect(store.getState().loading).toBe(true);
+		pending.resolve(config(inventory(1, [instance("1")])));
+		await loading;
+		expect(store.getState().config).not.toBeNull();
+
+		// 换项目才清空：旧项目的内容不能出现在新项目下
+		api.mcpConfigList.mockReturnValueOnce(deferred<McpConfigListResult>().promise);
+		void store.getState().load("/b", "session-1");
+		expect(store.getState().config).toBeNull();
+	});
+
 	it("旧项目请求不能覆盖新上下文；已替换的旧 epoch 不能复活", async () => {
 		const store = createMcpStore();
 		const old = deferred<McpConfigListResult>();

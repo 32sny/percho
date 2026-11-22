@@ -42,6 +42,22 @@ function record(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * 同一 name 换传输时必须清掉另一种传输的残留字段：SDK 解析时 `url` 优先于 `command`
+ * （pi-mcp `config.js` 先试 url），而显式 `type: "stdio"` 又会挡住切到 url。
+ * 不清就会「保存成功、面板显示 stdio、重启后仍连旧端点」。
+ */
+function useStdioTransport(entry: Record<string, unknown>): void {
+	delete entry.url;
+	if (typeof entry.type === "string" && entry.type !== "stdio") delete entry.type;
+}
+
+function useHttpTransport(entry: Record<string, unknown>): void {
+	delete entry.command;
+	delete entry.args;
+	if (entry.type === "stdio") delete entry.type;
+}
+
 const EXPOSURES: ReadonlySet<string> = new Set(MCP_EXPOSURES);
 
 interface McpFile {
@@ -260,16 +276,17 @@ export async function upsertMcpServer(
 			if (draft.mcpServers === undefined && draft.autoEnableCodemode === undefined)
 				draft.autoEnableCodemode = false;
 			const servers = (draft.mcpServers ?? {}) as Record<string, unknown>;
-			const existing = Object.hasOwn(servers, name) && record(servers[name]) ? servers[name] : {};
+			const exists = Object.hasOwn(servers, name);
+			const existing = exists && record(servers[name]) ? servers[name] : {};
 			const entry: Record<string, unknown> = { ...existing };
 			if (hasCommand) {
+				// 新建或换传输：先清另一种传输的残留（否则 url 会赢过 command）
+				useStdioTransport(entry);
 				entry.command = (input.command as string).trim();
 				if (input.args) entry.args = [...input.args];
-				delete entry.url;
 			} else if (hasUrl) {
+				useHttpTransport(entry);
 				entry.url = (input.url as string).trim();
-				delete entry.command;
-				delete entry.args;
 			} else if (existing.command === undefined && existing.url === undefined && input.scope !== "project") {
 				throw new Error("新建 server 需要填 command（stdio）或 url（远程）");
 			}
@@ -279,9 +296,11 @@ export async function upsertMcpServer(
 				else delete entry.description;
 			}
 			if (input.enabled !== undefined) entry.enabled = input.enabled;
-			// exposure：显式传就用它；新建（无现存 exposure）时写 deferred（spec §4.8-1）；编辑时不传则保持
+			// exposure：显式传就用它；**新建**时写 deferred（spec §4.8-1）；编辑时不传则保持原值
+			// （含「原本没写 exposure、由 SDK 默认 codemode」和非法旧值，都不静默改写）。
 			if (input.exposure !== undefined) entry.exposure = input.exposure;
 			else if (
+				!exists &&
 				entry.exposure === undefined &&
 				!(
 					input.scope === "project" &&
@@ -364,6 +383,9 @@ export async function importMcpServers(
 				if (!record(raw)) throw new Error(`server「${name}」的配置必须是对象`);
 				const existing = Object.hasOwn(servers, name) && record(servers[name]) ? servers[name] : {};
 				const entry: Record<string, unknown> = { ...existing, ...raw };
+				// 同名换传输：新条目声明的传输赢，另一种必须清掉（否则旧 url 会继续生效）
+				if (typeof raw.command === "string") useStdioTransport(entry);
+				else if (typeof raw.url === "string") useHttpTransport(entry);
 				Object.defineProperty(servers, name, {
 					value: entry,
 					enumerable: true,

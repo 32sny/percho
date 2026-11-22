@@ -104,6 +104,39 @@ describe("mcp.json 读写（spec §4.8）", () => {
 		expect(modern?.transport).toEqual({ kind: "url", url: "https://a.example/mcp" });
 	});
 
+	it("只改说明不会给未写 exposure 的既有条目补 deferred（否则默认 codemode 被静默改掉）", async () => {
+		writeFileSync(
+			join(agentDir.value, "mcp.json"),
+			JSON.stringify({ mcpServers: { bare: { command: "node" } } }),
+		);
+
+		await upsertMcpServer(
+			{ scope: "user", name: "bare", description: "只改这句" },
+			{ projectTrusted: false },
+		);
+
+		const entry = (readGlobal().mcpServers as Record<string, Record<string, unknown>>).bare;
+		expect(entry.description).toBe("只改这句");
+		expect(entry.exposure).toBeUndefined();
+	});
+
+	it('显式 type: "stdio" 的条目切到 url 时清掉 type（否则合法切换被拒）', async () => {
+		writeFileSync(
+			join(agentDir.value, "mcp.json"),
+			JSON.stringify({ mcpServers: { legacy: { type: "stdio", command: "node" } } }),
+		);
+
+		await upsertMcpServer(
+			{ scope: "user", name: "legacy", url: "https://a.example/mcp" },
+			{ projectTrusted: false },
+		);
+
+		const entry = (readGlobal().mcpServers as Record<string, Record<string, unknown>>).legacy;
+		expect(entry).toMatchObject({ url: "https://a.example/mcp" });
+		expect(entry.command).toBeUndefined();
+		expect(entry.type).toBeUndefined();
+	});
+
 	it("配置读取不推断运行工具；工具库存只由运行态快照投影", async () => {
 		writeFileSync(
 			join(agentDir.value, "mcp.json"),

@@ -24,6 +24,19 @@ type ExtensionApi = Parameters<ReturnType<typeof createMcpExtension>>[0];
 type Handler = (...args: unknown[]) => unknown;
 type Command = { handler: (args: string, ctx: unknown) => Promise<void> };
 
+/** 非空取最后一个快照：失败信息能定位，也不用非空断言。 */
+function lastOf<T>(items: T[]): T {
+	const value = items.at(-1);
+	if (value === undefined) throw new Error("expected a non-empty observation list");
+	return value;
+}
+
+/** 读取夹具捕获的连接对象。 */
+function need<T>(value: T | undefined, what: string): T {
+	if (value === undefined) throw new Error(`${what} was not captured by the fixture`);
+	return value;
+}
+
 describe("MCP SDK status observer", () => {
 	it("reports real registered tools, withdrawals, disconnection and reconnect", async () => {
 		const events = new Map<string, Handler>();
@@ -100,7 +113,7 @@ describe("MCP SDK status observer", () => {
 		const ctx = { cwd: process.cwd(), modelRegistry: {}, ui: { notify() {} } };
 		await events.get("session_start")?.({}, ctx);
 		await waitFor(() => snapshots.at(-1)?.servers.filter((s) => s.state === "connected").length === 4);
-		const snapshot = snapshots.at(-1)!;
+		const snapshot = lastOf(snapshots);
 		expect(JSON.stringify(snapshots)).not.toContain("private-test-token");
 		for (const server of snapshot.servers) {
 			expect(server.tools).toHaveLength(server.name === "empty" ? 0 : 14);
@@ -108,36 +121,37 @@ describe("MCP SDK status observer", () => {
 		}
 		expect(snapshot.servers[0].tools[0].readOnly).toBe(true);
 		tools = [];
-		await peer!.send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
-		await waitFor(() => snapshots.at(-1)?.servers[0].tools.length === 0);
-		expect(snapshots.at(-1)!.servers[0].state).toBe("connected");
-		let releaseClose!: () => void;
-		let closeStarted!: () => void;
+		await need(peer, "peer").send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+		await waitFor(() => lastOf(snapshots).servers[0].tools.length === 0);
+		expect(lastOf(snapshots).servers[0].state).toBe("connected");
+		let releaseClose = () => {};
+		let closeStarted = () => {};
 		const started = new Promise<void>((resolve) => {
 			closeStarted = resolve;
 		});
 		const barrier = new Promise<void>((resolve) => {
 			releaseClose = resolve;
 		});
-		const close = client!.close.bind(client);
-		client!.close = async () => {
+		const aliveClient = need(client, "client");
+		const close = aliveClient.close.bind(aliveClient);
+		aliveClient.close = async () => {
 			closeStarted();
 			await barrier;
 			await close();
 		};
-		const reconnecting = commands.get("mcp")!.handler("reconnect my-server", ctx);
+		const reconnecting = need(commands.get("mcp"), "mcp command").handler("reconnect my-server", ctx);
 		await started;
-		expect(snapshots.at(-1)?.servers[0].state).toBe("connecting");
+		expect(lastOf(snapshots).servers[0].state).toBe("connecting");
 		releaseClose();
 		await reconnecting;
-		expect(snapshots.at(-1)?.servers[0].state).toBe("connected");
-		await peer!.close();
-		await waitFor(() => snapshots.at(-1)?.servers[0].state === "disconnected");
-		await commands.get("mcp")!.handler("reconnect my-server", ctx);
-		expect(snapshots.at(-1)!.servers[0]).toMatchObject({ state: "connected", tools: [] });
-		expect(snapshots.at(-1)!.servers[0].error).toBeUndefined();
+		expect(lastOf(snapshots).servers[0].state).toBe("connected");
+		await need(peer, "peer").close();
+		await waitFor(() => lastOf(snapshots).servers[0].state === "disconnected");
+		await need(commands.get("mcp"), "mcp command").handler("reconnect my-server", ctx);
+		expect(lastOf(snapshots).servers[0]).toMatchObject({ state: "connected", tools: [] });
+		expect(lastOf(snapshots).servers[0].error).toBeUndefined();
 		await events.get("session_shutdown")?.();
-		expect(snapshots.at(-1)!.phase).toBe("closed");
+		expect(lastOf(snapshots).phase).toBe("closed");
 	});
 	it("reports a thrown configuration load as a structured running failure", async () => {
 		const events = new Map<string, Handler>();

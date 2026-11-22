@@ -64,15 +64,59 @@ describe("MCP 批量导入", () => {
 		});
 	});
 
+	it("同名换传输时不留下旧传输字段（否则 url 继续赢过 command）", async () => {
+		writeFileSync(
+			path,
+			JSON.stringify({
+				mcpServers: { demo: { url: "https://old.example.invalid/mcp", type: "streamable-http" } },
+			}),
+		);
+
+		await importMcpServers(
+			{
+				json: JSON.stringify({ mcpServers: { demo: { command: "node", args: ["server.mjs"] } } }),
+				cwd,
+			},
+			{ projectTrusted: true },
+		);
+
+		const entry = (readGlobal().mcpServers as Record<string, Record<string, unknown>>).demo;
+		expect(entry.command).toBe("node");
+		expect(entry.url).toBeUndefined();
+		expect(entry.type).toBeUndefined();
+		// 面板与真实连接必须是同一种传输
+		const listed = await listMcpServers({ projectTrusted: false });
+		expect(listed.global[0]?.transport).toMatchObject({ kind: "stdio", command: "node" });
+	});
+
+	it("反向：command 条目导入同名 url 时清掉 command/args 与显式 stdio 类型", async () => {
+		writeFileSync(
+			path,
+			JSON.stringify({ mcpServers: { demo: { type: "stdio", command: "node", args: ["x"] } } }),
+		);
+
+		await importMcpServers(
+			{ json: JSON.stringify({ mcpServers: { demo: { url: "https://new.example/mcp" } } }), cwd },
+			{ projectTrusted: true },
+		);
+
+		const entry = (readGlobal().mcpServers as Record<string, Record<string, unknown>>).demo;
+		expect(entry.url).toBe("https://new.example/mcp");
+		expect(entry.command).toBeUndefined();
+		expect(entry.args).toBeUndefined();
+		expect(entry.type).toBeUndefined();
+	});
+
 	it("允许合法的特殊属性名并保持 own property", async () => {
 		const mcpServers = JSON.parse('{"__proto__":{"command":"node"},"constructor":{"command":"node"}}');
 		await importMcpServers({ json: JSON.stringify({ mcpServers }) }, { projectTrusted: false });
 		const entries = readGlobal().mcpServers as Record<string, unknown>;
 		expect(Object.hasOwn(entries, "__proto__")).toBe(true);
 		expect(Object.hasOwn(entries, "constructor")).toBe(true);
-		expect((await listMcpServers({ projectTrusted: false })).global.map((server) => server.name)).toEqual(
-			["__proto__", "constructor"],
-		);
+		expect((await listMcpServers({ projectTrusted: false })).global.map((server) => server.name)).toEqual([
+			"__proto__",
+			"constructor",
+		]);
 	});
 
 	it("导入输入和空批次被拒绝", async () => {

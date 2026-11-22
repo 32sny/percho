@@ -10,6 +10,7 @@ import {
 import { afterEach, expect, it } from "vitest";
 import {
 	codemodeSessionOptions,
+	ensureCodemodeActive,
 	readCodemodeConfig,
 	readCodemodeEnabled,
 	writeCodemodeEnabled,
@@ -69,6 +70,43 @@ it.each([undefined, ["read", "tool_search"], ["+grep", "-write"]])(
 		expect(settings.getDefaultTools()).toEqual([...before, "codemode"]);
 	},
 );
+
+it.each([true, false])("重开旧会话时按当前开关校正 codemode 激活：enabled=%s", async (enabled) => {
+	const dir = isolatedDir();
+	await writeCodemodeEnabled(dir, enabled);
+	// 转录里记录的工具集只含普通工具：codemode 以 defaultActive:false 注册，不会被自动补上。
+	const session = {
+		active: ["read", "bash", "grep"],
+		tools: [{ name: "read" }, { name: "bash" }, { name: "grep" }, { name: "codemode" }],
+		getActiveToolNames() {
+			return [...this.active];
+		},
+		getAllTools() {
+			return this.tools;
+		},
+		setActiveToolsByName(names: string[]) {
+			this.active = [...names];
+		},
+	};
+
+	expect(ensureCodemodeActive(session, dir)).toBe(enabled);
+	expect(session.active.includes("codemode")).toBe(enabled);
+	// 幂等：第二次不再改
+	expect(ensureCodemodeActive(session, dir)).toBe(false);
+});
+
+it("codemode 未注册（关闭时 excludeTools）不硬塞名字", async () => {
+	const dir = isolatedDir();
+	await writeCodemodeEnabled(dir, true);
+	const session = {
+		getActiveToolNames: () => ["read"],
+		getAllTools: () => [{ name: "read" }],
+		setActiveToolsByName: () => {
+			throw new Error("不应被调用");
+		},
+	};
+	expect(ensureCodemodeActive(session, dir)).toBe(false);
+});
 
 it.each([true, false])("真实 SDK 的激活与排除行为：enabled=%s", async (enabled) => {
 	const dir = isolatedDir();

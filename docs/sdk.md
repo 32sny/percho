@@ -47,6 +47,9 @@ Percho 继续使用 SDK 1.5.1 的 `createMcpExtension`、`createCodemodeExtensio
 - MCP exposure 只接受 SDK 定义的 `deferred`、`codemode`、`direct`、`hidden`。非法旧值在面板保留并诊断，不静默保存为其他模式。
 - Code Mode 默认启用；其权限门默认 `allow`，因为它是代码执行容器，但执行脚本内每个实际工具仍各自通过原有权限规则和项目边界。`tool_search` 默认放行只允许搜索/激活工具声明，不等价于授权调用 MCP 或其他工具。用户可独立关闭 Code Mode 或启用独占模式；这两项配置不覆盖用户已有的默认工具选择。
 - SDK Patch 除原有 Percho 自研修改外，额外导出 MCP 状态快照与配置校验入口；`patches/@earendil-works+pi-coding-agent+1.5.1.patch` 是源码真源，node_modules 仅是 patch-package 生成结果。
+- **重开旧会话要补激活 `codemode`**：有转录记录的会话以转录里的工具集为准（`defaultTools` 只对内置工具生效），而 `codemode` 以 `defaultActive:false` 注册，所以旧会话完全拿不到它，独占模式（靠 `prepareLoadout` 隐藏其他声明）也跟着失效。后端在装配后调用 `ensureCodemodeActive()` 校正，不靠用户重选工具。
+- **`/mcp reconnect` 与 `/mcp login` 只在空闲会话执行**：忙碌时 `prompt()` 会把维护命令排进用户消息队列（污染可见历史）而调用方已报成功；后端先要求 `isIdle`，再取空闲租约确认没有并发切换。
+- **同名工具的可替换性**：内置扩展标 `replaceable`，第三方可顶掉 `tool_search` 等并注册同名工具。权限声明层必须同时核对名字与 `sourceInfo.path`（`builtin:` 前缀），只认名字等于让第三方工具跳过确认。
 ## SDK 升级清单
 
 > 💡 **【核心结论 / 决策要点】** 本节是升级要点速查；完整的阶段门、分片测试、命令模板与切换判定见 [SDK 升级迁移与验收手册](SDK-UPGRADE-PLAYBOOK.md)（沉淀自 1.0.4 → 1.4.0 → 1.5.1 实践）。
