@@ -381,6 +381,8 @@ export const SETTINGS_CHANNELS = {
 	setCodemodeOnly: ch("codemode:setOnly")<{ only: boolean }, void>(),
 	/** 项目信任请求应答（选项下标） */
 	respondTrust: ch("trust:respond")<{ requestId: string; answer: TrustAnswer }, void>(),
+	/** 尚未应答的信任请求（渲染层重载/新窗口后自恢复，避免门控 inflight 永久挂起） */
+	getPendingTrustRequests: ch("trust:pending")<void, TrustRequest[]>(),
 } as const;
 
 /** 应用域：窗口级功能（对话框/背景/更新/tabs/ui-state/git/外链等，多为非透传 handler） */

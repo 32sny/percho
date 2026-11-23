@@ -185,6 +185,18 @@ describe("TrustGate", () => {
 		await expect(promise).resolves.toBeUndefined();
 	});
 
+	it("重载后可拉取未应答请求，应答后快照清空", async () => {
+		const { gate, requests, cwd } = makeGate();
+		const promise = gate.ask(cwd, buildTrustOptions(cwd));
+		// 渲染层重载后靠这个快照把弹窗补回来（否则 inflightByCwd 永不 settle）
+		expect(gate.pendingRequests()).toEqual([
+			{ id: requests[0].id, cwd, options: [{ key: "trust" }, { key: "deny" }] },
+		]);
+		gate.respond(requests[0].id, 0);
+		await expect(promise).resolves.toBe(0);
+		expect(gate.pendingRequests()).toEqual([]);
+	});
+
 	it("同一 cwd 的在途询问去重（不重复弹窗），应答后可再问", async () => {
 		const { gate, requests, cwd } = makeGate();
 		const p1 = gate.ask(cwd, buildTrustOptions(cwd));

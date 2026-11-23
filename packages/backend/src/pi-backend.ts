@@ -2704,6 +2704,11 @@ export class PiBackend {
 		this.trustGate.respond(requestId, answer);
 	}
 
+	/** 渲染层重载/新窗口重建后自恢复：重发仍未应答的信任请求（门控状态只在 backend 内存）。 */
+	getPendingTrustRequests(): TrustRequest[] {
+		return this.trustGate.pendingRequests();
+	}
+
 	dispose(): void {
 		this.disposed = true;
 		this.viewedSubagentId = undefined;

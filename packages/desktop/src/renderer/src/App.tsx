@@ -73,6 +73,27 @@ export default function App() {
 	}, []);
 	useSessionEventBridge({ onTrustRequest: pushTrustRequest });
 
+	// 重载 / 新窗口自恢复：门控状态只在 backend 内存，事件又是单向推送。不主动拉一次的话，
+	// 未应答请求会永久留在 inflightByCwd，同 cwd 后续的建会话/开会话全部卡死。
+	// 声明在事件桥之后：订阅先就绪，拉取与推送之间的并发由 id 去重兜住。
+	useEffect(() => {
+		let active = true;
+		void getPi()
+			.getPendingTrustRequests()
+			.then((pending) => {
+				if (!active || pending.length === 0) return;
+				setTrustRequests((prev) => {
+					const known = new Set(prev.map((req) => req.id));
+					const fresh = pending.filter((req) => !known.has(req.id));
+					return fresh.length > 0 ? [...prev, ...fresh] : prev;
+				});
+			})
+			.catch((error: unknown) => console.error("pending trust pull failed", error));
+		return () => {
+			active = false;
+		};
+	}, []);
+
 	// 一次性 bootstrap：开屏就绪信号 + 更新状态 + UI 插件加载
 	// 会话内存策略（K=3 热会话 + 受保护不卸）：全局挂一次，策略细节在 lib/session-gc.ts
 	useSessionGc();

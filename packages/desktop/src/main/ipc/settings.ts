@@ -52,5 +52,6 @@ export function registerSettingsIpc(backend: PiBackend): void {
 		setCodemodeEnabled: ({ enabled }) => backend.setCodemodeEnabled(enabled),
 		setCodemodeOnly: ({ only }) => backend.setCodemodeOnly(only),
 		respondTrust: ({ requestId, answer }) => backend.respondTrust(requestId, answer),
+		getPendingTrustRequests: () => backend.getPendingTrustRequests(),
 	});
 }

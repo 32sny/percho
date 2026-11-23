@@ -82,7 +82,7 @@ let nextId = 0;
 export class TrustGate {
 	private readonly pending = new Map<
 		string,
-		{ optionCount: number; resolve: (answer: number | undefined) => void }
+		{ request: TrustRequest; resolve: (answer: number | undefined) => void }
 	>();
 	/** 同一 cwd 的在途询问去重：选目录预检与会话创建可能并发触发，避免同项目弹两次 */
 	private readonly inflightByCwd = new Map<string, Promise<number | undefined>>();
@@ -93,13 +93,10 @@ export class TrustGate {
 		const inflight = this.inflightByCwd.get(cwd);
 		if (inflight) return inflight;
 		const id = `trust-${nextId++}`;
+		const request: TrustRequest = { id, cwd, options: options.map((o) => ({ key: o.key })) };
 		const promise = new Promise<number | undefined>((resolve) => {
-			this.pending.set(id, { optionCount: options.length, resolve });
-			this.onRequest({
-				id,
-				cwd,
-				options: options.map((o) => ({ key: o.key })),
-			});
+			this.pending.set(id, { request, resolve });
+			this.onRequest(request);
 		});
 		this.inflightByCwd.set(cwd, promise);
 		void promise.then(() => this.inflightByCwd.delete(cwd));
@@ -110,11 +107,20 @@ export class TrustGate {
 		const entry = this.pending.get(requestId);
 		if (!entry) return;
 		this.pending.delete(requestId);
-		if (!Number.isInteger(answer) || answer < 0 || answer >= entry.optionCount) {
+		const optionCount = entry.request.options.length;
+		if (!Number.isInteger(answer) || answer < 0 || answer >= optionCount) {
 			entry.resolve(undefined);
 			return;
 		}
 		entry.resolve(answer);
+	}
+
+	/**
+	 * 尚未应答的请求快照。门控状态只在 backend 内存里且事件是单向推送：
+	 * 渲染层重载 / 新窗口重建后主动拉一次，否则 inflightByCwd 永不 settle，该 cwd 后续会话操作全部卡死。
+	 */
+	pendingRequests(): TrustRequest[] {
+		return [...this.pending.values()].map((entry) => entry.request);
 	}
 
 	dispose(): void {
