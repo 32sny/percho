@@ -251,16 +251,24 @@ async function createBackendFixture(options?: {
 	cleanups.push(async () => {
 		try {
 			await messageControl.waitForIdle();
-		} catch {}
+		} catch {
+			// teardown：等待超时不影响清理，继续释放其余资源。
+		}
 		try {
 			messageControl.dispose();
-		} catch {}
+		} catch {
+			// teardown：已释放或已失效，忽略。
+		}
 		try {
 			await session.waitForIdle();
-		} catch {}
+		} catch {
+			// teardown：等待超时不影响清理，继续释放其余资源。
+		}
 		try {
 			session.dispose();
-		} catch {}
+		} catch {
+			// teardown：已释放或已失效，忽略。
+		}
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -350,11 +358,11 @@ describe("composer input transport", () => {
 	});
 
 	it("projects decoded input into transcript-safe text and perchoInput", async () => {
+		// 绝对路径按平台构造函数：字面量盘符路径在 POSIX 上不是绝对路径，会被正确拒绝。
+		const filePath = join(tmpdir(), "percho-composer-project", "README.md");
 		const document = {
 			version: 1 as const,
-			parts: [
-				{ type: "file" as const, path: "C:/project/README.md", label: "README.md", kind: "file" as const },
-			],
+			parts: [{ type: "file" as const, path: filePath, label: "README.md", kind: "file" as const }],
 		};
 		const prepared = await new ComposerInputBridge().prepare(loader, document);
 		const projected = projectComposerMessage({ role: "user", content: prepared.transportText }) as {
@@ -365,7 +373,7 @@ describe("composer input transport", () => {
 		expect(projected.content).toBe("@README.md");
 		expect(projected.perchoInput).toEqual({
 			version: 1,
-			parts: [{ type: "file", path: "C:/project/README.md", label: "README.md" }],
+			parts: [{ type: "file", path: filePath, label: "README.md" }],
 		});
 	});
 });

@@ -107,6 +107,10 @@ describe("MCP 配置写入不扰动运行会话", () => {
 	});
 
 	it("项目配置要求显式 cwd 和受信目录；MCP 请求不继承 defaultCwd", async () => {
+		// 目录里必须有需信任的项目资源（.pi/settings.json）：否则 SDK 判定「无需信任」而放行，
+		// 该判定会随临时目录祖先中是否存在 .agents/skills 等平台差异而漂移。
+		mkdirSync(join(project, ".pi"), { recursive: true });
+		writeFileSync(join(project, ".pi", "settings.json"), "{}\n");
 		const backend = new PiBackend({ defaultCwd: project, projectTrust: false, permissionGates: false });
 		try {
 			const result = await backend.getMcpConfig();

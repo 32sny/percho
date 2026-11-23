@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	forbiddenGitCommand,
@@ -81,7 +81,8 @@ describe("subagent policy", () => {
 	});
 
 	it("blocks reading Percho credentials/state files from the read-only tools", () => {
-		const agentDir = join("C:", "Users", "Tester", ".pi", "agent");
+		// agentDir 必须按平台构造为绝对路径：字面盘符（C:/Users/...）在 POSIX 上是相对路径。
+		const agentDir = join(homedir(), ".pi", "agent");
 		const policy = { agentDir, deny: [] };
 		expect(subagentBoundaryViolation(policy, "read", join(agentDir, "auth.json"), "/repo")).toBe(
 			"Percho state is read-only",
@@ -90,12 +91,14 @@ describe("subagent policy", () => {
 	});
 
 	it("protects Percho agentDir across slash styles and edit/write paths", () => {
-		const agentDir = join("C:", "Users", "Tester", ".pi", "agent");
+		const agentDir = join(homedir(), ".pi", "agent");
 		const policy = { agentDir, deny: ["bash: curl *"] };
 		expect(subagentBoundaryViolation(policy, "bash", "curl https://example.com", "/repo")).toContain("deny:");
-		expect(
-			subagentBoundaryViolation(policy, "bash", `cat ${agentDir.replace(/\\/g, "/")}/auth.json`, "/repo"),
-		).toContain("Percho state is read-only");
+		// Windows 的 bash 文本常用正斜杠；POSIX 下反斜杠是合法文件名字符，不能替换后仍要求命中。
+		const slashStyle = sep === "\\" ? agentDir.replace(/\\/g, "/") : agentDir;
+		expect(subagentBoundaryViolation(policy, "bash", `cat ${slashStyle}/auth.json`, "/repo")).toContain(
+			"Percho state is read-only",
+		);
 		expect(subagentBoundaryViolation(policy, "write", join(agentDir, "permissions.json"), "/repo")).toBe(
 			"Percho state is read-only",
 		);
