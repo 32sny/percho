@@ -317,17 +317,26 @@ function settleBackgroundRuns(
 ): void {
 	for (const message of messages) {
 		if (message.role !== "subagent") continue;
-		let runs = message.runs;
+		// 每个批次只查一次真源：同一 runId 的多个槽位共享同一份实时快照
+		const pending = new Set<string>();
 		for (const run of message.runs) {
-			if (!run.background || !run.runId || (run.status !== "running" && run.status !== "queued")) continue;
-			const live = resolve(run.runId);
-			runs = live
-				? (applyPerchoSubagentNotification(runs, live) ?? runs)
-				: runs.map((item) =>
-						item.runId === run.runId && (item.status === "running" || item.status === "queued")
-							? { ...item, status: "aborted" as const }
-							: item,
-					);
+			if (run.background && run.runId && (run.status === "running" || run.status === "queued")) {
+				pending.add(run.runId);
+			}
+		}
+		if (pending.size === 0) continue;
+		let runs = message.runs;
+		for (const runId of pending) {
+			const live = resolve(runId);
+			if (live) {
+				runs = applyPerchoSubagentNotification(runs, live) ?? runs;
+				continue;
+			}
+			runs = runs.map((item) =>
+				item.runId === runId && (item.status === "running" || item.status === "queued")
+					? { ...item, status: "aborted" as const }
+					: item,
+			);
 		}
 		message.runs = runs;
 	}

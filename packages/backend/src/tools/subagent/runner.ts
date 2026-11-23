@@ -328,16 +328,12 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 	const sessionManager = input.sessionManager ?? SessionManager.create(input.cwd, sessionDir);
 	if (input.signal?.aborted) {
 		deps.unregisterRun?.(sessionManager.getSessionId());
-		return {
-			agent: input.agent.name,
-			task: input.task,
-			status: "aborted",
+		return failedResult(input.agent.name, input.task, "aborted", {
+			aborted: true,
+			startedAt,
 			...(input.index != null ? { index: input.index } : {}),
-			exitCode: 1,
-			error: "aborted",
-			usage: emptyUsage(),
-			artifactPaths: { jsonlPath: sessionManager.getSessionFile() },
-		};
+			jsonlPath: sessionManager.getSessionFile(),
+		});
 	}
 	const { session } = await createAgentSession({
 		cwd: input.cwd,
@@ -365,7 +361,7 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 		// 实际生效档位（SDK clamp 后）；卡片元信息与 jsonl 的 thinking_level_change 一致
 		thinkingLevel: session.thinkingLevel,
 		exitCode: -1,
-		usage: structuredClone(EMPTY_USAGE),
+		usage: emptyUsage(),
 		artifactPaths: { jsonlPath: session.sessionFile },
 	};
 	let settled = false;

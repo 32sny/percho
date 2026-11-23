@@ -187,7 +187,6 @@ export async function resolveHoverParent(
 	}
 }
 
-/** 收集、合并与文件验证在分页前完成，revision 只由完整有序集合产生。 */
 /** 后台批次实时快照（后台管理器为真源）；补出通知尚未落盘的排队项。 */
 export type ResolveBackgroundBatch = (runId: string) => PerchoSubagentNotificationDetails | null;
 
@@ -197,6 +196,7 @@ function notificationChildStatus(
 	return status === "running" || status === "queued" ? "running" : status === "done" ? "done" : "error";
 }
 
+/** 收集、合并与文件验证在分页前完成，revision 只由完整有序集合产生。 */
 export async function projectHoverRelations(
 	history: HoverHistorySnapshot,
 	liveRuns: SessionHoverLiveRun[],
