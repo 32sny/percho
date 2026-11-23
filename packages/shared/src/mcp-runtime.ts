@@ -1,9 +1,6 @@
 import type { McpConfigListResult, McpConnectionState, McpRuntimeInventory, McpServerView } from "./mcp";
 
-function selectInstance(
-	candidates: McpRuntimeInventory["instances"],
-	instanceId: string | null | undefined,
-) {
+function selectInstance(candidates: McpRuntimeInventory["instances"], instanceId: string | null | undefined) {
 	if (instanceId === undefined) {
 		return candidates.length === 1 ? candidates[0] : undefined;
 	}
