@@ -57,6 +57,29 @@ describe("subagent policy", () => {
 		);
 	});
 
+	it("still catches relative traversal into agentDir", () => {
+		const home = homedir();
+		const agentDir = join(home, ".pi", "agent");
+		const policy = { agentDir, deny: [] };
+		// 只做绝对路径/文件名匹配时会漏掉相对穿越；按 cwd 解析后应仍落入 agentDir。
+		const fromHome = join(home, "work");
+		expect(subagentBoundaryViolation(policy, "bash", "cat ../.pi/agent/auth.json", fromHome)).toContain(
+			"Percho state is read-only",
+		);
+		expect(
+			subagentBoundaryViolation(
+				policy,
+				"bash",
+				`cat ${join("..", "..", ".pi", "agent", "auth.json")}`,
+				join(home, "a", "b"),
+			),
+		).toContain("Percho state is read-only");
+		// 项目内同名文件解析后不在 agentDir 下，照旧放行。
+		expect(
+			subagentBoundaryViolation(policy, "bash", "cat ../config/auth.json", join(home, "work", "repo")),
+		).toBeUndefined();
+	});
+
 	it("blocks reading Percho credentials/state files from the read-only tools", () => {
 		const agentDir = join("C:", "Users", "Tester", ".pi", "agent");
 		const policy = { agentDir, deny: [] };

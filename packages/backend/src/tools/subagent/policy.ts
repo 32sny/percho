@@ -80,11 +80,30 @@ export function forbiddenGitCommand(command: string): string | undefined {
 	return undefined;
 }
 
+/** 单个 bash token → 归一后的绝对路径（`~`、`$HOME` 展开与 file URL）；无路径分隔符的（选项/普通词）返回 undefined。 */
+function tokenToPath(token: string, cwd: string): string | undefined {
+	if (!token || token.startsWith("-")) return undefined;
+	if (!token.includes("/") && !token.includes("\\")) return undefined;
+	let candidate = token;
+	if (candidate === "~") candidate = homedir();
+	else if (candidate.startsWith("~/") || (process.platform === "win32" && candidate.startsWith("~\\")))
+		candidate = join(homedir(), candidate.slice(2));
+	else if (candidate.startsWith("file://")) {
+		try {
+			candidate = fileURLToPath(candidate);
+		} catch {
+			return undefined;
+		}
+	}
+	return normalizeForPlatform(resolve(cwd, candidate)).toLowerCase();
+}
+
 /**
- * bash 文本是否指向 agentDir：绝对路径（正反斜杠 / 大小写归一）与 `~`、`$HOME`、`%USERPROFILE%` 写法。
+ * bash 文本是否指向 agentDir：绝对路径（正反斜杠 / 大小写归一）与 `~`、`$HOME`、`%USERPROFILE%` 写法，
+ * 以及按 cwd 解析后落入 agentDir 的相对路径（`cat ../../Users/x/.pi/agent/auth.json`）。
  * 不再单凭文件名（auth.json 等）判定——那会误伤项目里同名的普通文件。
  */
-function mentionsAgentDir(agentDir: string, text: string): boolean {
+function mentionsAgentDir(agentDir: string, text: string, cwd: string): boolean {
 	const normText = normalizeForPlatform(text).toLowerCase();
 	const root = normalizeForPlatform(resolve(agentDir)).toLowerCase();
 	const home = normalizeForPlatform(homedir()).toLowerCase();
@@ -93,7 +112,14 @@ function mentionsAgentDir(agentDir: string, text: string): boolean {
 		const rel = root.slice(home.length);
 		forms.push(`~${rel}`, `$home${rel}`, `\${home}${rel}`, `%userprofile%${rel}`);
 	}
-	return forms.some((form) => normText.includes(form));
+	if (forms.some((form) => normText.includes(form))) return true;
+	// 相对穿越不含绝对路径串，需逐 token 按 cwd 解析；项目内同名文件（config/auth.json）解析后不在 agentDir 下，照旧放行。
+	// 不把 `\` 当转义符（否则 Windows 路径会被吃掉分隔符）：只按空白切分并剥外层引号。
+	const tokens = text.split(/\s+/).map((token) => token.replace(/^["']+|["']+$/g, ""));
+	return tokens.some((token) => {
+		const path = tokenToPath(token, cwd);
+		return path !== undefined && (path === root || path.startsWith(`${root}/`));
+	});
 }
 
 /** 工具调用边界；SDK 自身持久化不经过这里。bash 的目录保护刻意只做文本匹配（Windows 归一化斜杠与大小写）。 */
@@ -108,7 +134,7 @@ export function subagentBoundaryViolation(
 	if (tool === "bash" && text) {
 		const git = forbiddenGitCommand(text);
 		if (git) return `git: ${git}`;
-		if (mentionsAgentDir(policy.agentDir, text)) return "Percho state is read-only (bash text match)";
+		if (mentionsAgentDir(policy.agentDir, text, cwd)) return "Percho state is read-only (bash text match)";
 	}
 	// read 同样拦：agentDir 内有凭证（auth.json）与其他会话转录，子代理没有读取它们的正当理由
 	if ((tool === "edit" || tool === "write" || tool === "read") && text) {
