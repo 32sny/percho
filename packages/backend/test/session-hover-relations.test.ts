@@ -205,6 +205,99 @@ describe("悬停关系的当前分支、安全投影与统一计数", () => {
 		expect(error.relations?.children[0]?.status).toBe("error");
 	});
 
+	it("持久化里停在运行中的后台派工（无终态通知）不在未加载会话的悬停里永久显示运行中", async () => {
+		const file = await child("bg");
+		const dispatched = {
+			...tool("t", "user", []),
+			message: {
+				role: "toolResult",
+				details: {
+					mode: "background",
+					runId: "bg_x",
+					results: [{ agent: "scout", status: "running", artifactPaths: { jsonlPath: file } }],
+				},
+			},
+		};
+		expect((await memory([user(), dispatched])).relations?.children[0]?.status).toBe("unknown");
+		// 已加载父会话的 transcript 仍可用 committed 实时项把它覆盖为运行中
+		expect(
+			(await memory([user(), dispatched], [live(file, "committed")])).relations?.children[0]?.status,
+		).toBe("running");
+	});
+
+	it("后台批次里排队中（派工时无会话文件）的任务按终态通知 / 实时快照补进悬停关系", async () => {
+		const a = await child("bga"),
+			b = await child("bgb");
+		const dispatched = {
+			...tool("t", "user", []),
+			message: {
+				role: "toolResult",
+				details: {
+					mode: "background",
+					runId: "bg_q",
+					results: [
+						{ agent: "scout", index: 1, status: "running", artifactPaths: { jsonlPath: a } },
+						{ agent: "worker", index: 2, status: "queued", artifactPaths: {} },
+					],
+				},
+			},
+		};
+		const notification = {
+			type: "custom_message",
+			id: "n",
+			parentId: "t",
+			customType: "percho-subagent-notification",
+			content: "done",
+			display: false,
+			details: {
+				runId: "bg_q",
+				mode: "parallel",
+				status: "done",
+				runs: [
+					{ runId: "bg_q", index: 1, agent: "scout", status: "done", sessionFile: a, exitCode: 0 },
+					{ runId: "bg_q", index: 2, agent: "worker", status: "done", sessionFile: b, exitCode: 0 },
+				],
+			},
+		};
+		const persisted = await memory([user(), dispatched, notification]);
+		expect(persisted.relations?.children.map((c) => [c.agent, c.status]).sort()).toEqual([
+			["scout", "done"],
+			["worker", "done"],
+		]);
+
+		// 通知尚未落盘：已加载父会话由后台管理器实时快照补出排队项并标为运行中
+		const live = await previewLoadedSession(
+			ID,
+			env.dir,
+			env.dir,
+			{
+				getHeader: header,
+				getSessionFile: () => join(env.dir, "sessions", "--project--", "parent.jsonl"),
+				getEntries: () => [user(), dispatched],
+				getLeafId: () => "t",
+			} as Parameters<typeof previewLoadedSession>[3],
+			[],
+			0,
+			undefined,
+			(runId) =>
+				runId === "bg_q"
+					? {
+							runId,
+							mode: "parallel",
+							status: "running",
+							runs: [
+								{ runId, index: 1, agent: "scout", status: "done", sessionFile: a, exitCode: 0 },
+								{ runId, index: 2, agent: "worker", status: "running", sessionFile: b },
+							],
+						}
+					: null,
+		);
+		expect(live.relations?.children.map((c) => [c.agent, c.status]).sort()).toEqual([
+			["scout", "done"],
+			["worker", "running"],
+		]);
+	});
+
 	it("completions和Agent形态可识别；普通外部文件与目录不展示", async () => {
 		const file = await child("formats");
 		const entry = {

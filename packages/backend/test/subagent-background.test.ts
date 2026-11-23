@@ -217,7 +217,72 @@ describe("BackgroundSubagentManager & percho-subagent-notification", () => {
 			expect(state.messages[0].runs[0]?.tokens).toBe(321);
 		}
 
-		// 3. applyPerchoSubagentNotification 纯函数直接校验
+		// 3. subagent_background_update 事件（中间进度）：刷新 tokens 但不产气泡，且终态不回退
+		let progress = emptyTranscript();
+		progress = reduceEvent(progress, { type: "agent_start" } as never);
+		progress = reduceEvent(progress, {
+			type: "tool_execution_start",
+			toolCallId: "tc-progress",
+			toolName: "subagent",
+			args: { agent: "scout", task: "进度用例", run_in_background: true },
+		} as never);
+		progress = reduceEvent(progress, {
+			type: "tool_execution_end",
+			toolCallId: "tc-progress",
+			toolName: "subagent",
+			result: {
+				content: [{ type: "text", text: "Dispatched" }],
+				details: {
+					mode: "background",
+					runId: "bg_pg",
+					results: [{ agent: "scout", status: "running", artifactPaths: { jsonlPath: "/tmp/p.jsonl" } }],
+				},
+			},
+			isError: false,
+		} as never);
+		progress = reduceEvent(progress, {
+			type: "turn_end",
+			message: { role: "assistant", content: [], timestamp: 1 },
+		} as never);
+
+		progress = reduceEvent(progress, {
+			type: "subagent_background_update",
+			notification: {
+				runId: "bg_pg",
+				mode: "single",
+				status: "running",
+				runs: [{ runId: "bg_pg", agent: "scout", status: "running", tokens: 42 }],
+			},
+		} as never);
+		const afterProgress = progress.messages.find((m) => m.kind === "subagent");
+		expect(afterProgress?.kind === "subagent" && afterProgress.runs[0]?.tokens).toBe(42);
+		expect(afterProgress?.kind === "subagent" && afterProgress.runs[0]?.status).toBe("running");
+
+		progress = reduceEvent(progress, {
+			type: "subagent_background_update",
+			notification: {
+				runId: "bg_pg",
+				mode: "single",
+				status: "done",
+				runs: [{ runId: "bg_pg", agent: "scout", status: "done", tokens: 50, exitCode: 0 }],
+			},
+		} as never);
+		// 迟到的 running 快照不得把终态打回运行中
+		progress = reduceEvent(progress, {
+			type: "subagent_background_update",
+			notification: {
+				runId: "bg_pg",
+				mode: "single",
+				status: "running",
+				runs: [{ runId: "bg_pg", agent: "scout", status: "running", tokens: 60 }],
+			},
+		} as never);
+		const afterDone = progress.messages.find((m) => m.kind === "subagent");
+		expect(afterDone?.kind === "subagent" && afterDone.runs[0]?.status).toBe("done");
+		expect(afterDone?.kind === "subagent" && afterDone.runs[0]?.tokens).toBe(50);
+		expect(progress.messages).toHaveLength(1);
+
+		// 4. applyPerchoSubagentNotification 纯函数直接校验
 		const updated = applyPerchoSubagentNotification(
 			[
 				{
@@ -277,5 +342,211 @@ describe("BackgroundSubagentManager & percho-subagent-notification", () => {
 		expect(onComplete).toHaveBeenCalledTimes(1);
 
 		await manager.disposeAll();
+	});
+});
+
+describe("BackgroundSubagentManager 生命周期收口", () => {
+	const scoutDef = (task: string) => ({
+		task: { agent: "scout", task },
+		cwd: process.cwd(),
+		agent: {
+			name: "scout",
+			description: "scout",
+			tools: ["read"],
+			systemPrompt: "test",
+			source: "builtin" as const,
+		},
+	});
+	/** getModelRuntime 挂起直到 release()，然后以失败结束（模拟子会话起跑前的异常） */
+	function gatedDeps() {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const registered = new Set<string>();
+		const deps = {
+			getModelRuntime: async () => {
+				await gate;
+				throw new Error("runtime unavailable");
+			},
+			getSubagentModel: async () => undefined,
+			getSubagentThinkingLevel: async () => undefined,
+			gate: { confirm: async () => false } as never,
+			traces: { record: () => {} } as never,
+			registerRun: (handle: { sessionId: string }) => {
+				registered.add(handle.sessionId);
+			},
+			unregisterRun: (sessionId: string) => {
+				registered.delete(sessionId);
+			},
+		};
+		return { deps, registered, release: () => release() };
+	}
+
+	it("子会话起跑前失败时注销后台占位句柄，不残留「工作中」条目", async () => {
+		const manager = new BackgroundSubagentManager();
+		const { deps, registered, release } = gatedDeps();
+		const dispatched = manager.dispatch({
+			parentSessionId: "p",
+			mode: "single",
+			definitions: [scoutDef("t")],
+			projectTrusted: true,
+			deps,
+		});
+		expect(registered.size).toBe(1);
+		release();
+		await manager.wait("p", dispatched.runId, 5_000);
+		expect(manager.list("p", dispatched.runId)[0]?.status).toBe("error");
+		expect(registered.size).toBe(0);
+	});
+
+	it("subagent_wait 已等到结果时，完成通知只落盘不再唤醒新一轮", async () => {
+		const manager = new BackgroundSubagentManager();
+		const { deps, release } = gatedDeps();
+		const onComplete = vi.fn(async () => {});
+		const dispatched = manager.dispatch({
+			parentSessionId: "p",
+			mode: "single",
+			definitions: [scoutDef("t")],
+			projectTrusted: true,
+			deps,
+			onComplete,
+		});
+		const waiting = manager.wait("p", dispatched.runId, 5_000);
+		release();
+		const res = await waiting;
+		expect(res.timedOut).toBe(false);
+		expect(onComplete).toHaveBeenCalledTimes(1);
+		expect(onComplete.mock.calls[0]?.[3]).toEqual({ triggerTurn: false });
+	});
+
+	it("无人等待时完成通知照常唤醒父会话", async () => {
+		const manager = new BackgroundSubagentManager();
+		const { deps, release } = gatedDeps();
+		const onComplete = vi.fn(async () => {});
+		const dispatched = manager.dispatch({
+			parentSessionId: "p",
+			mode: "single",
+			definitions: [scoutDef("t")],
+			projectTrusted: true,
+			deps,
+			onComplete,
+		});
+		release();
+		await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+		expect(manager.list("p", dispatched.runId)[0]?.status).toBe("error");
+		expect(onComplete.mock.calls[0]?.[3]).toEqual({ triggerTurn: true });
+	});
+
+	it("subagent_stop 主动停止不唤醒新一轮；删除父会话时完全不投递", async () => {
+		const manager = new BackgroundSubagentManager();
+		const stopCase = gatedDeps();
+		const onStopComplete = vi.fn(async () => {});
+		const stopped = manager.dispatch({
+			parentSessionId: "p",
+			mode: "single",
+			definitions: [scoutDef("t")],
+			projectTrusted: true,
+			deps: stopCase.deps,
+			onComplete: onStopComplete,
+		});
+		const stopping = manager.stop("p", stopped.runId);
+		stopCase.release();
+		await stopping;
+		expect(onStopComplete).toHaveBeenCalledTimes(1);
+		expect(onStopComplete.mock.calls[0]?.[3]).toEqual({ triggerTurn: false });
+
+		const deleteCase = gatedDeps();
+		const onDeleteComplete = vi.fn(async () => {});
+		manager.dispatch({
+			parentSessionId: "q",
+			mode: "single",
+			definitions: [scoutDef("t")],
+			projectTrusted: true,
+			deps: deleteCase.deps,
+			onComplete: onDeleteComplete,
+		});
+		const aborting = manager.abortForParent("q");
+		deleteCase.release();
+		await aborting;
+		expect(onDeleteComplete).not.toHaveBeenCalled();
+	});
+});
+
+describe("后台卡片历史回放以后台管理器真实状态为准", () => {
+	const dispatchBranch = (status: "running" | "queued") =>
+		[
+			{
+				type: "message",
+				id: "a0",
+				parentId: null,
+				timestamp: "2026-11-22T00:00:00.000Z",
+				message: {
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "tcb",
+							name: "subagent",
+							arguments: { agent: "scout", task: "bg", run_in_background: true },
+						},
+					],
+					timestamp: 900,
+				},
+			},
+			{
+				type: "message",
+				id: "a1",
+				parentId: "a0",
+				timestamp: "2026-11-22T00:00:00.500Z",
+				message: {
+					role: "toolResult",
+					toolCallId: "tcb",
+					toolName: "subagent",
+					content: [{ type: "text", text: "Dispatched" }],
+					details: {
+						mode: "background",
+						runId: "bg_orphan",
+						results: [{ agent: "scout", status, artifactPaths: { jsonlPath: "/tmp/o.jsonl" } }],
+					},
+					isError: false,
+					timestamp: 1000,
+				},
+			},
+		] as never;
+	const runsOf = (messages: ReturnType<typeof toBranchSessionMessages>) => {
+		const sub = messages.find((m) => m.role === "subagent");
+		if (sub?.role !== "subagent") throw new Error("expected subagent message");
+		return sub.runs;
+	};
+
+	it("管理器不认识的批次（应用重启/崩溃后无终态通知）收口为 aborted，不永久运行中", () => {
+		for (const status of ["running", "queued"] as const) {
+			const runs = runsOf(
+				toBranchSessionMessages(dispatchBranch(status), { resolveBackgroundBatch: () => null }),
+			);
+			expect(runs[0]?.status).toBe("aborted");
+		}
+	});
+
+	it("管理器仍在跟踪的批次采用其实时状态（终态通知尚未落盘的窗口期也不误判）", () => {
+		const resolve = (runId: string) =>
+			runId === "bg_orphan"
+				? {
+						runId,
+						mode: "single" as const,
+						status: "done" as const,
+						runs: [{ runId, agent: "scout", status: "done" as const, tokens: 77, exitCode: 0 }],
+					}
+				: null;
+		const runs = runsOf(
+			toBranchSessionMessages(dispatchBranch("running"), { resolveBackgroundBatch: resolve }),
+		);
+		expect(runs[0]?.status).toBe("done");
+		expect(runs[0]?.tokens).toBe(77);
+	});
+
+	it("未提供解析器时保持原样（子会话摘要等纯投影场景）", () => {
+		expect(runsOf(toBranchSessionMessages(dispatchBranch("running")))[0]?.status).toBe("running");
 	});
 });

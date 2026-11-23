@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const piMock = vi.hoisted(() => ({
 	createSession: vi.fn(),
 	// 默认「后端同意关」；拒绝语义（agent 在跑）见 closeSession 的守卫用例
-	closeSession: vi.fn(() => Promise.resolve({ closed: true })),
+	closeSession: vi.fn(
+		(): Promise<{ closed: boolean; reason?: "background_subagents" }> => Promise.resolve({ closed: true }),
+	),
 	setModel: vi.fn(),
 	setThinkingLevel: vi.fn(),
 	saveUiState: vi.fn(() => Promise.resolve()),
@@ -29,7 +31,7 @@ import { selectActiveCwd } from "../lib/active-cwd";
 import { NEW_SESSION_DRAFT_KEY, useDraftStore } from "./drafts";
 import { clearSessionHistory, isHistoryReady, retrySessionHistory } from "./session-history";
 import { useSessionWorkspaceStore } from "./session-workspace";
-import { partitionSessionsByPin, useSessionsStore } from "./sessions";
+import { partitionSessionsByPin, setBackgroundSubagentCloseConfirmation, useSessionsStore } from "./sessions";
 import { useToastsStore } from "./toasts";
 import { useTranscriptStore } from "./transcript";
 import { useUiPreferencesStore } from "./ui-preferences";
@@ -198,6 +200,50 @@ describe("closeSession", () => {
 		expect(state.activeSessionId).toBe("r1");
 		// transcript 也没被清（不能出现「后端还活着、前端已消失」）
 		expect(useTranscriptStore.getState().bySession.r1).toBeDefined();
+	});
+
+	it("后台子代理在跑：用户确认后带 stopBackgroundSubagents 重试并关闭", async () => {
+		useSessionsStore.setState({ sessions: [realMeta("r1", "/proj/a")], activeSessionId: "r1" });
+		piMock.closeSession
+			.mockResolvedValueOnce({ closed: false, reason: "background_subagents" })
+			.mockResolvedValueOnce({ closed: true });
+		const confirm = vi.fn(() => true);
+		const restore = setBackgroundSubagentCloseConfirmation(confirm);
+		try {
+			await expect(useSessionsStore.getState().closeSession("r1")).resolves.toEqual({ closed: true });
+		} finally {
+			restore();
+		}
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(piMock.closeSession).toHaveBeenLastCalledWith({ sessionId: "r1", stopBackgroundSubagents: true });
+		expect(useSessionsStore.getState().sessions).toEqual([]);
+	});
+
+	it("后台子代理在跑：用户取消 → 会话原样保留且不再调后端", async () => {
+		useSessionsStore.setState({ sessions: [realMeta("r1", "/proj/a")], activeSessionId: "r1" });
+		piMock.closeSession.mockResolvedValueOnce({ closed: false, reason: "background_subagents" });
+		const restore = setBackgroundSubagentCloseConfirmation(() => false);
+		const callsBefore = piMock.closeSession.mock.calls.length;
+		try {
+			await expect(useSessionsStore.getState().closeSession("r1")).resolves.toEqual({ closed: false });
+		} finally {
+			restore();
+		}
+		expect(piMock.closeSession.mock.calls.length - callsBefore).toBe(1);
+		expect(useSessionsStore.getState().sessions.map((s) => s.sessionId)).toEqual(["r1"]);
+	});
+
+	it("GC 卸载遇到后台子代理：不弹确认、不停任务", async () => {
+		useSessionsStore.setState({ sessions: [realMeta("r1", "/proj/a")], activeSessionId: null });
+		piMock.closeSession.mockResolvedValueOnce({ closed: false, reason: "background_subagents" });
+		const confirm = vi.fn(() => true);
+		const restore = setBackgroundSubagentCloseConfirmation(confirm);
+		try {
+			await expect(useSessionsStore.getState().unloadSession("r1")).resolves.toEqual({ closed: false });
+		} finally {
+			restore();
+		}
+		expect(confirm).not.toHaveBeenCalled();
 	});
 
 	it("后端异常（抛错）→ 同样保留状态并提示，不静默", async () => {

@@ -205,3 +205,54 @@ describe("PiBackend · 频道订阅快照查询", () => {
 		expect(backend.getChannelSubscriptionSessionIds()).toEqual([]);
 	});
 });
+
+describe("PiBackend.closeSession · 后台子代理", () => {
+	function withRunningBackground(sessionId: string) {
+		const made = makeBackend(sessionId, false, join(root, `${sessionId}.jsonl`));
+		const manager = (
+			made.backend as unknown as {
+				backgroundSubagents: {
+					hasRunning: (id: string) => boolean;
+					abortForParent: (id: string) => Promise<void>;
+				};
+			}
+		).backgroundSubagents;
+		let running = true;
+		const abortForParent = vi.fn(async () => {
+			running = false;
+		});
+		manager.hasRunning = (id) => id === sessionId && running;
+		manager.abortForParent = abortForParent;
+		return { ...made, abortForParent };
+	}
+
+	it("用户关闭被拒时带可识别原因，渲染层才能提示而非静默", async () => {
+		const { backend, dispose, abortForParent } = withRunningBackground("bg1");
+		await expect(backend.closeSession("bg1", "user")).resolves.toEqual({
+			closed: false,
+			reason: "background_subagents",
+		});
+		expect(dispose).not.toHaveBeenCalled();
+		expect(abortForParent).not.toHaveBeenCalled();
+	});
+
+	it("用户确认后 stopBackgroundSubagents：先停后台批次（不投递）再关闭", async () => {
+		const { backend, registry, dispose, abortForParent } = withRunningBackground("bg2");
+		await expect(backend.closeSession("bg2", "user", { stopBackgroundSubagents: true })).resolves.toEqual({
+			closed: true,
+		});
+		expect(abortForParent).toHaveBeenCalledWith("bg2");
+		expect(dispose).toHaveBeenCalledTimes(1);
+		expect(registry.has("bg2")).toBe(false);
+	});
+
+	it("GC 卸载永不停后台批次：即使带了 stopBackgroundSubagents 也拒绝", async () => {
+		const { backend, dispose, abortForParent } = withRunningBackground("bg3");
+		await expect(backend.closeSession("bg3", "gc", { stopBackgroundSubagents: true })).resolves.toEqual({
+			closed: false,
+			reason: "background_subagents",
+		});
+		expect(abortForParent).not.toHaveBeenCalled();
+		expect(dispose).not.toHaveBeenCalled();
+	});
+});
