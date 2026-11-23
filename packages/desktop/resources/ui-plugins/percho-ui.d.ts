@@ -138,6 +138,10 @@ declare module "@percho/plugin-api" {
 		status: SubagentRunStatus;
 		summary?: SubagentRunSummary;
 		index?: number;
+		/** 内置后台派工批次 ID（run_in_background=true 时存在） */
+		runId?: string;
+		/** 是否为内置后台异步派工 */
+		background?: boolean;
 		model?: string;
 		agentId?: string;
 		thinkingLevel?: string;

@@ -1,6 +1,8 @@
 /** 中文语言包（作为 key 的结构定义，en.ts 与之同形） */
 export const zh = {
 	pendingPayloadConfirm: "仍有 {count} 条未发送消息。丢弃后，这些消息不会出现在对话历史中。继续？",
+	backgroundSubagentCloseConfirm:
+		"该会话还有后台子代理在运行。关闭会停止它们，且不会再自动汇报结果。停止并关闭？",
 	common: {
 		save: "保存",
 		cancel: "取消",

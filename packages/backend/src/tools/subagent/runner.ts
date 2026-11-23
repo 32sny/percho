@@ -105,6 +105,65 @@ function projectSlug(cwd: string): string {
 	return slug || "default";
 }
 
+function emptyUsage(): SubagentUsage {
+	return structuredClone(EMPTY_USAGE);
+}
+
+/** 尚未起跑的槽位（前台排队 / 后台派工回执）：exitCode=-1 表示无结局。 */
+export function pendingResult(
+	agent: string,
+	task: string,
+	status: "queued" | "running",
+	extra: { index?: number; jsonlPath?: string } = {},
+): SingleResult {
+	return {
+		agent,
+		task,
+		status,
+		...(extra.index != null ? { index: extra.index } : {}),
+		exitCode: -1,
+		usage: emptyUsage(),
+		artifactPaths: extra.jsonlPath ? { jsonlPath: extra.jsonlPath } : {},
+	};
+}
+
+/** runSubagent 抛错（含起跑前失败）时的统一结局：前台与后台批次共用，避免两份字面量分叉。 */
+export function failedResult(
+	agent: string,
+	task: string,
+	error: unknown,
+	opts: { aborted: boolean; startedAt: number; index?: number; jsonlPath?: string },
+): SingleResult {
+	return {
+		agent,
+		task,
+		status: opts.aborted ? "aborted" : "failed",
+		...(opts.index != null ? { index: opts.index } : {}),
+		summary: { changedFiles: [], commands: [], failedCommands: 0, durationMs: Date.now() - opts.startedAt },
+		exitCode: 1,
+		error: error instanceof Error ? error.message : String(error),
+		usage: emptyUsage(),
+		artifactPaths: opts.jsonlPath ? { jsonlPath: opts.jsonlPath } : {},
+	};
+}
+
+/** 机器派生摘要的文本形态（前台工具结果与后台完成通知共用） */
+export function formatRunSummary(summary: SubagentRunSummary | undefined): string {
+	if (!summary) return "";
+	const lines: string[] = [];
+	if (summary.changedFiles.length > 0) {
+		const files = summary.changedFiles
+			.map((file) => `${file.path} (+${file.added}/-${file.removed})`)
+			.join(", ");
+		lines.push(`Changed files: ${files}`);
+	}
+	if (summary.commands.length > 0) {
+		lines.push(`Commands: ${summary.commands.length} (${summary.failedCommands} failed)`);
+	}
+	lines.push(`Duration: ${(summary.durationMs / 1000).toFixed(1)}s`);
+	return lines.join("\n");
+}
+
 export function createSubagentSessionManager(cwd: string): SessionManager {
 	const agentDir = getAgentDir();
 	const sessionDir = join(subagentSessionsRoot(agentDir), projectSlug(cwd));
@@ -276,7 +335,7 @@ export async function runSubagent(deps: RunSubagentDeps, input: RunSubagentInput
 			...(input.index != null ? { index: input.index } : {}),
 			exitCode: 1,
 			error: "aborted",
-			usage: structuredClone(EMPTY_USAGE),
+			usage: emptyUsage(),
 			artifactPaths: { jsonlPath: sessionManager.getSessionFile() },
 		};
 	}

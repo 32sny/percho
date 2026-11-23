@@ -6,6 +6,7 @@ import {
 	extractSubagentRuns,
 	type ImageInput,
 	PERCHO_SUBAGENT_NOTIFICATION_TYPE,
+	type PerchoSubagentNotificationDetails,
 	parseExpandedSkillInvocation,
 	parsePerchoSubagentNotification,
 	parseSubagentNotification,
@@ -227,7 +228,10 @@ export function resolveForkEntryId(
  * 纯函数 parseSessionEntries + 从文件末尾（leaf tip）沿 parentId 回溯出当前分支。
  * 分支语义与 getBranch() 一致：只保留当前分支上的消息。
  */
-export function readSessionMessagesFromContent(content: string): SessionMessage[] {
+export function readSessionMessagesFromContent(
+	content: string,
+	opts?: BranchSessionMessagesOptions,
+): SessionMessage[] {
 	const entries = parseSessionEntries(content);
 	// 当前分支：从最后一条 entry（leaf）沿 parentId 回溯
 	const byId = new Map<string, (typeof entries)[number]>();
@@ -240,7 +244,7 @@ export function readSessionMessagesFromContent(content: string): SessionMessage[
 		branch.unshift(cursor);
 		cursor = cursor.parentId ? (byId.get(cursor.parentId) ?? null) : null;
 	}
-	return toBranchSessionMessages(branch);
+	return toBranchSessionMessages(branch, opts);
 }
 
 /**
@@ -269,7 +273,20 @@ export function readSessionNameFromContent(content: string): string | undefined 
  * compaction entry 也按分支顺序插回去：压缩分割线的位置就是 entry 在树上的位置
  * （压缩发生时 entry 追加在当时的 leaf 之后），重开会话才能看到当时压过。
  */
-export function toBranchSessionMessages(branch: readonly SessionEntry[]): SessionMessage[] {
+export interface BranchSessionMessagesOptions {
+	/**
+	 * 内置后台派工批次的实时状态（后台管理器为真源）。提供时，回放后仍停在 running/queued 的
+	 * 后台卡片按它收口：管理器仍在跟踪 → 用其实时快照；不认识（应用退出/崩溃后批次已不存在、
+	 * 终态通知从未落盘）→ 收口为 aborted，避免卡片永久转圈并把父会话永久排除出 GC。
+	 * 未提供时原样投影（子会话摘要等纯投影场景）。
+	 */
+	resolveBackgroundBatch?: (runId: string) => PerchoSubagentNotificationDetails | null;
+}
+
+export function toBranchSessionMessages(
+	branch: readonly SessionEntry[],
+	opts?: BranchSessionMessagesOptions,
+): SessionMessage[] {
 	// 摊平成「消息 + 压缩标记」混合流后再走 toSessionMessages：toolResult 靠 toolCallId 配对，
 	// 标记插在中间不影响回填；assignEntryIds 只认 user/assistant，自动跳过标记
 	const raw: unknown[] = [];
@@ -290,7 +307,30 @@ export function toBranchSessionMessages(branch: readonly SessionEntry[]): Sessio
 	}
 	const messages = toSessionMessages(raw);
 	assignEntryIds(messages, branch);
+	if (opts?.resolveBackgroundBatch) settleBackgroundRuns(messages, opts.resolveBackgroundBatch);
 	return messages;
+}
+
+function settleBackgroundRuns(
+	messages: SessionMessage[],
+	resolve: NonNullable<BranchSessionMessagesOptions["resolveBackgroundBatch"]>,
+): void {
+	for (const message of messages) {
+		if (message.role !== "subagent") continue;
+		let runs = message.runs;
+		for (const run of message.runs) {
+			if (!run.background || !run.runId || (run.status !== "running" && run.status !== "queued")) continue;
+			const live = resolve(run.runId);
+			runs = live
+				? (applyPerchoSubagentNotification(runs, live) ?? runs)
+				: runs.map((item) =>
+						item.runId === run.runId && (item.status === "running" || item.status === "queued")
+							? { ...item, status: "aborted" as const }
+							: item,
+					);
+		}
+		message.runs = runs;
+	}
 }
 
 /** compaction entry → 回放标记（entry timestamp 是 ISO 串，SessionMessage 用 ms；坏值退化成当前时刻） */

@@ -6,7 +6,6 @@ export type { SubagentPolicy } from "./policy";
 export {
 	forbiddenGitCommand,
 	isDenyPattern,
-	PROTECTED_STATE_FILENAMES,
 	READ_ONLY_GIT_COMMANDS,
 	subagentBoundaryViolation,
 	subagentPermissionMode,

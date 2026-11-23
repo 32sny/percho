@@ -18,7 +18,7 @@ import {
 	readLoadedHoverHistory,
 	type TreeEntry,
 } from "./hover-history";
-import { projectHoverRelations, resolveHoverParent } from "./hover-relations";
+import { projectHoverRelations, type ResolveBackgroundBatch, resolveHoverParent } from "./hover-relations";
 
 /** 只接受非空字符串：模型字段不能把用户内容/未校验对象当成模型名。 */
 function nonEmpty(value: unknown): string | undefined {
@@ -73,6 +73,7 @@ async function queryPreview(
 	offset: number,
 	fallback: Reason,
 	getLoadedSession?: GetLoadedHoverSession,
+	resolveBackgroundBatch?: ResolveBackgroundBatch,
 ): Promise<SessionHoverPreviewResult> {
 	let dependencySessionIds: string[] = [];
 	try {
@@ -80,7 +81,13 @@ async function queryPreview(
 		const history = await load();
 		const parent = await resolveHoverParent(history, getLoadedSession);
 		dependencySessionIds = parent.dependencySessionIds;
-		const relations = await projectHoverRelations(history, liveRuns, offset, parent.parent);
+		const relations = await projectHoverRelations(
+			history,
+			liveRuns,
+			offset,
+			parent.parent,
+			resolveBackgroundBatch,
+		);
 		const model = branchModel(history.branch);
 		return {
 			...firstQuestion(history),
@@ -106,6 +113,7 @@ export function previewLoadedSession(
 	liveRuns: SessionHoverLiveRun[] = [],
 	offset = 0,
 	getLoadedSession?: GetLoadedHoverSession,
+	resolveBackgroundBatch?: ResolveBackgroundBatch,
 ): Promise<SessionHoverPreviewResult> {
 	return queryPreview(
 		sessionId,
@@ -114,6 +122,7 @@ export function previewLoadedSession(
 		offset,
 		"invalid_history",
 		getLoadedSession,
+		resolveBackgroundBatch,
 	);
 }
 

@@ -6,7 +6,7 @@ import {
 	type ModelRuntime,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { PermissionMode, SubagentRunSummary } from "@percho/shared";
+import type { PermissionMode } from "@percho/shared";
 import { type Static, Type } from "typebox";
 import type { PermissionGate } from "../../permissions/gate";
 import type { SessionTraces } from "../../session/traces";
@@ -16,10 +16,17 @@ import type {
 	BackgroundDispatchInput,
 	BackgroundSubagentManager,
 } from "./background";
-import { runSubagent, type SingleResult, type SubagentRunHandle } from "./runner";
+import { MAX_CONCURRENCY, runWithConcurrency } from "./concurrency";
+import {
+	failedResult,
+	formatRunSummary,
+	pendingResult,
+	runSubagent,
+	type SingleResult,
+	type SubagentRunHandle,
+} from "./runner";
 
 const MAX_TASKS = 8;
-const MAX_CONCURRENCY = 4;
 const MAX_CONTENT = 50_000;
 
 const taskSchema = Type.Object({
@@ -101,45 +108,10 @@ function partialResult(
 	};
 }
 
-async function withConcurrency<T>(
-	items: T[],
-	limit: number,
-	signal: AbortSignal | undefined,
-	worker: (item: T, index: number) => Promise<void>,
-): Promise<void> {
-	let cursor = 0;
-	const consume = async () => {
-		while (cursor < items.length) {
-			if (signal?.aborted) return;
-			const index = cursor++;
-			const item = items[index];
-			if (item === undefined) return;
-			await worker(item, index);
-		}
-	};
-	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
-}
-
 function isFailed(result: SingleResult): boolean {
 	return (
 		result.status === "failed" || result.status === "aborted" || result.exitCode !== 0 || result.error != null
 	);
-}
-
-function formatSummary(summary: SubagentRunSummary | undefined): string {
-	if (!summary) return "";
-	const lines: string[] = [];
-	if (summary.changedFiles.length > 0) {
-		const files = summary.changedFiles
-			.map((file) => `${file.path} (+${file.added}/-${file.removed})`)
-			.join(", ");
-		lines.push(`Changed files: ${files}`);
-	}
-	if (summary.commands.length > 0) {
-		lines.push(`Commands: ${summary.commands.length} (${summary.failedCommands} failed)`);
-	}
-	lines.push(`Duration: ${(summary.durationMs / 1000).toFixed(1)}s`);
-	return lines.join("\n");
 }
 
 function contentForResults(results: SingleResult[], mode: "single" | "parallel"): string {
@@ -150,7 +122,7 @@ function contentForResults(results: SingleResult[], mode: "single" | "parallel")
 		const body = isFailed(result)
 			? `Subagent ${result.agent} ${result.status === "aborted" ? "aborted" : "failed"}: ${result.error ?? "aborted"}`
 			: truncate(result.content ?? "");
-		const summary = formatSummary(result.summary);
+		const summary = formatRunSummary(result.summary);
 		return summary ? `${body}\n\n${summary}` : body;
 	}
 	return truncate(
@@ -161,7 +133,7 @@ function contentForResults(results: SingleResult[], mode: "single" | "parallel")
 				const body = isFailed(result)
 					? `Error: ${result.error ?? (result.status === "aborted" ? "aborted" : "failed")}`
 					: (result.content ?? "");
-				const summary = formatSummary(result.summary);
+				const summary = formatRunSummary(result.summary);
 				const fullBody = summary ? `${truncate(body)}\n\n${summary}` : truncate(body);
 				return `${header}\n${fullBody}`;
 			})
@@ -301,17 +273,11 @@ export function makeSubagentTool(deps: MakeSubagentToolDeps): ToolDefinition {
 			}
 
 			// 固定槽位：结果按请求顺序归位（完成顺序不定），模型看到的结果顺序与请求一致
-			const slots: SingleResult[] = definitions.map(({ task, agent }, index) => ({
-				agent: agent.name,
-				task: task.task,
-				status: "queued",
-				...(definitions.length > 1 ? { index: index + 1 } : {}),
-				exitCode: -1,
-				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, totalTokens: { tokens: 0 } },
-				artifactPaths: {},
-			}));
+			const slots: SingleResult[] = definitions.map(({ task, agent }, index) =>
+				pendingResult(agent.name, task.task, "queued", definitions.length > 1 ? { index: index + 1 } : {}),
+			);
 			const emit = () => onUpdate?.(partialResult(mode, slots));
-			await withConcurrency(definitions, MAX_CONCURRENCY, signal, async ({ task, cwd, agent }, index) => {
+			await runWithConcurrency(definitions, MAX_CONCURRENCY, signal, async ({ task, cwd, agent }, index) => {
 				const startedAt = Date.now();
 				let result: SingleResult;
 				try {
@@ -329,29 +295,11 @@ export function makeSubagentTool(deps: MakeSubagentToolDeps): ToolDefinition {
 						},
 					});
 				} catch (error) {
-					result = {
-						agent: agent.name,
-						task: task.task,
-						status: signal?.aborted ? "aborted" : "failed",
+					result = failedResult(agent.name, task.task, error, {
+						aborted: signal?.aborted === true,
+						startedAt,
 						...(definitions.length > 1 ? { index: index + 1 } : {}),
-						summary: {
-							changedFiles: [],
-							commands: [],
-							failedCommands: 0,
-							durationMs: Date.now() - startedAt,
-						},
-						exitCode: 1,
-						error: error instanceof Error ? error.message : String(error),
-						usage: {
-							input: 0,
-							output: 0,
-							cacheRead: 0,
-							cacheWrite: 0,
-							cost: 0,
-							totalTokens: { tokens: 0 },
-						},
-						artifactPaths: {},
-					};
+					});
 				}
 				slots[index] = result;
 				emit();

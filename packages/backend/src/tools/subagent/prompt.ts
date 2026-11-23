@@ -1,4 +1,4 @@
-import { PROTECTED_STATE_FILENAMES, READ_ONLY_GIT_COMMANDS, type SubagentPolicy } from "./policy";
+import { READ_ONLY_GIT_COMMANDS, type SubagentPolicy } from "./policy";
 
 export const SUBAGENT_CORE = `You are a subagent. Another agent delegated exactly one task to you and will only see your final
 report — not this conversation.
@@ -30,8 +30,8 @@ export function subagentCorePrompt(tools: readonly string[]): string {
 export function describeBoundaries(policy: SubagentPolicy): string {
 	return [
 		"Boundaries for this run (enforced by the system, not suggestions):",
-		`- Git: read-only subcommands only — ${READ_ONLY_GIT_COMMANDS.join(", ")}. All other subcommands and global options are rejected.`,
-		`- Percho state: ${policy.agentDir} is read-only to you. Bash calls mentioning this directory or ${PROTECTED_STATE_FILENAMES.join(", ")} are rejected by text match, not a sandbox.`,
+		`- Git: read-only subcommands only — ${READ_ONLY_GIT_COMMANDS.join(", ")}. All other subcommands, global options (before the subcommand), GIT_* env overrides, and write/exec flags (--output, -O, --ext-diff, --textconv) are rejected.`,
+		`- Percho state: ${policy.agentDir} is off-limits to you: read/edit/write paths inside it are rejected, and bash calls mentioning it (absolute, ~ or $HOME form) are rejected by text match, not a sandbox.`,
 		`- Permission mode: cannot exceed the parent's current mode${policy.permissionMode ? `; additionally limited to ${policy.permissionMode}` : ""}.`,
 		...policy.deny.map((pattern) => `- Denied: ${pattern}`),
 		"- These boundaries apply even with fullAccess or permissions.json disabled; they can only be tightened.",

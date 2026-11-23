@@ -493,6 +493,15 @@ export type PermissionMode = "default" | "fullAccess";
  */
 export type SessionCloseIntent = "user" | "gc";
 
+/**
+ * 关闭结果。`reason` 仅在可由用户决策解除的拒绝上给出：`background_subagents` = 父会话名下仍有
+ * 内置后台子代理在跑，渲染层确认后可带 `stopBackgroundSubagents` 重试（GC 卸载永不停后台批次）。
+ */
+export interface SessionCloseResult {
+	closed: boolean;
+	reason?: "background_subagents";
+}
+
 /** 上下文管理模式（二态；缺省 evaporation。
  * 物理存储 = settings.json 单一决策 key contextEvaporation.enabled
  * （缺整个 key 或 enabled≠false → evaporation；遗留 acpCompressionEnabled 键读侧忽略、写侧顺带清除） */

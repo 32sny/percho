@@ -2,7 +2,7 @@ import { composerDocumentText, readComposerDocument } from "../composer-document
 import { buildStreamGuardUiError, type UiError } from "../errors";
 import type { ImageInput, SessionEvent } from "../session";
 import { parseExpandedSkillInvocation } from "../skill-invocation";
-import { extractSubagentRuns } from "../subagent";
+import { extractSubagentRuns, SUBAGENT_MAX_CONCURRENCY } from "../subagent";
 import {
 	applyPerchoSubagentNotification,
 	applySubagentNotification,
@@ -537,7 +537,7 @@ export function reduceEvent(state: SessionTranscriptState, event: SessionEvent):
 						key: `${event.toolCallId}:${index}`,
 						agent: typeof input.agent === "string" && input.agent.length > 0 ? input.agent : "subagent",
 						task: typeof input.task === "string" && input.task.length > 0 ? input.task : undefined,
-						status: runInputs.length > 1 && index >= 4 ? "queued" : "running",
+						status: runInputs.length > 1 && index >= SUBAGENT_MAX_CONCURRENCY ? "queued" : "running",
 						...(runInputs.length > 1 ? { index: index + 1 } : {}),
 					}));
 					// ticker 摘条（spec §9.0）：subagent 不进 Working 预览行——toolcall_start 已在

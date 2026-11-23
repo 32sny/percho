@@ -59,6 +59,7 @@ import type {
 	QueuedMessages,
 	QuotaInfo,
 	SessionCloseIntent,
+	SessionCloseResult,
 	SessionEventEnvelope,
 	SessionHistoryWindow,
 	SessionHoverPreviewRequest,
@@ -132,11 +133,12 @@ export const SESSION_CHANNELS = {
 	listAllSessions: ch("session:listAll")<void, SessionMeta[]>(),
 	openSession: ch("session:open")<{ filePath: string }, SessionMeta>(),
 	// closed=false = 后端拒绝（agent 正在跑/等审批，见 PiBackend.closeSession 的 isStreaming 守卫；
-	// intent:"gc" 且有频道订阅时也拒绝，见 channel-watch retention）；
+	// intent:"gc" 且有频道订阅时也拒绝，见 channel-watch retention；有后台子代理在跑时带
+	// reason:"background_subagents"，用户确认后以 stopBackgroundSubagents 重试）；
 	// 没有该会话（已关/从未打开）也算 closed=true（幂等「它就是没在跑」）
 	closeSession: ch("session:close")<
-		{ sessionId: string; intent?: SessionCloseIntent },
-		{ closed: boolean }
+		{ sessionId: string; intent?: SessionCloseIntent; stopBackgroundSubagents?: boolean },
+		SessionCloseResult
 	>(),
 	/** 删除会话（含磁盘 jsonl 文件，不可恢复） */
 	deleteSession: ch("session:delete")<{ sessionId: string; sessionFile?: string }, void>(),

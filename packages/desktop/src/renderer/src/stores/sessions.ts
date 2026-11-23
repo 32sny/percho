@@ -448,6 +448,21 @@ async function activateHistoryTarget(
 	return { ok: true, latest: true, meta, token };
 }
 
+type ConfirmBackgroundSubagentClose = () => boolean | Promise<boolean>;
+let confirmBackgroundSubagentClose: ConfirmBackgroundSubagentClose = async () => {
+	const { translate, useI18nStore } = await import("../i18n");
+	return window.confirm(translate(useI18nStore.getState().language, "backgroundSubagentCloseConfirm"));
+};
+
+/** 测试或宿主可替换「后台子代理在跑时关闭」的确认行为（同 setPendingPayloadConfirmation）。 */
+export function setBackgroundSubagentCloseConfirmation(confirm: ConfirmBackgroundSubagentClose): () => void {
+	const previous = confirmBackgroundSubagentClose;
+	confirmBackgroundSubagentClose = confirm;
+	return () => {
+		confirmBackgroundSubagentClose = previous;
+	};
+}
+
 export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 	sessions: [],
 	activeSessionId: null,
@@ -603,7 +618,14 @@ export const useSessionsStore = create<SessionsStore>((_set, get) => ({
 		}
 		try {
 			// intent 只在本轮是「内存策略自动卸载」时带上，用户主动关不传（保持既有语义）
-			const { closed } = await getPi().closeSession(intent ? { sessionId, intent } : { sessionId });
+			const first = await getPi().closeSession(intent ? { sessionId, intent } : { sessionId });
+			let closed = first.closed;
+			// 后台子代理在跑：用户关闭需明确确认「停止并关闭」，否则原样保留（曾静默不生效）。
+			// GC 卸载不弹确认、不替用户停任务。
+			if (!closed && first.reason === "background_subagents" && intent !== "gc") {
+				if (!(await confirmBackgroundSubagentClose())) return { closed: false };
+				({ closed } = await getPi().closeSession({ sessionId, stopBackgroundSubagents: true }));
+			}
 			// 后端拒绝（agent 在跑 / 等审批）：**渲染层状态必须原样保留** —— 事务语义，
 			// 不能出现「后端会话还在、前端条目已消失」的半个动作（内存策略也会看走眼）
 			if (!closed) return { closed: false };

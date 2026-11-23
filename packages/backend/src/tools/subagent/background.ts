@@ -3,15 +3,18 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { PerchoSubagentNotificationDetails, PerchoSubagentNotificationRun } from "@percho/shared";
 import type { SubagentDefinition } from "./agents";
+import { MAX_CONCURRENCY, runWithConcurrency } from "./concurrency";
 import {
 	createSubagentSessionManager,
+	failedResult,
+	formatRunSummary,
+	pendingResult,
 	type RunSubagentDeps,
 	runSubagent,
 	type SingleResult,
 	type SubagentRunHandle,
 } from "./runner";
 
-const MAX_CONCURRENCY = 4;
 const MAX_RECENT_BATCHES_PER_PARENT = 50;
 const MAX_REPORT_CONTENT = 24_000;
 
@@ -37,12 +40,20 @@ export interface BackgroundDispatchInput {
 	model?: Model<any>;
 	deps: RunSubagentDeps;
 	onUpdate?: (parentSessionId: string, notification: PerchoSubagentNotificationDetails) => void;
+	/**
+	 * 批次收口投递。`triggerTurn: false` = 结果已被 subagent_wait / subagent_stop 同轮消费，
+	 * 只落盘收尾卡片，不再唤醒父会话（否则父代理会对同一结果再汇报一轮）。
+	 */
 	onComplete?: (
 		parentSessionId: string,
 		notification: PerchoSubagentNotificationDetails,
 		reportText: string,
+		options: { triggerTurn: boolean },
 	) => Promise<void>;
 }
+
+/** wake = 收口后唤醒父会话；silent = 只落盘（stop 主动停止）；none = 不投递（父会话将被删除） */
+type BatchDelivery = "wake" | "silent" | "none";
 
 interface InternalBatch {
 	runId: string;
@@ -55,6 +66,9 @@ interface InternalBatch {
 	controller: AbortController;
 	donePromise: Promise<void>;
 	resolveDone: () => void;
+	delivery: BatchDelivery;
+	/** 正在 subagent_wait 该批次的调用数；收口时 >0 说明结果会经 wait 同轮返回 */
+	waiters: number;
 }
 
 function cloneResult(result: SingleResult): SingleResult {
@@ -109,41 +123,12 @@ function formatBackgroundReport(batch: InternalBatch): string {
 					: `${slot.content.slice(0, MAX_REPORT_CONTENT)}\n[truncated]`;
 			lines.push(body);
 		}
-		if (slot.summary) {
-			const s = slot.summary;
-			if (s.changedFiles.length > 0) {
-				lines.push(
-					`Changed files: ${s.changedFiles.map((f) => `${f.path} (+${f.added}/-${f.removed})`).join(", ")}`,
-				);
-			}
-			if (s.commands.length > 0) {
-				lines.push(`Commands: ${s.commands.length} (${s.failedCommands} failed)`);
-			}
-			lines.push(`Duration: ${(s.durationMs / 1000).toFixed(1)}s`);
-		}
+		const summary = formatRunSummary(slot.summary);
+		if (summary) lines.push(summary);
 		lines.push("");
 	}
 	lines.push("</subagent-notification>");
 	return lines.join("\n");
-}
-
-async function runWithConcurrency<T>(
-	items: readonly T[],
-	limit: number,
-	signal: AbortSignal,
-	worker: (item: T, index: number) => Promise<void>,
-): Promise<void> {
-	let cursor = 0;
-	const consume = async () => {
-		while (cursor < items.length) {
-			if (signal.aborted) return;
-			const index = cursor++;
-			const item = items[index];
-			if (item === undefined) return;
-			await worker(item, index);
-		}
-	};
-	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
 }
 
 export class BackgroundSubagentManager {
@@ -153,7 +138,8 @@ export class BackgroundSubagentManager {
 		const runId = `bg_${randomUUID().slice(0, 8)}`;
 		const controller = new AbortController();
 		const preManagers = new Map<number, SessionManager>();
-		const placeholderIds: string[] = [];
+		// index → 占位 sessionId。用 Map 而非数组：数组只能靠「初始 running 恰好是前 N 个」的巧合对齐下标
+		const placeholderIds = new Map<number, string>();
 		const initialActiveCount = Math.min(MAX_CONCURRENCY, input.definitions.length);
 
 		const slots: SingleResult[] = input.definitions.map(({ task, cwd, agent }, index) => {
@@ -164,7 +150,7 @@ export class BackgroundSubagentManager {
 				preManagers.set(index, sm);
 				sessionFile = sm.getSessionFile();
 				const placeholderId = sm.getSessionId();
-				placeholderIds.push(placeholderId);
+				placeholderIds.set(index, placeholderId);
 				const placeholder: SubagentRunHandle = {
 					sessionId: placeholderId,
 					sessionFile,
@@ -177,15 +163,10 @@ export class BackgroundSubagentManager {
 				};
 				input.deps.registerRun?.(placeholder);
 			}
-			return {
-				agent: agent.name,
-				task: task.task,
-				status: isInitialRunning ? "running" : "queued",
+			return pendingResult(agent.name, task.task, isInitialRunning ? "running" : "queued", {
 				...(input.definitions.length > 1 ? { index: index + 1 } : {}),
-				exitCode: -1,
-				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, totalTokens: { tokens: 0 } },
-				artifactPaths: sessionFile ? { jsonlPath: sessionFile } : {},
-			};
+				...(sessionFile ? { jsonlPath: sessionFile } : {}),
+			});
 		});
 
 		let resolveDone!: () => void;
@@ -202,6 +183,8 @@ export class BackgroundSubagentManager {
 			controller,
 			donePromise,
 			resolveDone,
+			delivery: "wake",
+			waiters: 0,
 		};
 
 		let parentMap = this.batchesByParent.get(input.parentSessionId);
@@ -219,16 +202,14 @@ export class BackgroundSubagentManager {
 		batch: InternalBatch,
 		input: BackgroundDispatchInput,
 		preManagers: Map<number, SessionManager>,
-		placeholderIds: string[],
+		placeholderIds: Map<number, string>,
 	): Promise<void> {
-		const startedIndices = new Set<number>();
 		try {
 			await runWithConcurrency(
 				input.definitions,
 				MAX_CONCURRENCY,
 				batch.controller.signal,
 				async ({ task, cwd, agent }, index) => {
-					startedIndices.add(index);
 					const startedAt = Date.now();
 					const preManager = preManagers.get(index);
 					let result: SingleResult;
@@ -248,41 +229,24 @@ export class BackgroundSubagentManager {
 							},
 						});
 					} catch (error) {
-						result = {
-							agent: agent.name,
-							task: task.task,
-							status: batch.controller.signal.aborted ? "aborted" : "failed",
+						result = failedResult(agent.name, task.task, error, {
+							aborted: batch.controller.signal.aborted,
+							startedAt,
 							...(input.definitions.length > 1 ? { index: index + 1 } : {}),
-							summary: {
-								changedFiles: [],
-								commands: [],
-								failedCommands: 0,
-								durationMs: Date.now() - startedAt,
-							},
-							exitCode: 1,
-							error: error instanceof Error ? error.message : String(error),
-							usage: {
-								input: 0,
-								output: 0,
-								cacheRead: 0,
-								cacheWrite: 0,
-								cost: 0,
-								totalTokens: { tokens: 0 },
-							},
-							artifactPaths: preManager ? { jsonlPath: preManager.getSessionFile() } : {},
-						};
+							...(preManager ? { jsonlPath: preManager.getSessionFile() } : {}),
+						});
 					}
+					// 起跑前就失败（runtime/资源加载/建会话抛错）走不到 runner 自己的注销，这里立即收掉占位，
+					// 否则只读检视会把它当运行中一直显示「工作中」。按 id 删除，runner 已注销时幂等。
+					const placeholderId = placeholderIds.get(index);
+					if (placeholderId) input.deps.unregisterRun?.(placeholderId);
 					batch.slots[index] = result;
 					input.onUpdate?.(batch.parentSessionId, toNotification(batch));
 				},
 			);
 		} finally {
-			for (let i = 0; i < placeholderIds.length; i++) {
-				if (!startedIndices.has(i)) {
-					const id = placeholderIds[i];
-					if (id) input.deps.unregisterRun?.(id);
-				}
-			}
+			// 中止后从未领取的任务也有占位：批次收口一律注销（幂等）
+			for (const id of placeholderIds.values()) input.deps.unregisterRun?.(id);
 			for (let i = 0; i < batch.slots.length; i++) {
 				const slot = batch.slots[i];
 				if (slot && (slot.status === "queued" || slot.status === "running")) {
@@ -304,7 +268,11 @@ export class BackgroundSubagentManager {
 			const notif = toNotification(batch);
 			const report = formatBackgroundReport(batch);
 			try {
-				await input.onComplete?.(batch.parentSessionId, notif, report);
+				if (batch.delivery !== "none") {
+					await input.onComplete?.(batch.parentSessionId, notif, report, {
+						triggerTurn: batch.delivery === "wake" && batch.waiters === 0,
+					});
+				}
 			} catch {
 				// 通知投递失败不得阻塞后台批次收口
 			} finally {
@@ -353,6 +321,7 @@ export class BackgroundSubagentManager {
 		const batch = this.batchesByParent.get(parentSessionId)?.get(runId);
 		if (!batch) return { timedOut: false };
 		if (batch.status !== "running") return { timedOut: false, batch: this.toSnapshot(batch) };
+		if (signal?.aborted) return { timedOut: true, batch: this.toSnapshot(batch) };
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let timedOut = false;
 		const waitRace: Array<Promise<void>> = [batch.donePromise];
@@ -368,7 +337,6 @@ export class BackgroundSubagentManager {
 		}
 		let onAbort: (() => void) | undefined;
 		if (signal) {
-			if (signal.aborted) return { timedOut: true, batch: this.toSnapshot(batch) };
 			waitRace.push(
 				new Promise<void>((resolve) => {
 					onAbort = () => {
@@ -379,9 +347,11 @@ export class BackgroundSubagentManager {
 				}),
 			);
 		}
+		batch.waiters++;
 		try {
 			await Promise.race(waitRace);
 		} finally {
+			batch.waiters--;
 			if (timer) clearTimeout(timer);
 			if (onAbort && signal) signal.removeEventListener("abort", onAbort);
 		}
@@ -395,10 +365,20 @@ export class BackgroundSubagentManager {
 		const batch = this.batchesByParent.get(parentSessionId)?.get(runId);
 		if (!batch) return { stopped: false };
 		if (batch.status === "running") {
+			if (batch.delivery === "wake") batch.delivery = "silent";
 			batch.controller.abort();
 			await batch.donePromise;
 		}
 		return { stopped: true, batch: this.toSnapshot(batch) };
+	}
+
+	/** 按 runId 取批次的实时通知快照（历史回放据此收口后台卡片）；本进程不认识的批次返回 null。 */
+	resolveNotification(runId: string): PerchoSubagentNotificationDetails | null {
+		for (const parentMap of this.batchesByParent.values()) {
+			const batch = parentMap.get(runId);
+			if (batch) return toNotification(batch);
+		}
+		return null;
 	}
 
 	hasRunning(parentSessionId: string): boolean {
@@ -410,17 +390,14 @@ export class BackgroundSubagentManager {
 		return false;
 	}
 
-	snapshotForParent(parentSessionId: string): PerchoSubagentNotificationDetails[] {
-		const parentMap = this.batchesByParent.get(parentSessionId);
-		if (!parentMap) return [];
-		return [...parentMap.values()].map((batch) => toNotification(batch));
-	}
-
 	async abortForParent(parentSessionId: string): Promise<void> {
 		const parentMap = this.batchesByParent.get(parentSessionId);
 		if (!parentMap) return;
 		const running = [...parentMap.values()].filter((b) => b.status === "running");
-		for (const batch of running) batch.controller.abort();
+		for (const batch of running) {
+			batch.delivery = "none";
+			batch.controller.abort();
+		}
 		await Promise.allSettled(running.map((b) => b.donePromise));
 		this.batchesByParent.delete(parentSessionId);
 	}

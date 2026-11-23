@@ -69,6 +69,34 @@ export function parsePerchoSubagentNotification(details: unknown): PerchoSubagen
 	return { runId: d.runId, mode: d.mode, status: d.status, runs };
 }
 
+const TERMINAL_RUN_STATUSES = new Set<SubagentRunStatus>(["done", "error", "aborted"]);
+
+function isTerminalRunStatus(status: SubagentRunStatus): boolean {
+	return TERMINAL_RUN_STATUSES.has(status);
+}
+
+/**
+ * 在通知里找到本次 run 对应的条目。
+ *
+ * 一个后台批次的**所有** run 共用批次级 `runId`，单看 runId 无法区分并行批次的兄弟项：
+ * 多项通知时必须再按 `index`（无 index 时按 `sessionFile`）定位，否则会把 A 的结果写到 B 上。
+ */
+function findNotificationRun<T extends { runId?: string; index?: number; sessionFile?: string }>(
+	run: T,
+	notif: PerchoSubagentNotificationDetails,
+): PerchoSubagentNotificationDetails["runs"][number] | undefined {
+	const sameRunId = notif.runs.filter((item) => run.runId != null && item.runId === run.runId);
+	const sameSessionFile = (item: PerchoSubagentNotificationDetails["runs"][number]) =>
+		Boolean(item.sessionFile && run.sessionFile && item.sessionFile === run.sessionFile);
+	if (notif.runs.length > 1) {
+		return (
+			sameRunId.find((item) => item.index != null && run.index != null && item.index === run.index) ??
+			sameRunId.find(sameSessionFile)
+		);
+	}
+	return sameRunId[0] ?? notif.runs.find(sameSessionFile);
+}
+
 export function applyPerchoSubagentNotification<
 	T extends {
 		runId?: string;
@@ -82,13 +110,11 @@ export function applyPerchoSubagentNotification<
 >(runs: readonly T[], notif: PerchoSubagentNotificationDetails): T[] | null {
 	let changed = false;
 	const next = runs.map((run) => {
-		const match = notif.runs.find((item) => {
-			if (run.runId && item.runId === run.runId) {
-				return item.index == null || run.index == null || item.index === run.index;
-			}
-			return Boolean(run.sessionFile && item.sessionFile && run.sessionFile === item.sessionFile);
-		});
+		const match = findNotificationRun(run, notif);
 		if (!match) return run;
+		// 终态不回退：后台批次先推进度快照、再推终态，IPC/唤醒乱序或重投时，
+		// 迟到的 running 快照不得把已收尾的卡片打回运行中（否则卡片永久转圈）。
+		if (isTerminalRunStatus(run.status) && !isTerminalRunStatus(match.status)) return run;
 		changed = true;
 		return {
 			...run,

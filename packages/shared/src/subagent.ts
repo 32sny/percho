@@ -2,6 +2,9 @@
  * 子代理运行数据提取（跨进程共用）：从 subagent 工具结果的 details 结构检测运行组。
  * 从 session.ts 拆出（session.ts 回归纯类型 + 消息 union 定义）。
  */
+/** 内置 subagent 同批并发上限：后端执行闸与 reducer 的 running/queued 初始占位共用，改一处即两端一致。 */
+export const SUBAGENT_MAX_CONCURRENCY = 4;
+
 export type SubagentRunStatus = "running" | "queued" | "done" | "error" | "aborted";
 
 export interface SubagentRunSummary {

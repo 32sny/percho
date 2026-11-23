@@ -59,6 +59,7 @@ import type {
 	QuotaInfo,
 	RecoverPendingMessageResult,
 	SessionCloseIntent,
+	SessionCloseResult,
 	SessionEvent,
 	SessionHistoryWindow,
 	SessionHoverLiveRun,
@@ -488,6 +489,10 @@ export class PiBackend {
 	private readonly runningSubagents = new Map<string, SubagentRunHandle>();
 	/** 内置后台子代理管理器（run_in_background 生命周期与自动唤醒） */
 	private readonly backgroundSubagents = new BackgroundSubagentManager();
+	/** 历史回放按后台管理器真实状态收口后台卡片（崩溃/退出后遗留的 running 不再永久转圈） */
+	private readonly branchMessageOptions = {
+		resolveBackgroundBatch: (runId: string) => this.backgroundSubagents.resolveNotification(runId),
+	};
 	/** 当前正在检视的子代理会话 ID（仅查看时向渲染层转发实时事件） */
 	private viewedSubagentId: string | undefined;
 	/** 每会话事件速率（60s 窗口；心跳/临终快照数据源） */
@@ -563,11 +568,22 @@ export class PiBackend {
 				? {
 						manager: this.backgroundSubagents,
 						getParentSessionId,
+						// 中间进度只刷新父会话卡片（不触发新一轮对话、不进 trace）
+						onUpdate: (parentSessionId: string, notification: PerchoSubagentNotificationDetails) => {
+							this.emitEvent(parentSessionId, { type: "subagent_background_update", notification });
+						},
 						onComplete: (
 							parentSessionId: string,
 							notification: PerchoSubagentNotificationDetails,
 							reportText: string,
-						) => this.deliverBackgroundSubagentNotification(parentSessionId, notification, reportText),
+							delivery: { triggerTurn: boolean },
+						) =>
+							this.deliverBackgroundSubagentNotification(
+								parentSessionId,
+								notification,
+								reportText,
+								delivery.triggerTurn,
+							),
 					}
 				: undefined;
 			tools.push(
@@ -758,6 +774,7 @@ export class PiBackend {
 		parentSessionId: string,
 		notification: PerchoSubagentNotificationDetails,
 		reportText: string,
+		triggerTurn: boolean,
 	): Promise<void> {
 		if (this.disposed) return;
 		const entry = this.registry.get(parentSessionId);
@@ -768,7 +785,8 @@ export class PiBackend {
 			display: false,
 			details: notification,
 		};
-		const options = { triggerTurn: true, deliverAs: "followUp" as const };
+		// triggerTurn=false：结果已被 wait/stop 同轮消费，只落盘收尾卡片（SDK 在流式中会延到本轮末尾追加）
+		const options = { triggerTurn, deliverAs: "followUp" as const };
 		try {
 			await entry.session.sendCustomMessage(message, options);
 		} catch (error) {
@@ -863,6 +881,7 @@ export class PiBackend {
 			opts?.recordTrace !== false &&
 			event.type !== "subagent_mutex" &&
 			event.type !== "stream_guard_tripped" &&
+			event.type !== "subagent_background_update" &&
 			event.type !== "message_control_update"
 		)
 			this.traces.record(sessionId, event as AgentSessionEvent);
@@ -1261,7 +1280,11 @@ export class PiBackend {
 	 * 且 intent="gc" 时多一道频道订阅守卫（订阅场景下卸了就收不到唤醒——这是显式订阅语义，见 spec §6.2），
 	 * 并在任何 await 之前同步持有 SDK 空闲租约（关闭期间不得再被提交，见 `tryAcquireIdleLease` 分支）。
 	 */
-	async closeSession(sessionId: string, intent: SessionCloseIntent = "user"): Promise<{ closed: boolean }> {
+	async closeSession(
+		sessionId: string,
+		intent: SessionCloseIntent = "user",
+		opts?: { stopBackgroundSubagents?: boolean },
+	): Promise<SessionCloseResult> {
 		const entry = this.registry.get(sessionId);
 		// 没有该会话 = 它本来就没在跑（幂等成功）：调用方该照常清掉自己的会话条目
 		if (!entry) return { closed: true };
@@ -1270,8 +1293,13 @@ export class PiBackend {
 			return { closed: false };
 		}
 		if (this.backgroundSubagents.hasRunning(sessionId)) {
-			log.warn("closeSession ignored: running background subagents", sessionId);
-			return { closed: false };
+			// 用户确认「停止后台任务并关闭」才停；GC 卸载永不替用户停掉后台批次
+			if (intent === "gc" || opts?.stopBackgroundSubagents !== true) {
+				log.warn("closeSession ignored: running background subagents", sessionId);
+				return { closed: false, reason: "background_subagents" };
+			}
+			// 父会话随即关闭，完成通知无处可投（abortForParent 不投递）
+			await this.backgroundSubagents.abortForParent(sessionId);
 		}
 		// 自动 GC 不得卸掉有频道订阅的会话（快照按 sessionId 精确查，退订后自然恢复资格）。
 		// 显式关（intent="user"/缺省，含 delete 路径）不受此限：用户意图优先，订阅也不能绑架用户。
@@ -1507,7 +1535,7 @@ export class PiBackend {
 			const file = sessionFile ?? (await this.findUnloadedSessionFile(sessionId, cwd));
 			if (!file) throw new Error(`Session not found: ${sessionId}`);
 			const content = await readFile(file, "utf8");
-			messages = readSessionMessagesFromContent(content);
+			messages = readSessionMessagesFromContent(content, this.branchMessageOptions);
 			sessionName ||= readSessionNameFromContent(content) ?? "";
 		}
 		const dir = join(tmpdir(), "percho-transcripts");
@@ -2134,7 +2162,7 @@ export class PiBackend {
 
 	/** 页面投影：完整 turn → SessionMessage，再把图片换成引用（图片字节留在 backend）。 */
 	private projectHistoryPage(snapshot: HistorySnapshot, page: HistoryPage): SessionHistoryWindow {
-		const messages = stripHistoryImages(toBranchSessionMessages(page.entries), {
+		const messages = stripHistoryImages(toBranchSessionMessages(page.entries, this.branchMessageOptions), {
 			startIndex: page.startIndex,
 			store: snapshot.images,
 		});
@@ -2150,7 +2178,7 @@ export class PiBackend {
 	/** 读取会话树当前分支的完整历史（compaction 只裁模型上下文，不裁 UI 历史） */
 	async getSessionMessages(sessionId: string): Promise<SessionMessage[]> {
 		const entry = this.requireSession(sessionId);
-		return toBranchSessionMessages(this.sessionBranch(entry));
+		return toBranchSessionMessages(this.sessionBranch(entry), this.branchMessageOptions);
 	}
 
 	/** 悬停专用只读入口：精确定位，不加载/创建实例，不走全项目枚举兜底。 */
@@ -2180,6 +2208,7 @@ export class PiBackend {
 				liveRuns,
 				childrenOffset,
 				getLoadedSession,
+				this.branchMessageOptions.resolveBackgroundBatch,
 			);
 		try {
 			const file = SessionManager.findById(cwd, sessionId);
@@ -2200,7 +2229,7 @@ export class PiBackend {
 		if (!file) return null;
 		try {
 			const content = await readFile(file, "utf8");
-			return readSessionMessagesFromContent(content);
+			return readSessionMessagesFromContent(content, this.branchMessageOptions);
 		} catch {
 			return null;
 		}

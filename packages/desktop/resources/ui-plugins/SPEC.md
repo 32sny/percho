@@ -42,13 +42,17 @@ interface SubagentRunSummary {
 	durationMs: number;
 }
 
+type SubagentRunStatus = "running" | "queued" | "done" | "error" | "aborted";
+
 interface SubagentRunUi {
 	key: string;
 	agent: string;
 	task?: string;
-	status: "running" | "queued" | "done" | "error" | "aborted";
+	status: SubagentRunStatus;
 	summary?: SubagentRunSummary;
 	index?: number;
+	runId?: string;    // 内置后台派工批次 ID（run_in_background=true 时存在）
+	background?: boolean; // 是否为内置后台异步派工
 	model?: string;
 	agentId?: string;  // pi-subagents 的后台 agent id（可喂给 steer/get_subagent_result）
 	thinkingLevel?: string;

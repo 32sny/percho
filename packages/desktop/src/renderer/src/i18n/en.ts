@@ -4,6 +4,8 @@ import type { Messages } from "./zh";
 export const en: Messages = {
 	pendingPayloadConfirm:
 		"There are {count} unsent messages. Discarding them means they will not appear in the conversation history. Continue?",
+	backgroundSubagentCloseConfirm:
+		"Background subagents are still running in this session. Closing will stop them and their results will not be reported back. Stop and close?",
 	common: {
 		save: "Save",
 		cancel: "Cancel",

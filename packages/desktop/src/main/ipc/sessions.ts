@@ -10,7 +10,8 @@ export function registerSessionsIpc(backend: PiBackend): void {
 		listSessions: ({ cwd }) => backend.listSessions(cwd),
 		listAllSessions: () => backend.listAllSessions(),
 		openSession: ({ filePath }) => backend.openSession(filePath),
-		closeSession: ({ sessionId, intent }) => backend.closeSession(sessionId, intent),
+		closeSession: ({ sessionId, intent, stopBackgroundSubagents }) =>
+			backend.closeSession(sessionId, intent, { stopBackgroundSubagents }),
 		getChannelSubscriptionSessionIds: () => backend.getChannelSubscriptionSessionIds(),
 		deleteSession: ({ sessionId, sessionFile }) => backend.deleteSession(sessionId, sessionFile),
 		moveSession: ({ sessionId, sessionFile, targetCwd }) =>

@@ -3,6 +3,8 @@ import { basename, isAbsolute, resolve } from "node:path";
 import {
 	extractSubagentRuns,
 	PERCHO_SUBAGENT_NOTIFICATION_TYPE,
+	type PerchoSubagentNotificationDetails,
+	type PerchoSubagentNotificationRun,
 	parsePerchoSubagentNotification,
 	projectSessionHoverAgent,
 	projectSessionHoverTask,
@@ -186,11 +188,21 @@ export async function resolveHoverParent(
 }
 
 /** 收集、合并与文件验证在分页前完成，revision 只由完整有序集合产生。 */
+/** 后台批次实时快照（后台管理器为真源）；补出通知尚未落盘的排队项。 */
+export type ResolveBackgroundBatch = (runId: string) => PerchoSubagentNotificationDetails | null;
+
+function notificationChildStatus(
+	status: PerchoSubagentNotificationRun["status"],
+): SessionHoverRelationChild["status"] {
+	return status === "running" || status === "queued" ? "running" : status === "done" ? "done" : "error";
+}
+
 export async function projectHoverRelations(
 	history: HoverHistorySnapshot,
 	liveRuns: SessionHoverLiveRun[],
 	offset: number,
 	parent?: SessionHoverRelationParent,
+	resolveBackgroundBatch?: ResolveBackgroundBatch,
 ): Promise<SessionHoverRelations | undefined> {
 	const safeRecords = collectRelationRecords(history.branch, history.sessionId, history.sessionFile);
 	let plugin: Awaited<ReturnType<typeof resolvePiSubagentRelations>>;
@@ -246,25 +258,38 @@ export async function projectHoverRelations(
 			}
 		}
 	}
+	// 后台派工回执里排队项没有会话文件（起跑才分配）：记下锚点，等终态通知 / 实时快照带着文件补进来
+	const backgroundAnchors = new Map<string, { order: number; createdAt: number; toolCallId: string }>();
+	const applyBackgroundNotification = (notif: PerchoSubagentNotificationDetails) => {
+		const anchor = backgroundAnchors.get(notif.runId);
+		for (const item of notif.runs) {
+			if (!item.sessionFile) continue;
+			const status = notificationChildStatus(item.status);
+			const target = children.find((c) => c.child.sessionFile === item.sessionFile);
+			if (target) {
+				target.child = { ...target.child, status };
+				continue;
+			}
+			if (!anchor) continue;
+			const idMatch = /_([0-9a-fA-F-]{8,})\.jsonl$/i.exec(item.sessionFile);
+			children.push({
+				child: {
+					sessionFile: item.sessionFile,
+					...(idMatch?.[1] ? { sessionId: idMatch[1] } : {}),
+					agent: projectSessionHoverAgent(item.agent, item.sessionFile),
+					status,
+					...(Number.isFinite(anchor.createdAt) ? { createdAt: anchor.createdAt } : {}),
+				},
+				order: anchor.order,
+				finishedAt: Number.isFinite(anchor.createdAt) ? anchor.createdAt : 0,
+				toolCallId: anchor.toolCallId,
+			});
+		}
+	};
 	for (const entry of history.branch) {
 		if (entry.type === "custom_message" && entry.customType === PERCHO_SUBAGENT_NOTIFICATION_TYPE) {
 			const notif = parsePerchoSubagentNotification(entry.details);
-			if (notif) {
-				for (const item of notif.runs) {
-					if (!item.sessionFile) continue;
-					const target = children.find((c) => c.child.sessionFile === item.sessionFile);
-					if (!target) continue;
-					target.child = {
-						...target.child,
-						status:
-							item.status === "running" || item.status === "queued"
-								? "running"
-								: item.status === "done"
-									? "done"
-									: "error",
-					};
-				}
-			}
+			if (notif) applyBackgroundNotification(notif);
 			continue;
 		}
 		if (entry.type !== "message" || !object(entry.message) || entry.message.role !== "toolResult") continue;
@@ -284,19 +309,28 @@ export async function projectHoverRelations(
 		} catch {
 			continue;
 		}
+		const createdAt =
+			typeof entry.timestamp === "number"
+				? entry.timestamp
+				: typeof entry.timestamp === "string"
+					? Date.parse(entry.timestamp)
+					: NaN;
 		for (const run of runs ?? []) {
+			if (run.background && run.runId && !backgroundAnchors.has(run.runId)) {
+				backgroundAnchors.set(run.runId, {
+					order: history.branch.indexOf(entry),
+					createdAt,
+					toolCallId: entry.id,
+				});
+			}
 			if (!run.sessionFile) continue;
 			const idMatch = /_([0-9a-fA-F-]{8,})\.jsonl$/i.exec(run.sessionFile);
-			const createdAt =
-				typeof entry.timestamp === "number"
-					? entry.timestamp
-					: typeof entry.timestamp === "string"
-						? Date.parse(entry.timestamp)
-						: NaN;
 			const taskFirstLine = projectSessionHoverTask(run.task, run.sessionFile);
+			// 持久化里的 running/queued 只是派工回执（后台批次的终态靠后续通知）：没有通知就无法证明仍在跑
+			// （应用退出/崩溃后批次已不存在），投影为 unknown；父会话已加载时由 committed 实时项覆盖真实状态。
 			const status: SessionHoverRelationChild["status"] =
 				run.status === "running" || run.status === "queued"
-					? "running"
+					? "unknown"
 					: run.status === "aborted"
 						? "error"
 						: run.exitCode == null || !Number.isFinite(run.exitCode)
@@ -317,6 +351,12 @@ export async function projectHoverRelations(
 				finishedAt: Number.isFinite(createdAt) ? createdAt : 0,
 				toolCallId: entry.id,
 			});
+		}
+	}
+	if (resolveBackgroundBatch) {
+		for (const runId of backgroundAnchors.keys()) {
+			const live = resolveBackgroundBatch(runId);
+			if (live) applyBackgroundNotification(live);
 		}
 	}
 	children.sort(
